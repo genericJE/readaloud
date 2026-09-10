@@ -13,9 +13,7 @@ Nothing leaves the machine — the model runs locally.
 mdcat --ansi notes.md | readaloud
 ```
 
-```
-PLAY     af_heart  1.15x  chunk 7/26  follow on                            42%
-```
+![readaloud reading its own README, highlighting each word as it is spoken](docs/demo.gif)
 
 ## What it does
 
@@ -376,6 +374,12 @@ While the TUI is up, `stderr` is parked on a temp file — the HuggingFace fetch
 curses owns the screen and would otherwise shred the display. It is replayed only if the
 app crashes. Set `READALOUD_DEBUG=1` to also report a synthesis worker that was still busy
 at exit (harmless: it is a daemon thread).
+
+## License
+
+MIT.
+
+If anything here ends up being useful to you and you feel like saying thanks, my PayPal is https://paypal.me/genericJE. Truly no expectation either way, just leaving the option here in case.
 
 [kokoro]: https://huggingface.co/hexgrad/Kokoro-82M
 [mlx-audio]: https://github.com/Blaizzy/mlx-audio
