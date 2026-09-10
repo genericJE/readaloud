@@ -1,0 +1,34 @@
+name: release
+
+# Tagging vX.Y.Z builds the relocatable bundle the Homebrew formula ships and
+# attaches it to the release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    # macos-14 is load-bearing, not a default. mlx and mlx-metal publish one
+    # wheel per macOS generation (macosx_14_0 / _15_0 / _26_0) and uv picks the
+    # newest the build host can run, so THE RUNNER'S macOS BECOMES THE MINIMUM
+    # macOS EVERY USER NEEDS. A bundle built on macOS 26 carries
+    # `LC_BUILD_VERSION minos 26.x` and refuses to launch on Sonoma or Sequoia
+    # with no useful error. Building here yields minos 14.0, which covers
+    # Sonoma and up.
+    #
+    # If GitHub ever retires macos-14, bump this AND change the formula's
+    # `depends_on macos: :sonoma` to match, in the same commit.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: ./scripts/build-bundle.sh "${GITHUB_REF_NAME#v}" dist
+      - run: shasum -a 256 dist/*.tar.xz | tee dist/SHA256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.xz
+            dist/SHA256

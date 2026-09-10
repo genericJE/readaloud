@@ -50,6 +50,20 @@ PLAY     af_heart  1.15x  chunk 7/26  follow on                            42%
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install genericJE/tools/readaloud
+```
+
+Apple silicon and macOS 14 or later. The formula ships a self-contained bundle
+(its own CPython plus the whole dependency graph), so nothing is compiled on
+your machine and no Rust, Fortran or CMake toolchain is pulled in. The Kokoro
+model weights download separately on first use -- see below.
+
+### From a checkout
+
+
 ```bash
 git clone <this repo> readaloud
 cd readaloud
