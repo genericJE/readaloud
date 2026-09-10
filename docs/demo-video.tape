@@ -1,12 +1,14 @@
 # Recording for the README/social demo video (docs/demo.mp4).
 #
-#   vhs docs/demo-video.tape          -> silent video
-#   scripts/build-demo-video.sh       -> the same, with the speech muxed in
+#   vhs docs/demo-video.tape
 #
-# vhs records headlessly and captures no audio, so the sound is rendered
-# separately with `readaloud --save` and muxed afterwards.  That only stays in
-# sync because the demo text is ONE chunk: --save inserts 0.20s between chunks
-# while live playback has almost none, so anything longer would drift.
+# This produces a SILENT video: vhs records headlessly and captures no audio.
+# docs/demo.mp4 has the speech muxed in, which was done by rendering the same
+# text separately with `readaloud --save` and lining the two up by finding the
+# frame where the highlight first appears.  Two things to know if you redo it:
+# the mp4 comes out at 25fps whatever `Set Framerate` says, and the demo text is
+# deliberately ONE chunk because a rendered file has to guess the inter-chunk
+# gaps that live playback does not have.
 
 Output docs/demo.mp4
 
