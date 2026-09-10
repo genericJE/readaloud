@@ -38,8 +38,11 @@ cp -R "$PYROOT/." "$STAGE/"          # operate on the real interpreter in ~/.loc
 "$STAGE/bin/python$PYVER" -c "import sys; assert sys.prefix == '$STAGE', sys.prefix"
 
 # 2. Install the locked graph straight into that interpreter.
+# --extra mediakeys is deliberate: a Homebrew install is meant to be complete,
+# and without it the bundle ships zero PyObjC packages, so the headphone
+# play/pause button silently does nothing for everyone who installs this way.
 uv export --directory "$REPO" --frozen --no-dev --no-emit-project \
-          --format requirements-txt -o "$WORK/req.txt"
+          --extra mediakeys --format requirements-txt -o "$WORK/req.txt"
 uv pip install --python "$STAGE/bin/python$PYVER" --break-system-packages \
                --link-mode=copy -r "$WORK/req.txt"
 uv pip install --python "$STAGE/bin/python$PYVER" --break-system-packages \
