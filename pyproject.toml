@@ -20,6 +20,14 @@ dependencies = [
     "en-core-web-sm",
 ]
 
+[project.optional-dependencies]
+# Take over the system Play/Pause button (headphones, Control Center).
+# Optional: without it readaloud falls back to the spacebar alone.
+mediakeys = [
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-MediaPlayer>=10.0",
+]
+
 [project.scripts]
 readaloud = "readaloud.cli:main"
 
