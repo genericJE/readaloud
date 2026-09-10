@@ -6,8 +6,15 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "mlx-audio>=0.5.3",
-    "misaki[en]>=0.9.4",
+    # misaki[en] would drag in spacy-curated-transformers -> torch (548 MB) purely for
+    # transformer-based spaCy pipelines.  We use en_core_web_sm, which does not need it,
+    # so the "en" extra is spelled out by hand instead.  Verified: POS disambiguation
+    # ("he read" /ɹɛd/ vs "please read" /ɹid/) is unaffected.
+    "misaki>=0.9.4",
     "espeakng-loader>=0.2.4",
+    "num2words",
+    "phonemizer-fork",
+    "spacy",
     "sounddevice>=0.5.6",
     "numpy>=2.0",
     "en-core-web-sm",

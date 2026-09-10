@@ -2,8 +2,9 @@
 
 These drive the REAL CoreAudio device, because the whole point of the module is
 the timing behaviour of a live PortAudio stream -- a mock would assert nothing.
-Every buffer is pure digital silence (`np.zeros`) and no single buffer is longer
-than 0.5 s, so running the suite is inaudible.
+Every buffer is pure digital silence (`np.zeros`), so the suite is inaudible however
+long the buffers are -- and they ARE sized from the device's reported output
+latency, because a Bluetooth sink can lead the DAC by 0.7 s.
 
 Runs under pytest, and also standalone (pytest is not currently a project dep):
 
@@ -36,6 +37,48 @@ from readaloud.player import (  # noqa: E402
 )
 
 BLOCK_S = BLOCKSIZE / SAMPLE_RATE  # 0.02133 s
+
+
+def _output_latency() -> float:
+    """Reported DAC lead of the default output device.
+
+    Built-in speakers report ~0.036 s; a Bluetooth sink can report 0.7 s.  Every
+    timing assertion here is about *audible* time, so it has to know this number:
+    a bare `sleep(0.06); assert position > 0` only passes on a low-latency device,
+    because on a Bluetooth sink nothing is audible yet at 60 ms.
+    """
+    try:
+        import sounddevice as sd
+
+        st = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1,
+                             blocksize=BLOCKSIZE, latency="low")
+        st.start()
+        try:
+            return float(st.latency)
+        finally:
+            st.stop()
+            st.close()
+    except Exception:  # noqa: BLE001 - no device: fall back to "no lead"
+        return 0.0
+
+
+LATENCY = _output_latency()
+
+
+def long_enough(seconds: float) -> float:
+    """A buffer with audible time left over after the DAC lead."""
+    return max(seconds, 2 * LATENCY + seconds)
+
+
+def audible(p: Player, target: float, extra: float = 1.5) -> float:
+    """Block until `target` seconds are audible (or the buffer drains)."""
+    deadline = time.perf_counter() + LATENCY + target + extra
+    while time.perf_counter() < deadline:
+        pos = p.position
+        if pos >= target or p.finished:
+            return pos
+        time.sleep(0.004)
+    return p.position
 
 
 # --------------------------------------------------------------------------- #
@@ -178,7 +221,7 @@ def test_construct_opens_and_close_releases():
 
 
 def test_position_monotonic_and_latency_compensated():
-    dur = 0.5
+    dur = long_enough(0.5)
     with Player() as p:
         samples: list[tuple[float, float, float]] = []
         p.play(silence(dur, chunk_idx=3))
@@ -187,7 +230,7 @@ def test_position_monotonic_and_latency_compensated():
             elapsed = time.perf_counter() - t0
             pos = p.position
             samples.append((elapsed, pos, raw_position(p)))
-            if p.finished or elapsed > dur + 0.35:
+            if p.finished or elapsed > dur + 0.35 + LATENCY:
                 break
             time.sleep(0.004)
 
@@ -207,18 +250,20 @@ def test_position_monotonic_and_latency_compensated():
         assert lead <= 0.010, f"position ran {lead:.6f}s ahead of wall clock"
 
         # 3. ... and it is not wildly behind either
-        mid = [(el, pos) for el, pos, _ in samples if 0.10 < el < dur - 0.05]
+        mid = [(el, pos) for el, pos, _ in samples
+               if LATENCY + 0.10 < el < dur - 0.05]
         assert mid, "no mid-track samples"
         lag = max(el - pos for el, pos in mid)
-        assert lag <= 0.100, f"position lagged wall clock by {lag:.6f}s"
+        assert lag <= 0.100 + LATENCY, f"position lagged wall clock by {lag:.6f}s"
 
         # 4. the compensation really happens: the reported position trails the
         #    raw frame counter by roughly one DAC lead, never leads it.
         deltas = [rawp - pos for el, pos, rawp in samples
-                  if 0.10 < el < dur - 0.05]
+                  if LATENCY + 0.10 < el < dur - 0.05]
         assert deltas
         assert min(deltas) >= -2e-3, f"position ahead of the frame counter by {-min(deltas):.6f}s"
-        assert max(deltas) <= 0.080, f"compensation of {max(deltas):.6f}s is too large"
+        assert max(deltas) <= 0.080 + LATENCY, (
+            f"compensation of {max(deltas):.6f}s is too large")
         note(f"n={len(samples)} worst backstep={worst_back*1e3:.3f}ms "
              f"max lead={lead*1e3:.3f}ms max lag={lag*1e3:.3f}ms")
         note(f"latency compensation (raw frames - position): "
@@ -289,8 +334,8 @@ def test_swap_resets_position_and_finished():
 
 def test_pause_resume():
     with Player() as p:
-        p.play(silence(0.5))
-        time.sleep(0.15)
+        p.play(silence(long_enough(0.6)))
+        audible(p, 0.10)
 
         t_pause = time.perf_counter()
         p.pause()
@@ -312,7 +357,7 @@ def test_pause_resume():
         after_resume = p.position
         assert after_resume >= frozen - 0.040, (
             f"resume jumped backwards {frozen - after_resume:.6f}s")
-        time.sleep(0.12)
+        audible(p, frozen + 0.06)
         moved = p.position
         assert moved > frozen + 0.05, f"position did not advance after resume ({frozen} -> {moved})"
         p.stop()
@@ -381,8 +426,8 @@ def test_seek():
 
 def test_seek_preserves_pause():
     with Player() as p:
-        p.play(silence(0.5))
-        time.sleep(0.05)
+        p.play(silence(long_enough(0.6)))
+        audible(p, 0.02)
         p.pause()
         time.sleep(0.03)
         p.seek(0.25)
@@ -391,7 +436,7 @@ def test_seek_preserves_pause():
         time.sleep(0.08)
         assert abs(p.position - 0.25) < 1e-6, "paused seek started playing"
         p.resume()
-        time.sleep(0.08)
+        audible(p, 0.29)
         assert p.position > 0.28
         p.stop()
     note("seek while paused stays paused and lands exactly on target")
@@ -450,9 +495,8 @@ def test_raising_on_finished_does_not_kill_the_stream():
         time.sleep(0.05)
 
         p.set_on_finished(None)
-        p.play(silence(0.3))
-        time.sleep(0.15)
-        assert p.position > 0.05, "the stream died after a raising callback"
+        p.play(silence(long_enough(0.4)))
+        assert audible(p, 0.06) > 0.05, "the stream died after a raising callback"
         p.stop()
     note("an exception inside on_finished is swallowed; the stream keeps running")
 
@@ -515,8 +559,7 @@ def test_close_start_cycles_and_no_fd_leak():
             p.start()
             assert p.running
             p.play(silence(0.1, chunk_idx=1))
-            time.sleep(0.04)
-            assert p.position > 0.0
+            assert audible(p, 0.05) > 0.0
             p.stop()
         p.start()  # idempotent
     finally:
@@ -533,8 +576,7 @@ def test_play_after_close_restarts_the_stream():
     try:
         p.play(silence(0.15, chunk_idx=2))
         assert p.running
-        time.sleep(0.06)
-        assert p.position > 0.0
+        assert audible(p, 0.05) > 0.0
     finally:
         p.close()
     note("play() reopens the stream if it was closed")
