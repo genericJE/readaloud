@@ -1,6 +1,6 @@
 """Kokoro TTS synthesis with word-level timing alignment.
 
-Implements the `readaloud/speech.py` contract from CONTRACTS.md:
+Public surface:
 
     Timed(word_slot, start, end)
     Spoken(chunk_idx, audio, timings, sample_rate=24000)
@@ -315,7 +315,7 @@ def word_spans(
 ) -> list[tuple[int, int]]:
     """Derive one (start, end) char span per word slot inside `text`.
 
-    `Chunk.offsets` only carries each word's START offset (CONTRACTS.md), and
+    `Chunk.offsets` only carries each word's START offset, and
     `Engine.synth` has no access to the `Document` that owns `Word.text`, so the
     end is inferred: scan to the next whitespace, stop at the next word's offset,
     and trim trailing punctuation that document.py would have excluded.  When the

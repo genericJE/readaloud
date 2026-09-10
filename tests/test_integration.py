@@ -1051,7 +1051,7 @@ def test_app_skips_a_chunk_whose_synthesis_fails():
 
 
 def test_app_survives_a_chunk_whose_synthesis_raises():
-    """CONTRACTS.md non-negotiable: `synth` blowing up must not kill the reader."""
+    """Non-negotiable: `synth` blowing up must not kill the reader."""
     doc = make_doc()
     first = doc.first_speakable_chunk()
     app, doc, engine, player, screen = make_app(doc=doc, raise_on={first})

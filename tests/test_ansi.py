@@ -1,6 +1,6 @@
 """Tests for readaloud.ansi.
 
-Covers the CONTRACTS.md surface (Style, Run, parse, has_ansi, strip_markdown),
+Covers the public surface (Style, Run, parse, has_ansi, strip_markdown),
 the escape-sequence state machine's tolerance of malformed input, and a live
 round trip through the real `mdcat --ansi` binary.
 """

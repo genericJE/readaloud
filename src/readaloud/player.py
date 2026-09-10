@@ -13,7 +13,7 @@ Design (all of it measured on macOS arm64 / CoreAudio / sounddevice 0.5.6):
   a swap racing a running callback merely leaves the callback writing into an
   orphaned track.  No lock is taken on the audio thread, ever.
 
-* `position` is latency compensated.  CONTRACTS.md prescribes
+* `position` is latency compensated.  The obvious formula is
   `frames/samplerate - stream.latency`; measured, `stream.latency` (0.0362 s)
   overstates the real callback-to-DAC lead (0.0163 s) by 2.2x, which produces a
   mean -9.2 ms bias and a 35 ms peak-to-peak sawtooth in the reported position.
@@ -542,7 +542,7 @@ class Player:
         try:
             v = stream.time - e  # exact, from PortAudio's own DAC schedule
         except BaseException:
-            v = pos_s - self._latency  # degraded: the CONTRACTS.md formula
+            v = pos_s - self._latency  # degraded: frames minus reported latency
         if v < 0.0:
             return 0.0
         return dur if v > dur else v

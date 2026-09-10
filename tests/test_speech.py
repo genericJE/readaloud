@@ -39,7 +39,7 @@ from readaloud.speech import (
 
 @dataclass
 class FakeChunk:
-    """Structurally what `readaloud.document.Chunk` promises in CONTRACTS.md."""
+    """Structurally what `readaloud.document.Chunk` promises."""
 
     idx: int
     words: list[int]

@@ -105,7 +105,7 @@ class Chunk:
     offsets: list[int]         # offsets[i] = char offset of words[i] in `text`
     line_start: int            # inclusive
     line_end: int              # EXCLUSIVE
-    # --- additive (defaults keep the CONTRACTS.md positional order valid) ---
+    # --- additive: defaulted, so the positional order above stays valid ---
     speakable: bool = True     # False => nothing to say; playback skips it
     word_texts: list[str] = field(default_factory=list)  # doc.words[i].text
     kind: str = "text"         # "text" | "code" | "blank"
