@@ -11,7 +11,9 @@ to jump playback there. Nothing leaves the machine.
 mdcat --ansi notes.md | readaloud
 ```
 
-![readaloud reading its own README, highlighting each word as it is spoken](docs/demo.gif)
+
+https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
+
 
 ## What it does
 
