@@ -57,7 +57,7 @@ brew install genericJE/tools/readaloud
 Apple silicon and macOS 14 or later. The formula ships a self-contained bundle
 (its own CPython plus the whole dependency graph), so nothing is compiled on
 your machine and no Rust, Fortran or CMake toolchain is pulled in. The Kokoro
-model weights download separately on first use -- see below.
+model weights (~300 MB) download separately on first use -- see below.
 
 ### From a checkout
 
@@ -81,8 +81,10 @@ To run it from a checkout without installing:
 uv run readaloud -f notes.md
 ```
 
-The first run downloads `mlx-community/Kokoro-82M-4bit` (~610 MB) into the HuggingFace
-cache; later runs load it in a few seconds.
+The first run downloads `mlx-community/Kokoro-82M-4bit` (~300 MB) into the HuggingFace
+cache; later runs load it in a few seconds. Only the safetensors and the voice packs
+are fetched -- the repo also ships a PyTorch checkpoint of the same model that an MLX
+build never reads, and skipping it halves the download.
 
 ## Usage
 

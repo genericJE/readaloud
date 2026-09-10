@@ -532,6 +532,12 @@ def to_mono_f32(audio: Any) -> np.ndarray:
 # Engine
 # --------------------------------------------------------------------------
 
+#: What to fetch from the model repo.  Deliberately excludes "*.pth": the
+#: Kokoro repos ship a PyTorch checkpoint next to the safetensors, and only the
+#: safetensors are ever read here.
+MODEL_ALLOW_PATTERNS = ["*.json", "*.safetensors"]
+
+
 class Engine:
     """Kokoro synthesis engine.
 
@@ -571,7 +577,19 @@ class Engine:
         from mlx_audio.tts.models.kokoro import KokoroPipeline
         from mlx_audio.tts.utils import load_model
 
-        model = load_model(self.repo_id)
+        # mlx-audio's DEFAULT_ALLOW_PATTERNS includes "*.pth", which drags down
+        # kokoro-v1_0.pth -- a 327 MB PyTorch checkpoint that an MLX build never
+        # reads, alongside the 283 MB safetensors it actually uses.  Naming the
+        # patterns ourselves roughly halves the first-run download.  The
+        # parameter is forwarded through load_model's **kwargs to
+        # mlx_audio.utils.get_model_path; fnmatch's "*" spans "/", so
+        # "*.safetensors" still picks up voices/<name>.safetensors.
+        try:
+            model = load_model(self.repo_id, allow_patterns=MODEL_ALLOW_PATTERNS)
+        except TypeError:
+            # A future mlx-audio that stops forwarding the kwarg should cost a
+            # bigger download, not a broken reader.
+            model = load_model(self.repo_id)
         pipeline = KokoroPipeline(
             lang_code=self.lang_code, model=model, repo_id=self.repo_id
         )
