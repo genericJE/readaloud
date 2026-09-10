@@ -282,6 +282,16 @@ class FakeScreen:
         m = min(margin, max(0, (h - 1) // 2))
         return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
+    def top_for_row(self, row, top_row, margin=2, lead=0):
+        # mirrors `ui.Screen.top_for_row`: react, do not reposition
+        h = self.body_height
+        m = min(margin, max(0, (h - 1) // 2))
+        if row < top_row + m:
+            return self.clamp_top(row - m)
+        if row > top_row + h - 1 - m:
+            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        return self.clamp_top(top_row)
+
     def follow_top_for_row(self, row, margin=2, lead=0):
         h = self.body_height
         m = min(margin, max(0, (h - 1) // 2))
@@ -2573,5 +2583,56 @@ def test_the_scrubber_is_not_refreshed_while_paused():
         for _ in range(10):
             app.tick()
         assert len(keys.scrubs) == before, "position pushed while paused"
+    finally:
+        app.close()
+
+
+def test_skipping_to_a_visible_chunk_does_not_move_the_viewport():
+    """Skipping to a chunk already on screen must not scroll."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        assert app.follow is True
+        before = app.top
+        # the chunk right after the current one is comfortably on screen
+        app.handle(Command(Action.NEXT_CHUNK))
+        assert app.top == before, (
+            f"skipping to a visible chunk scrolled the page {before} -> {app.top}")
+        app.handle(Command(Action.PREV_CHUNK))
+        assert app.top == before
+    finally:
+        app.close()
+
+
+def test_skipping_to_an_offscreen_chunk_lands_where_follow_mode_would():
+    """An off-screen target scrolls, but never pins the chunk to row 0."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        target = None
+        for _ in range(40):
+            app.handle(Command(Action.NEXT_CHUNK))
+            cur = app._current_chunk()
+            row = screen.first_row_of_line(doc.chunks[cur].line_start)
+            if row > app.top + screen.body_height - 1 - app.follow_margin:
+                target = (cur, row)
+                break
+            if app.top != 0:
+                target = (cur, row)
+                break
+        assert target is not None, "never pushed a chunk off the bottom"
+        cur, row = target
+        # it scrolled, and the chunk is NOT pinned to the top row
+        assert app.top > 0, "never scrolled at all"
+        offset = screen.first_row_of_line(doc.chunks[cur].line_start) - app.top
+        assert offset > 0, "the new chunk was pinned to row 0 of the viewport"
     finally:
         app.close()

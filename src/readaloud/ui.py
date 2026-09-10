@@ -850,6 +850,20 @@ class Screen:
         m = min(margin, max(0, (h - 1) // 2))
         return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
+    def top_for_row(
+        self, row: int, top_row: int, margin: int = 2, lead: int = 0
+    ) -> int:
+        """`top_for_word` for a bare display row, for the chunk-skip keys."""
+        h = self.body_height
+        if h <= 0:
+            return self.clamp_top(top_row)
+        m = min(margin, max(0, (h - 1) // 2))
+        if row < top_row + m:
+            return self.clamp_top(row - m)
+        if row > top_row + h - 1 - m:
+            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        return self.clamp_top(top_row)
+
     def follow_top_for_row(self, row: int, margin: int = 2, lead: int = 0) -> int:
         """`follow_top_for_word` for a bare display row (no word is highlighted yet)."""
         h = self.body_height

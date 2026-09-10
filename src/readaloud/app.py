@@ -799,8 +799,12 @@ class App:
             self._set_target(nxt, None)
             self.cur_word = None
             if self.follow:
+                # React, don't reposition: a chunk already on screen should
+                # not move the page.
                 row = self.screen.first_row_of_line(self.doc.chunks[nxt].line_start)
-                self.top = self.screen.clamp_top(row)
+                self.top = self.screen.top_for_row(
+                    row, self.top, self.follow_margin, self.follow_lead
+                )
             return
 
         if a is Action.SPEED_UP or a is Action.SPEED_DOWN:
