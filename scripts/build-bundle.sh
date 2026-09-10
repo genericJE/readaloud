@@ -18,6 +18,10 @@ PYVER=3.12
 [ "$(uname -sm)" = "Darwin arm64" ] || { echo "must build on macOS arm64" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
+# macOS hands back /var/folders/... while /var is a symlink to /private/var, and
+# Python derives sys.prefix from the resolved path.  Resolve WORK up front or the
+# self-contained-interpreter assert below compares the two spellings and fails.
+WORK="$(cd "$WORK" && pwd -P)"
 trap 'rm -rf "$WORK"' EXIT
 STAGE="$WORK/readaloud-$VERSION"
 
