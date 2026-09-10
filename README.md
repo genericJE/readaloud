@@ -33,6 +33,9 @@ PLAY     af_heart  1.15x  chunk 7/26  follow on                            42%
 - **Follow mode reads ahead.** When the spoken word reaches the bottom of the screen
   the view jumps `follow_lead` rows further than it strictly has to, so the text about
   to be read sits near the middle instead of the last row.
+- **The play/pause button on your headphones works.** readaloud claims the system
+  "Now Playing" role, so the button pauses the reader instead of launching Apple Music.
+  Needs the optional `[mediakeys]` extra; see [below](#the-system-playpause-button).
 - **Your defaults live in `~/.readaloud.conf`.** Voice, speed, chunking, colours and
   the follow lead, in a commented INI file that the first run writes for you.
 - **Survives the awkward cases**: terminal resize, empty input, input with nothing
@@ -53,13 +56,20 @@ cd readaloud
 uv tool install --editable .
 ```
 
-That puts `readaloud` on your `PATH`. To run it from a checkout without installing:
+That puts `readaloud` on your `PATH`. To get the system play/pause button as well, install
+with the optional extra instead:
+
+```bash
+uv tool install --editable '.[mediakeys]'
+```
+
+To run it from a checkout without installing:
 
 ```bash
 uv run readaloud -f notes.md
 ```
 
-The first run downloads `mlx-community/Kokoro-82M-4bit` (~90 MB) into the HuggingFace
+The first run downloads `mlx-community/Kokoro-82M-4bit` (~610 MB) into the HuggingFace
 cache; later runs load it in a few seconds.
 
 ## Usage
@@ -107,6 +117,8 @@ the terminal rather than into `log`.
 | `--repo ID` | `mlx-community/Kokoro-82M-4bit` | model repo |
 | `--color` | | render the input's colours (overrides `color = false` in the config) |
 | `--no-color` | | render monochrome, ignoring the input's colours |
+| `--media-keys` | on | take over the system play/pause button (overrides `media_keys = false`) |
+| `--no-media-keys` | | leave the system play/pause button to whoever else wants it |
 | `--config PATH` | `~/.readaloud.conf` | read defaults from `PATH` instead |
 | `--no-config` | | ignore the config file; built-in defaults only |
 | `--write-config` | | write a fresh commented template (overwriting) and exit |
@@ -181,6 +193,10 @@ follow_lead = 20
 # Rows kept between the spoken word and the top/bottom edge before follow
 # mode scrolls at all.
 follow_margin = 2
+
+# Take over the system play/pause button.  Needs the optional [mediakeys]
+# extra; without it this setting does nothing at all.
+media_keys = true
 ```
 
 The file is meant to be hand-edited and is read forgivingly: a missing file is not an
@@ -210,6 +226,38 @@ to a word behind the viewport is unchanged.
 
 `c` is unaffected: it is a deliberate "put the spoken word in the middle **now**", and
 stays a true centre.
+
+## The system play/pause button
+
+The play/pause button on a Bluetooth headset, on the keyboard's F8, and in Control Center
+does not reach the terminal at all: macOS routes it through MediaRemote to whichever
+process holds the "Now Playing" role, and when nothing holds it, the system **launches
+Apple Music**. Claiming that role is the only way to get the button, and it is what stops
+Music from stealing it.
+
+readaloud claims it at startup, says `media keys on` in the status bar, and hands it back
+when you quit. While it holds it:
+
+| Button | Does |
+| --- | --- |
+| play / pause | pause or resume, exactly like `Space` |
+| next track | next chunk, like `.` |
+| previous track | previous chunk, like `,` |
+
+Control Center and the lock screen show the paragraph being read as the track title and
+the document's name as the artist.
+
+This needs [PyObjC][pyobjc], which is an optional extra so that the reader itself stays a
+small install:
+
+```bash
+uv tool install --editable '.[mediakeys]'   # installing readaloud
+uv sync --extra mediakeys                   # working in a checkout
+```
+
+Without the extra the setting is inert: nothing is claimed, nothing is printed, and the
+spacebar carries on as before. Turn it off with `--no-media-keys`, or `media_keys = false`
+in `~/.readaloud.conf`, if you would rather the button kept going to another player.
 
 ## Keys
 
@@ -293,6 +341,7 @@ language packs, which this project does not install by default.
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
 | `config.py` | `~/.readaloud.conf`: parsing, clamping, and the commented template |
+| `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## Development
 
@@ -316,4 +365,5 @@ at exit (harmless: it is a daemon thread).
 
 [kokoro]: https://huggingface.co/hexgrad/Kokoro-82M
 [mlx-audio]: https://github.com/Blaizzy/mlx-audio
+[pyobjc]: https://pyobjc.readthedocs.io/
 [uv]: https://docs.astral.sh/uv/

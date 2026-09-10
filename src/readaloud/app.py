@@ -59,6 +59,33 @@ FOLLOW_LEAD = 20
 #: don't let a pathological pattern build a million highlight spans
 MAX_MATCHES = 5000
 
+#: how much of a chunk Control Center gets as the "track title".  A chunk is a
+#: whole paragraph; the lock screen shows one line.
+MEDIA_TITLE_CHARS = 64
+
+#: sentinel for "nothing has been published to Control Center yet"
+_UNSET: Any = object()
+
+#: Seconds to wait after handing the Now Playing role back before the process
+#: exits.  Releasing it is an asynchronous XPC round trip to `nowplayingd`, and
+#: a process that exits inside that window is SIGKILLed -- readaloud would exit
+#: 137 instead of 0 on every quit.  Measured on macOS 26.6 / M1: 0 ms is always
+#: killed, 50 ms is always clean; take 150 ms of headroom.  The terminal has
+#: already been restored by the time this runs, so it costs the user nothing.
+#: Pause after releasing the Now Playing role before the process exits.
+#:
+#: This is load-bearing, and cheaply disproved if you doubt it: set it to 0.0
+#: and the pty tests fail with wait status 11 -- SIGSEGV, not a clean exit.
+#: Releasing the role tears down MediaRemote/AppKit state that the run loop is
+#: still holding, and finalising the interpreter on top of that segfaults.  A
+#: review once flagged this as unnecessary after eight clean manual quits; the
+#: crash needs the role to have actually been claimed, which those runs missed.
+MEDIA_STOP_SETTLE = 0.15
+
+#: How often to refresh the Control Center scrubber.  The system interpolates
+#: from the playback rate between updates, so this only has to correct drift.
+MEDIA_ELAPSED_EVERY = 1.0
+
 
 # --------------------------------------------------------------------------- #
 # prefetch
@@ -281,7 +308,8 @@ class App:
     def __init__(self, doc: Any, screen: Screen, player: Any, engine: Any, *,
                  ahead: int = 2, start_chunk: int = 0, voice: str = "",
                  autoplay: bool = True, follow_lead: int = FOLLOW_LEAD,
-                 follow_margin: int = FOLLOW_MARGIN) -> None:
+                 follow_margin: int = FOLLOW_MARGIN,
+                 media_keys: Any = None, doc_name: str = "") -> None:
         self.doc = doc
         self.screen = screen
         self.player = player
@@ -289,6 +317,16 @@ class App:
         self.voice = voice
         self.keymap = Keymap()
         self.prefetch = Prefetcher(engine, doc, ahead=ahead)
+
+        #: a `mediakeys.MediaKeys` (or None when the system play/pause button
+        #: is not ours).  Every call into it is wrapped: losing the button must
+        #: never cost the reader a frame, let alone the session.
+        self.media_keys = media_keys
+        self.doc_name = doc_name or "readaloud"
+        self._mk_playing: bool | None = None   # last state reported to macOS
+        self._mk_chunk: Any = _UNSET           # last chunk published as a title
+        self._mk_elapsed = 0.0                 # seconds into the current chunk
+        self._mk_elapsed_at = 0.0              # monotonic stamp of the last push
 
         self.top = 0
         self.follow = True
@@ -355,6 +393,7 @@ class App:
 
     def start(self) -> None:
         self.prefetch.start()
+        self._start_media_keys()
         if self._start_chunk is None:
             self.notify("nothing speakable in this document", ttl=1e9)
             self.want_play = False
@@ -367,8 +406,157 @@ class App:
 
     def close(self, timeout: float = 2.0) -> bool:
         """Stop the worker and report whether it really went away."""
+        self._stop_media_keys()
         self.prefetch.stop()
         return self.prefetch.join(timeout)
+
+    # -- the system play/pause button --------------------------------------
+
+    def _start_media_keys(self) -> None:
+        """Claim the Now Playing role.  Must run on the main thread.
+
+        A failure here is a missing convenience, never a reason not to read: it
+        buys one status-bar line and the spacebar still works.
+        """
+        mk = self.media_keys
+        if mk is None:
+            return
+        try:
+            ok = bool(mk.start())
+        except Exception as exc:  # noqa: BLE001 - PyObjC can raise anything
+            ok = False
+            self.media_keys = None
+            self.notify(f"media keys unavailable: {type(exc).__name__}: {exc}")
+            return
+        if ok:
+            # Short and brief on purpose: a longer message would push the
+            # position indicator off the right of an 80-column status bar for
+            # as long as it stayed up, and this is only a confirmation.
+            self.notify("media keys on", ttl=2.0)
+        else:
+            reason = getattr(mk, "error", None) or "could not claim the role"
+            self.notify(f"media keys unavailable: {reason}")
+
+    def _media_elapsed(self) -> float:
+        """Seconds heard in the current chunk, for the Control Center scrubber."""
+        try:
+            return max(0.0, float(self.player.position))
+        except Exception:  # noqa: BLE001 - a scrubber must never break playback
+            return 0.0
+
+    def _media_duration(self) -> float:
+        """Length of the current chunk's audio, or 0 when nothing is loaded."""
+        try:
+            spoken = self._spoken
+            return max(0.0, float(spoken.duration)) if spoken is not None else 0.0
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    def _stop_media_keys(self) -> None:
+        mk = self.media_keys
+        if mk is None:
+            return
+        try:
+            mk.stop()
+        except Exception:  # noqa: BLE001,S110 - quitting; nothing to report to
+            pass
+
+    def _media_poll(self) -> None:
+        """Deliver run-loop callbacks and act on whatever the button sent."""
+        mk = self.media_keys
+        if mk is None:
+            return
+        try:
+            mk.pump()
+            commands = list(mk.poll())
+        except Exception:  # noqa: BLE001 - a dead run loop must not stop the UI
+            return
+        for name in commands:
+            self._media_command(name)
+
+    def _media_command(self, name: str) -> None:
+        if name == "pause":
+            self._want_playback(False)
+        elif name == "play":
+            # macOS sends discrete play/pause, and it only ever sends 'play'
+            # while it believes we are paused -- so a 'play' arriving while we
+            # are playing IS the button asking for a pause.  Treating it as
+            # "resume" is what makes the button feel one-way.
+            self._want_playback(not self.want_play)
+        elif name == "toggle":
+            self._want_playback(not self.want_play)
+        elif name == "next":
+            self.handle(Command(Action.NEXT_CHUNK))
+        elif name == "previous":
+            self.handle(Command(Action.PREV_CHUNK))
+
+    def _want_playback(self, playing: bool) -> None:
+        """Reach `playing` through the same path the spacebar takes."""
+        if bool(playing) == bool(self.want_play):
+            return
+        self.handle(Command(Action.PLAY_PAUSE))
+
+    def _media_title(self, cidx: int | None) -> str:
+        """The current chunk, trimmed to something a lock screen can show."""
+        text = ""
+        if cidx is not None:
+            try:
+                text = " ".join(self.doc.chunks[cidx].text.split())
+            except Exception:  # noqa: BLE001 - a duck-typed doc in tests
+                text = ""
+        if not text:
+            return self.doc_name
+        if len(text) > MEDIA_TITLE_CHARS:
+            cut = text[:MEDIA_TITLE_CHARS]
+            space = cut.rfind(" ")
+            if space > MEDIA_TITLE_CHARS // 2:
+                cut = cut[:space]
+            text = cut.rstrip(" ,;:-") + "..."
+        return text
+
+    def _media_sync(self) -> None:
+        """Push state to macOS -- but only what actually changed.
+
+        `tick` runs ~33 times a second; MediaRemote does not need to hear the
+        same paragraph 33 times.  The playing flag, though, must be pushed
+        after *every* change whatever caused it (spacebar, click, end of the
+        document), or the system keeps sending 'play' and the button sticks.
+        """
+        mk = self.media_keys
+        if mk is None:
+            return
+        playing = bool(self.want_play)
+        if playing != self._mk_playing:
+            self._mk_playing = playing
+            try:
+                mk.set_playing(playing)
+            except Exception:  # noqa: BLE001,S110
+                pass
+        cur = self._current_chunk()
+        if cur != self._mk_chunk:
+            self._mk_chunk = cur
+            self._mk_elapsed = 0.0
+            try:
+                mk.set_now_playing(title=self._media_title(cur),
+                                   elapsed=self._media_elapsed(),
+                                   duration=self._media_duration(),
+                                   rate=1.0 if playing else 0.0)
+            except Exception:  # noqa: BLE001,S110
+                pass
+            return
+        # The chunk has not changed, but the scrubber in Control Center and on
+        # the lock screen is driven by elapsed time: publish it once and it sits
+        # frozen at 0:00 for the whole session.  Once a second is plenty -- the
+        # system interpolates between updates from the playback rate -- and it
+        # keeps this off the 33-per-second path.
+        now = time.monotonic()
+        if playing and now - self._mk_elapsed_at >= MEDIA_ELAPSED_EVERY:
+            self._mk_elapsed_at = now
+            try:
+                mk.set_now_playing(elapsed=self._media_elapsed(),
+                                   duration=self._media_duration(), rate=1.0)
+            except Exception:  # noqa: BLE001,S110
+                pass
 
     # -- playback ----------------------------------------------------------
 
@@ -807,6 +995,7 @@ class App:
 
     def tick(self) -> None:
         """One round of housekeeping: playback state, highlight, follow-scroll."""
+        self._media_poll()
         self._pump()
         self._update_word()
         if (self.want_play and self._target is None and self._active is not None
@@ -816,6 +1005,9 @@ class App:
             self.top = self.screen.top_for_word(
                 self.cur_word, self.top, self.follow_margin, self.follow_lead
             )
+        # last: whatever changed the playback state this frame -- the button, a
+        # keystroke, a click, the end of the document -- is reported from here.
+        self._media_sync()
 
     def step(self, timeout_ms: int = POLL_MS) -> None:
         """Read at most one event, act on it, then tick."""
@@ -913,8 +1105,9 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
         lang: str = "a", repo: str | None = None, prefetch: int = 2,
         device: Any = None, start_chunk: int = 0,
         no_color: bool = False, follow_lead: int = FOLLOW_LEAD,
-        follow_margin: int = FOLLOW_MARGIN,
-        notices: Sequence[str] = ()) -> int:
+        follow_margin: int = FOLLOW_MARGIN, media_keys: bool = False,
+        media_keys_explicit: bool = False,
+        doc_name: str = "", notices: Sequence[str] = ()) -> int:
     """Open the audio device, enter curses, and run until the user quits."""
     from .player import Player, PlayerError
     from .speech import DEFAULT_REPO_ID, Engine
@@ -932,6 +1125,29 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+    # The Now Playing role, if the user wants it and PyObjC is here to give it.
+    # Built on the main thread and never anywhere else: `MediaKeys.start` makes
+    # an NSApplication, which AppKit only allows from the main thread.
+    keys: Any = None
+    media_keys_error = ""
+    if media_keys:
+        try:
+            from . import mediakeys as mediakeys_mod
+
+            if mediakeys_mod.available():
+                keys = mediakeys_mod.MediaKeys(title="readaloud",
+                                               artist=doc_name or "readaloud")
+            elif media_keys_explicit:
+                # Explicitly asked for, but PyObjC is not installed.  Say so,
+                # or the user presses a button that will never work with no
+                # clue why.  Only on an explicit request: media_keys defaults
+                # to true, so doing this unprompted would nag everyone who
+                # never wanted the feature, and a long message pushes the
+                # position indicator off an 80-column status bar.
+                media_keys_error = "install the [mediakeys] extra"
+        except Exception:  # noqa: BLE001 - an import that only ever adds a nicety
+            keys = None
+
     theme = Theme(chunk_bg=None) if no_color else Theme()
     app: App | None = None
     status = 0
@@ -943,8 +1159,12 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
             with screen_session(theme) as screen:
                 app = App(doc, screen, player, engine, ahead=prefetch,
                           start_chunk=start_chunk, voice=voice,
-                          follow_lead=follow_lead, follow_margin=follow_margin)
+                          follow_lead=follow_lead, follow_margin=follow_margin,
+                          media_keys=keys, doc_name=doc_name)
                 app.start()
+                if media_keys_error:
+                    app.notify(f"media keys unavailable: {media_keys_error}",
+                               ttl=NOTICE_TTL)
                 if notices:
                     # config-file complaints: the status bar, never a print()
                     # -- stdout belongs to curses from here on.
@@ -973,6 +1193,14 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
                 # has already got their terminal back.  It is a daemon thread,
                 # so asking it to stop is enough.
                 clean = app.close(timeout=0.0)
+            if keys is not None:
+                # `App.close` already did this; repeat it for the paths where
+                # the App was never built.  `stop()` is idempotent.
+                try:
+                    keys.stop()
+                except Exception:  # noqa: BLE001,S110
+                    pass
+                time.sleep(MEDIA_STOP_SETTLE)
             _close_engine_async(engine)
 
     if crashed:

@@ -93,6 +93,7 @@ def test_config_dataclass_defaults():
         voice="af_heart", speed=1.0, lang="", chars=380,
         repo="mlx-community/Kokoro-82M-4bit", sentences=4, prefetch=2,
         device="", color=True, follow_lead=20, follow_margin=2,
+        media_keys=True,
     )
 
 
@@ -114,6 +115,7 @@ device = MacBook Pro Speakers
 color = false
 follow_lead = 12
 follow_margin = 5
+media_keys = false
 """
 
 
@@ -123,19 +125,20 @@ def test_every_key_is_read(tmp_path):
     assert cfg == Config(
         voice="bf_emma", speed=1.25, lang="b", repo="hexgrad/Kokoro-82M",
         sentences=7, chars=500, prefetch=0, device="MacBook Pro Speakers",
-        color=False, follow_lead=12, follow_margin=5,
+        color=False, follow_lead=12, follow_margin=5, media_keys=False,
     )
 
 
+@pytest.mark.parametrize("key", ["color", "media_keys"])
 @pytest.mark.parametrize("raw,expected", [
     ("true", True), ("True", True), ("yes", True), ("on", True), ("1", True),
     ("false", False), ("FALSE", False), ("no", False), ("off", False),
     ("0", False),
 ])
-def test_color_boolean_spellings(tmp_path, raw, expected):
-    body = f"[readaloud]\ncolor = {raw}\n"
+def test_boolean_spellings(tmp_path, key, raw, expected):
+    body = f"[readaloud]\n{key} = {raw}\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
-    assert (cfg.color, warnings) == (expected, [])
+    assert (getattr(cfg, key), warnings) == (expected, [])
 
 
 def test_keys_are_case_insensitive_and_values_are_stripped(tmp_path):
@@ -215,6 +218,7 @@ def test_clamping_one_key_leaves_the_others_alone(tmp_path):
     ("follow_lead", "20 rows"),
     ("follow_margin", "?"),
     ("color", "maybe"),
+    ("media_keys", "sometimes"),
 ])
 def test_malformed_value_falls_back_to_default_and_warns(tmp_path, key, given):
     body = f"[readaloud]\n{key} = {given}\n"
@@ -358,9 +362,18 @@ def test_template_mentions_every_key_with_its_default():
     assert f"[{config.SECTION}]" in text
     for field in ("voice", "speed", "lang", "repo", "sentences", "chars",
                   "prefetch", "device", "color", "follow_lead",
-                  "follow_margin"):
+                  "follow_margin", "media_keys"):
         assert re.search(rf"(?m)^#{field} =", text), field
         assert re.search(rf"(?m)^# default:.*\n#{field} =", text), field
+
+
+def test_template_says_media_keys_needs_the_optional_extra():
+    """A user who turns it on and sees nothing happen must be able to find out
+    why from the file itself: the feature is inert without PyObjC."""
+    text = config.template()
+    block = text[text.index("#media_keys ") - 600:text.index("#media_keys ")]
+    assert "mediakeys" in block            # the extra's name
+    assert "play/pause" in block
 
 
 def test_template_has_a_comment_above_every_key():

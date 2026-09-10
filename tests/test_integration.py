@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src
 from readaloud import cli, config  # noqa: E402
 from readaloud.app import (  # noqa: E402
     App, FOLLOW_LEAD, FOLLOW_MARGIN, MAX_SPEED, MIN_SPEED, Prefetcher,
+    MEDIA_ELAPSED_EVERY,
 )
 from readaloud.document import Document  # noqa: E402
 from readaloud.keys import Action, MouseEvent  # noqa: E402
@@ -400,6 +401,27 @@ def test_parser_color_flags_are_two_spellings_of_one_setting():
     assert parse(["--no-color", "--color"]).color is True
 
 
+def test_parser_media_key_flags_are_two_spellings_of_one_setting():
+    parse = cli.build_parser().parse_args
+    assert parse([]).media_keys is None
+    assert parse(["--media-keys"]).media_keys is True
+    assert parse(["--no-media-keys"]).media_keys is False
+    assert parse(["--media-keys", "--no-media-keys"]).media_keys is False
+
+
+def test_media_keys_default_to_on():
+    args = cli.build_parser().parse_args([])
+    cli._apply_config(args, config.Config())
+    assert args.media_keys is True
+
+
+def test_document_name_is_the_file_basename_or_the_program_name():
+    parse = cli.build_parser().parse_args
+    assert cli.document_name(parse(["-f", "/tmp/notes.md"])) == "notes.md"
+    assert cli.document_name(parse(["-f", "-"])) == "readaloud"
+    assert cli.document_name(parse(["some text"])) == "readaloud"
+
+
 def test_lang_derived_from_voice():
     assert cli.lang_for("af_heart", None) == "a"
     assert cli.lang_for("bm_george", None) == "b"
@@ -666,6 +688,31 @@ def test_no_color_overrides_color_true_and_color_overrides_color_false(
     assert launched["no_color"] is True
     assert cli.main(["--config", str(conf_off), "--color"]) == 0
     assert launched["no_color"] is False
+
+
+def test_no_media_keys_overrides_the_config_in_both_directions(tmp_path, launched):
+    conf_on = tmp_path / "on.conf"
+    conf_on.write_text("[readaloud]\nmedia_keys = true\n", encoding="utf-8")
+    conf_off = tmp_path / "off.conf"
+    conf_off.write_text("[readaloud]\nmedia_keys = false\n", encoding="utf-8")
+
+    assert cli.main(["--config", str(conf_on)]) == 0
+    assert launched["media_keys"] is True
+    assert cli.main(["--config", str(conf_on), "--no-media-keys"]) == 0
+    assert launched["media_keys"] is False
+    assert cli.main(["--config", str(conf_off)]) == 0
+    assert launched["media_keys"] is False
+    assert cli.main(["--config", str(conf_off), "--media-keys"]) == 0
+    assert launched["media_keys"] is True
+
+
+def test_media_keys_are_on_by_default_and_the_document_gets_a_name(
+        tmp_path, launched):
+    doc = tmp_path / "notes.md"
+    doc.write_text(SAMPLE, encoding="utf-8")
+    assert cli.main(["--config", write_conf(tmp_path, ""), "-f", str(doc)]) == 0
+    assert launched["media_keys"] is True
+    assert launched["doc_name"] == "notes.md"
 
 
 def test_config_follow_lead_reaches_the_app(tmp_path, launched):
@@ -1546,6 +1593,310 @@ def test_app_close_joins_the_worker():
 
 
 # --------------------------------------------------------------------------- #
+# 3b. the system play/pause button
+#
+# The real button cannot be pressed from a test, so `mediakeys.MediaKeys` is
+# replaced by a stub that hands the app scripted commands.  What is being
+# tested is the half readaloud owns: the mapping from a MediaRemote command to
+# a playback state, and the state reporting that keeps the button alternating.
+# --------------------------------------------------------------------------- #
+
+
+class FakeMediaKeys:
+    """`mediakeys.MediaKeys`'s surface, with a scriptable command queue."""
+
+    def __init__(self, *, ok=True, error=None, explode=False):
+        self.ok = ok
+        self.error = error
+        self.explode = explode
+        self.started = False
+        self.stops = 0
+        self.pumps = 0
+        self.polls = 0
+        self.queue: list[str] = []
+        self.playing_calls: list[bool] = []
+        self.titles: list[str] = []
+        self.scrubs: list[tuple] = []   # every (elapsed, duration, rate) push
+
+    # -- the surface App uses ---------------------------------------------
+    def start(self, duration=0.0):
+        if self.explode:
+            raise RuntimeError("no NSApplication for you")
+        self.started = bool(self.ok)
+        return self.started
+
+    def stop(self):
+        self.stops += 1
+        self.started = False
+
+    def pump(self, seconds=0.0):
+        self.pumps += 1
+
+    def poll(self):
+        self.polls += 1
+        out, self.queue = self.queue, []
+        return out
+
+    def set_playing(self, playing):
+        self.playing_calls.append(bool(playing))
+
+    def set_now_playing(self, title=None, *, elapsed=None, duration=None,
+                        rate=None):
+        # Mirror the real contract: `title=None` means "leave the title alone",
+        # which is what the periodic scrubber refresh sends.  Recording those
+        # as titles would both corrupt `titles[-1]` and make the
+        # republished-only-on-change assertions count position updates.
+        if title is not None:
+            self.titles.append(title)
+        self.scrubs.append((elapsed, duration, rate))
+
+    # -- test control ------------------------------------------------------
+    def press(self, *commands):
+        """Queue what MediaRemote would deliver on the next pump."""
+        self.queue.extend(commands)
+
+
+def media_app(**kw):
+    keys = FakeMediaKeys(**kw)
+    app, doc, engine, player, screen = make_app(media_keys=keys)
+    app.start()
+    return app, keys, player
+
+
+def test_the_button_is_claimed_at_startup_and_released_on_quit():
+    app, keys, _player = media_app()
+    try:
+        assert keys.started is True
+        assert "media keys" in app.status().message
+    finally:
+        app.close()
+    assert keys.stops >= 1
+    assert keys.started is False
+
+
+def test_a_button_that_cannot_be_claimed_is_a_message_not_a_failure():
+    app, keys, player = media_app(ok=False, error="MediaRemote said no")
+    try:
+        assert settle(app)
+        assert player.playing, "the reader must still read"
+        assert "MediaRemote said no" in app.status().message
+    finally:
+        app.close()
+
+
+def test_a_button_that_raises_on_start_is_dropped_and_the_reader_runs():
+    app, keys, player = media_app(explode=True)
+    try:
+        assert app.media_keys is None      # dropped, so nothing pumps a corpse
+        assert "media keys unavailable" in app.status().message
+        assert settle(app)
+        assert player.playing
+    finally:
+        app.close()
+
+
+def test_a_play_arriving_while_playing_is_the_button_asking_for_a_pause():
+    """The press that should pause arrives as 'play', not 'pause' — treating
+    it as "resume" is what makes the button feel one-way."""
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        assert app.want_play is True and player.playing
+        keys.press("play")
+        app.tick()
+        assert app.want_play is False
+        assert not player.playing
+        assert keys.playing_calls[-1] is False
+    finally:
+        app.close()
+
+
+def test_a_play_arriving_while_paused_resumes():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        keys.press("play")
+        app.tick()
+        assert app.want_play is False
+        keys.press("play")
+        app.tick()
+        assert app.want_play is True
+        assert player.playing
+        assert keys.playing_calls[-1] is True
+    finally:
+        app.close()
+
+
+def test_pause_pauses_and_a_second_pause_changes_nothing():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        keys.press("pause")
+        app.tick()
+        assert app.want_play is False
+        n = len(keys.playing_calls)
+        keys.press("pause")
+        app.tick()
+        assert app.want_play is False
+        assert len(keys.playing_calls) == n, "nothing changed; nothing to report"
+    finally:
+        app.close()
+
+
+def test_toggle_toggles():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        for expected in (False, True, False):
+            keys.press("toggle")
+            app.tick()
+            assert app.want_play is expected
+        assert keys.playing_calls[-3:] == [False, True, False]
+    finally:
+        app.close()
+
+
+def test_next_and_previous_move_a_chunk():
+    app, keys, player = media_app()
+    doc = app.doc
+    try:
+        assert settle(app)
+        first = app._active
+        keys.press("next")
+        app.tick()
+        assert app._current_chunk() == doc.next_speakable_chunk(first)
+        assert settle(app)
+        keys.press("previous")
+        app.tick()
+        assert app._current_chunk() == first
+    finally:
+        app.close()
+
+
+def test_several_commands_in_one_pump_are_all_applied():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        keys.press("pause", "play")        # off, then back on
+        app.tick()
+        assert app.want_play is True
+    finally:
+        app.close()
+
+
+def test_the_state_is_reported_after_a_spacebar_press_too():
+    """Not just after a button press: macOS keeps sending 'play' until the
+    state it holds matches ours, whatever moved ours."""
+    from readaloud.keys import Command
+
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        assert keys.playing_calls == [True]
+        app.handle(Command(Action.PLAY_PAUSE))     # the spacebar
+        app.tick()
+        assert keys.playing_calls == [True, False]
+        app.handle(Command(Action.PLAY_PAUSE))
+        app.tick()
+        assert keys.playing_calls == [True, False, True]
+    finally:
+        app.close()
+
+
+def test_the_state_is_reported_when_the_document_ends():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        app._set_target(app.doc.speakable_chunks[-1], None)   # the last chunk
+        assert settle(app)
+        player.finish()
+        app.tick()                                 # ... and run off the end
+        assert "end of document" in app.status().message
+        assert app.want_play is False
+        assert keys.playing_calls[-1] is False
+    finally:
+        app.close()
+
+
+def test_the_title_is_the_chunk_trimmed_and_the_artist_is_the_document():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        assert keys.titles, "Control Center was never told what is playing"
+        title = keys.titles[-1]
+        assert len(title) <= 70
+        assert "\n" not in title
+        assert title.split()[0] in app.doc.chunks[app._active].text
+    finally:
+        app.close()
+
+
+def test_the_title_is_republished_only_when_the_chunk_changes():
+    """`tick` runs ~33 times a second; MediaRemote does not need to hear the
+    same paragraph 33 times."""
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        before = len(keys.titles)
+        assert before <= 2
+        for _ in range(100):
+            app.tick()
+        assert len(keys.titles) == before, "the title was republished while idle"
+        assert keys.pumps >= 100, "the run loop still has to be pumped"
+        keys.press("next")
+        app.tick()
+        assert settle(app)
+        assert len(keys.titles) == before + 1
+    finally:
+        app.close()
+
+
+def test_the_playing_flag_is_not_republished_while_nothing_changes():
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        n = len(keys.playing_calls)
+        for _ in range(100):
+            app.tick()
+        assert len(keys.playing_calls) == n
+    finally:
+        app.close()
+
+
+def test_a_long_chunk_is_trimmed_at_a_word_boundary():
+    from readaloud.app import MEDIA_TITLE_CHARS
+
+    long_para = ("Alpha bravo charlie delta echo foxtrot golf hotel india "
+                 "juliet kilo lima mike november oscar papa quebec romeo.\n")
+    app, doc, engine, player, screen = make_app(doc=make_doc(long_para),
+                                                media_keys=FakeMediaKeys())
+    keys = app.media_keys
+    app.start()
+    try:
+        assert settle(app)
+        title = keys.titles[-1]
+        assert title.endswith("...")
+        assert len(title) <= MEDIA_TITLE_CHARS + 3
+        assert not title[:-3].endswith(" ")
+        assert long_para.startswith(title[:-3])
+    finally:
+        app.close()
+
+
+def test_an_app_without_media_keys_never_touches_them():
+    app, doc, engine, player, screen = make_app()
+    assert app.media_keys is None
+    app.start()
+    try:
+        assert settle(app)
+        for _ in range(20):
+            app.tick()
+        assert player.playing
+    finally:
+        app.close()
+
+
+# --------------------------------------------------------------------------- #
 # 4. the real binary under a pty
 # --------------------------------------------------------------------------- #
 
@@ -1970,6 +2321,27 @@ def test_pty_plays_and_highlights(stub_child):
     assert st is not None and os.WEXITSTATUS(st) == 0
 
 
+@pytest.mark.parametrize("flag", ["--media-keys", "--no-media-keys"])
+def test_pty_media_key_flags_never_disturb_the_reader(stub_child, flag):
+    """The degradation path, and the one that matters most: the system
+    play/pause button is a nicety on top of an optional PyObjC extra.  With the
+    extra absent `--media-keys` must be a silent no-op; with it present the role
+    is claimed and released.  Either way the reader reads, and `q` exits 0.
+    """
+    doc = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
+    with PtyRun(stub_argv(stub_child, flag), stdin_bytes=doc, cwd=REPO) as p:
+        assert p.wait_screen("Alpha bravo", 30), p.screen()
+        assert p.wait_screen("PLAY", 30, where=-1), p.screen()[-1]
+        p.send(" ", 0.4)
+        assert "PAUSE" in p.screen()[-1]
+        p.send(" ", 0.4)
+        p.send("q", 0.5)
+        st = p.wait(15)
+        raw = bytes(p.out)
+    assert b"Traceback" not in raw, raw[-2000:]
+    assert st is not None and os.WIFEXITED(st) and os.WEXITSTATUS(st) == 0
+
+
 def test_pty_search_and_resize(stub_child):
     body = ("Intro line.\n\n" + "\n\n".join(
         f"Paragraph {i} carries the needle {i}." for i in range(1, 26))).encode()
@@ -2161,3 +2533,45 @@ def test_real_binary_runs_under_a_pty():
         p.send("q", 1.0)
         st = p.wait(20)
     assert st is not None and os.WEXITSTATUS(st) == 0
+
+
+def test_the_scrubber_keeps_moving_while_a_chunk_plays():
+    """Elapsed time was published once at start() and never again, so Control
+    Center's scrubber sat frozen at 0:00 for the whole session."""
+    import time as _time
+
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        before = len(keys.scrubs)
+        # idle ticks inside one refresh window must not republish
+        for _ in range(50):
+            app.tick()
+        assert len(keys.scrubs) == before, "position was pushed on the tick path"
+        # ... but once the window passes, it is refreshed
+        app._mk_elapsed_at -= (MEDIA_ELAPSED_EVERY + 0.01)
+        app.tick()
+        assert len(keys.scrubs) == before + 1, "the scrubber never advances"
+        elapsed, duration, rate = keys.scrubs[-1]
+        assert elapsed is not None and elapsed >= 0.0
+        assert rate == 1.0
+        _ = duration, _time
+    finally:
+        app.close()
+
+
+def test_the_scrubber_is_not_refreshed_while_paused():
+    from readaloud.keys import Command
+
+    app, keys, player = media_app()
+    try:
+        assert settle(app)
+        app.handle(Command(Action.PLAY_PAUSE))
+        app.tick()
+        before = len(keys.scrubs)
+        app._mk_elapsed_at -= (MEDIA_ELAPSED_EVERY + 0.01)
+        for _ in range(10):
+            app.tick()
+        assert len(keys.scrubs) == before, "position pushed while paused"
+    finally:
+        app.close()

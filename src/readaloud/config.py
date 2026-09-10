@@ -62,6 +62,7 @@ class Config:
     color: bool = True
     follow_lead: int = 20          # extra rows to scroll ahead in follow mode
     follow_margin: int = 2
+    media_keys: bool = True        # claim the system play/pause button
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +127,14 @@ _FIELDS: tuple[_Field, ...] = (
         "Rows kept between the spoken word and the top/bottom edge of the",
         "viewport before follow mode scrolls.",
     ), lo=0),
+    _Field("media_keys", "bool", (
+        "Take over the system play/pause button -- the one on a Bluetooth",
+        "headset, on the keyboard, and in Control Center -- so pressing it",
+        "pauses readaloud instead of launching Apple Music.  Needs the",
+        "optional PyObjC extra (install with `uv tool install --editable",
+        "'.[mediakeys]'`); without it this setting does nothing at all.",
+        "false is the equivalent of --no-media-keys.",
+    )),
 )
 
 _BY_NAME = {f.name: f for f in _FIELDS}

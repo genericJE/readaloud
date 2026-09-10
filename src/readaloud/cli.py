@@ -114,6 +114,15 @@ def build_parser() -> argparse.ArgumentParser:
                         "config file)")
     p.add_argument("--no-color", dest="color", action="store_false",
                    help="ignore colours in the input and render monochrome")
+    # Same shared-dest trick as --color: two spellings, one setting, so the
+    # config file can be overridden in either direction.
+    p.add_argument("--media-keys", dest="media_keys", action="store_true",
+                   default=None,
+                   help="take over the system play/pause button (needs the "
+                        "optional [mediakeys] extra; overrides "
+                        "media_keys=false in the config file)")
+    p.add_argument("--no-media-keys", dest="media_keys", action="store_false",
+                   help="leave the system play/pause button alone")
     p.add_argument("--config", default=None, metavar="PATH",
                    help=f"read defaults from PATH instead of {_CONFIG_HINT}")
     p.add_argument("--no-config", action="store_true",
@@ -189,6 +198,23 @@ def _apply_config(args: argparse.Namespace, cfg) -> None:
         args.device = cfg.device or None
     if args.color is None:
         args.color = bool(cfg.color)
+    # Whether the user *asked* for media keys, as opposed to inheriting the
+    # default.  Only an explicit request earns an explanation when PyObjC is
+    # missing; saying it unprompted would nag every user who never wanted it.
+    args.media_keys_explicit = args.media_keys is not None
+    if args.media_keys is None:
+        args.media_keys = bool(cfg.media_keys)
+
+
+def document_name(args: argparse.Namespace) -> str:
+    """What to call this document -- Control Center shows it as the "artist".
+
+    A file gets its basename; anything piped or typed has no name, so it gets
+    the one thing that is true of it.
+    """
+    if getattr(args, "file", None) and args.file != "-":
+        return Path(args.file).name
+    return "readaloud"
 
 
 def lang_for(voice: str, override: str | None) -> str:
@@ -506,6 +532,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
         no_color=no_color,
         follow_lead=cfg.follow_lead,
         follow_margin=cfg.follow_margin,
+        media_keys=bool(args.media_keys),
+        media_keys_explicit=bool(getattr(args, "media_keys_explicit", False)),
+        doc_name=document_name(args),
         notices=short_notices(warnings, target),
     )
 

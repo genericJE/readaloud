@@ -131,7 +131,12 @@ class MediaKeys:
             for attr in ("togglePlayPauseCommand", "playCommand", "pauseCommand",
                          "stopCommand", "nextTrackCommand", "previousTrackCommand"):
                 try:
-                    getattr(self._center, attr)().setEnabled_(False)
+                    command = getattr(self._center, attr)()
+                    command.setEnabled_(False)
+                    # Disabling is not detaching: without removeTarget_ a second
+                    # start() stacks a second set of handlers on the same
+                    # commands and every press fires them all.
+                    command.removeTarget_(None)
                 except Exception:  # noqa: BLE001,S110 - best effort teardown
                     pass
             self._info.setPlaybackState_(
