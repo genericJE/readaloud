@@ -1,0 +1,403 @@
+"""Command-line entry point for readaloud.
+
+Responsibilities, in order:
+
+1. parse arguments;
+2. answer the "just tell me something" flags (``--list-voices``,
+   ``--list-devices``) and exit;
+3. obtain the input text -- ``-f FILE``, positional ``TEXT``, or piped stdin --
+   draining stdin *completely* before anything else touches fd 0;
+4. build the `Document`;
+5. either render the whole document to a WAV file (``--save``) or hand over to
+   `readaloud.app.run`, which owns the curses session.
+
+Every failure the user can plausibly cause turns into a one-line message on
+stderr and a non-zero exit status, never a traceback.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from dataclasses import replace
+from typing import Sequence
+
+from . import __version__
+
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_USAGE = 2
+EXIT_INTERRUPT = 130
+
+#: Kokoro voice names encode their language in the first letter, so the
+#: pipeline's ``lang_code`` can be derived from ``--voice`` unless overridden.
+_LANG_OF_VOICE = {
+    "a": "a",  # American English
+    "b": "b",  # British English
+    "e": "e",  # Spanish
+    "f": "f",  # French
+    "h": "h",  # Hindi
+    "i": "i",  # Italian
+    "j": "j",  # Japanese
+    "p": "p",  # Brazilian Portuguese
+    "z": "z",  # Mandarin
+}
+
+
+def _err(msg: str) -> None:
+    print(f"readaloud: {msg}", file=sys.stderr)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    from .speech import DEFAULT_REPO_ID, DEFAULT_VOICE
+
+    p = argparse.ArgumentParser(
+        prog="readaloud",
+        description=(
+            "Read text aloud in the terminal with Kokoro TTS: word-level "
+            "highlighting, less-style navigation, click a word to jump."
+        ),
+        epilog=(
+            "examples:\n"
+            "  mdcat --ansi notes.md | readaloud\n"
+            "  readaloud -f README.md\n"
+            "  readaloud 'the quick brown fox'\n"
+            "  readaloud -f notes.md --save notes.wav\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("text", nargs="*", metavar="TEXT",
+                   help="text to read (joined with spaces)")
+    p.add_argument("-f", "--file", metavar="FILE",
+                   help="read from FILE instead of stdin/TEXT ('-' means stdin)")
+    p.add_argument("-v", "--voice", default=DEFAULT_VOICE, metavar="NAME",
+                   help=f"Kokoro voice (default: {DEFAULT_VOICE})")
+    p.add_argument("-s", "--speed", type=float, default=1.0, metavar="X",
+                   help="speech rate multiplier (default: 1.0)")
+    p.add_argument("--sentences", type=int, default=4, metavar="N",
+                   help="max sentences per chunk (default: 4)")
+    p.add_argument("--chars", type=int, default=380, metavar="N",
+                   help="max characters per chunk (default: 380)")
+    p.add_argument("--prefetch", type=int, default=2, metavar="N",
+                   help="chunks to synthesize ahead of the current one (default: 2)")
+    p.add_argument("--device", default=None, metavar="DEV",
+                   help="audio output device: index, name substring, or 'default'")
+    p.add_argument("--start", type=int, default=1, metavar="N",
+                   help="start playback at chunk N (1-based, default: 1)")
+    p.add_argument("--save", metavar="FILE.wav",
+                   help="render the whole document to a WAV file and exit (no TUI)")
+    p.add_argument("--lang", default=None, metavar="CODE",
+                   help="Kokoro language code (default: derived from the voice name)")
+    p.add_argument("--repo", default=DEFAULT_REPO_ID, metavar="ID",
+                   help=f"HuggingFace model repo (default: {DEFAULT_REPO_ID})")
+    p.add_argument("--no-color", action="store_true",
+                   help="ignore colours in the input and render monochrome")
+    p.add_argument("--list-voices", action="store_true",
+                   help="print the available voices and exit")
+    p.add_argument("--list-devices", action="store_true",
+                   help="print the available audio output devices and exit")
+    p.add_argument("--version", action="version", version=f"readaloud {__version__}")
+    return p
+
+
+def lang_for(voice: str, override: str | None) -> str:
+    if override:
+        return override[:1].lower()
+    return _LANG_OF_VOICE.get((voice or "a")[:1].lower(), "a")
+
+
+def check_voice(voice: str, repo: str, lang: str) -> str | None:
+    """Return an error message when `voice` is not a voice this repo has.
+
+    Returns `None` when the voice is fine, or when the voice list cannot be
+    determined (a custom repo we know nothing about must not be blocked).
+    Without this check an unknown voice loads the model happily and then fails
+    at synthesis time, once per chunk: the TUI races to the end of the document
+    in silence and exits 0.
+    """
+    import difflib
+
+    from .speech import list_voices
+
+    try:
+        known = list_voices(repo)
+    except Exception:  # noqa: BLE001 - a broken listing must not block startup
+        return None
+    if not known or voice in known:
+        return None
+
+    same_lang = [v for v in known if v[:1] == (lang or "")[:1]] or known
+    # prefer suggestions the requested language can actually speak
+    hints = (difflib.get_close_matches(voice, same_lang, n=3, cutoff=0.6)
+             or difflib.get_close_matches(voice, known, n=3, cutoff=0.6)
+             or same_lang[:3])
+    return (f"unknown voice {voice!r}; did you mean "
+            f"{', '.join(hints)}?  (see --list-voices)")
+
+
+# --------------------------------------------------------------------------- #
+# input
+# --------------------------------------------------------------------------- #
+
+
+def read_input(args: argparse.Namespace) -> str:
+    """Return the raw text to read, draining stdin when that is the source.
+
+    Raises `OSError` for an unreadable ``--file``.
+    """
+    from .ui import read_stdin_text
+
+    if args.file and args.file != "-":
+        with open(args.file, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    if args.file == "-":
+        return read_stdin_text()
+    if args.text:
+        return " ".join(args.text)
+    # `read_stdin_text` returns "" when fd 0 is a terminal, i.e. nothing piped.
+    return read_stdin_text()
+
+
+def build_document(data: str, *, max_sentences: int, max_chars: int,
+                   no_color: bool):
+    """Parse `data` (ANSI or raw markdown) into a `Document`."""
+    from . import ansi
+    from .document import Document
+
+    lines = ansi.parse(data)
+    if not ansi.has_ansi(data):
+        lines = ansi.strip_markdown(lines)
+    if no_color:
+        lines = [
+            [replace(r, style=replace(r.style, fg=None, bg=None)) for r in line]
+            for line in lines
+        ]
+    return Document(lines, max_sentences=max_sentences, max_chars=max_chars)
+
+
+# --------------------------------------------------------------------------- #
+# --save
+# --------------------------------------------------------------------------- #
+
+
+def check_writable(path: str) -> str | None:
+    """Return an error message when `path` cannot be opened for writing.
+
+    Used as a pre-flight so a mistyped ``--save`` destination is reported in
+    the first second rather than after the whole document has been rendered.
+    An existing file is opened without truncation and a file we create for the
+    probe is removed again, so a failed run never destroys the old contents.
+    """
+    existed = os.path.exists(path)
+    try:
+        fh = open(path, "r+b" if existed else "wb")
+    except OSError as exc:
+        return f"could not write {path}: {exc}"
+    fh.close()
+    if not existed:
+        try:
+            os.unlink(path)
+        except OSError:  # pragma: no cover - vanished under us; harmless
+            pass
+    return None
+
+
+def save_wav(doc, path: str, *, voice: str, speed: float, lang: str,
+             repo: str, quiet: bool = False) -> int:
+    """Synthesize every speakable chunk and write one WAV file.  Returns 0/1."""
+    import wave
+
+    import numpy as np
+
+    from .speech import SAMPLE_RATE, Engine
+
+    speakable = doc.speakable_chunks
+    if not speakable:
+        _err("nothing speakable in the input")
+        return EXIT_ERROR
+
+    unwritable = check_writable(path)
+    if unwritable:
+        _err(unwritable)
+        return EXIT_ERROR
+
+    engine = Engine(voice=voice, speed=speed, lang_code=lang, repo_id=repo)
+    try:
+        try:
+            engine.load()
+        except BaseException as exc:  # noqa: BLE001 - becomes a message
+            if isinstance(exc, KeyboardInterrupt):
+                raise
+            _err(f"could not load the voice model: {exc}")
+            return EXIT_ERROR
+
+        parts: list[np.ndarray] = []
+        failures = 0
+        for n, cidx in enumerate(speakable, 1):
+            if not quiet:
+                print(f"\rsynthesizing chunk {n}/{len(speakable)}...",
+                      end="", file=sys.stderr, flush=True)
+            spoken = engine.synth(doc.chunks[cidx])
+            if spoken.audio.size == 0:
+                failures += 1
+                continue
+            parts.append(spoken.audio)
+            # a short breath between chunks, as the TUI hears it
+            parts.append(np.zeros(int(SAMPLE_RATE * 0.20), dtype=np.float32))
+        if not quiet:
+            print("\r" + " " * 40 + "\r", end="", file=sys.stderr, flush=True)
+    finally:
+        engine.close()
+
+    if not parts:
+        _err("synthesis produced no audio" +
+             (f": {engine.last_error}" if engine.last_error else ""))
+        return EXIT_ERROR
+
+    audio = np.concatenate(parts)
+    pcm = np.clip(audio, -1.0, 1.0)
+    pcm = (pcm * 32767.0).astype("<i2")
+    try:
+        # Open the file ourselves: `wave.open(path, ...)` opens it inside
+        # `Wave_write.__init__` *before* `self._file` exists, so a failure
+        # there leaves a half-built object whose `__del__` raises an
+        # AttributeError that CPython dumps to stderr as a traceback.
+        with open(path, "wb") as fh, wave.open(fh, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(pcm.tobytes())
+    except OSError as exc:
+        _err(f"could not write {path}: {exc}")
+        return EXIT_ERROR
+
+    secs = len(audio) / float(SAMPLE_RATE)
+    note = f" ({failures} chunk(s) failed)" if failures else ""
+    print(f"wrote {path}: {secs:.1f}s, {len(speakable) - failures} chunks{note}")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# main
+# --------------------------------------------------------------------------- #
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.list_devices:
+        from .player import format_devices
+        print(format_devices())
+        return EXIT_OK
+
+    lang = lang_for(args.voice, args.lang)
+
+    if args.list_voices:
+        from .speech import list_voices
+        names = list_voices(args.repo, lang)
+        print(f"voices for lang '{lang}' (repo {args.repo}):")
+        for name in names:
+            print(f"  {name}")
+        return EXIT_OK
+
+    if args.speed <= 0:
+        _err("--speed must be greater than 0")
+        return EXIT_USAGE
+    if args.prefetch < 0:
+        _err("--prefetch must be 0 or more")
+        return EXIT_USAGE
+    if args.sentences < 1 or args.chars < 1:
+        _err("--sentences and --chars must be 1 or more")
+        return EXIT_USAGE
+
+    bad_voice = check_voice(args.voice, args.repo, lang)
+    if bad_voice:
+        _err(bad_voice)
+        return EXIT_USAGE
+
+    # ---- input ----------------------------------------------------------
+    try:
+        data = read_input(args)
+    except OSError as exc:
+        _err(f"could not read {args.file}: {exc}")
+        return EXIT_ERROR
+
+    if not data.strip():
+        if args.file or args.text:
+            _err("the input is empty")
+        else:
+            _err("no input: pipe something in, pass TEXT, or use -f FILE")
+            _err("try 'readaloud --help', or 'mdcat --ansi notes.md | readaloud'")
+        return EXIT_USAGE
+
+    doc = build_document(
+        data,
+        max_sentences=args.sentences,
+        max_chars=args.chars,
+        no_color=args.no_color,
+    )
+    if not doc.speakable_chunks:
+        _err("the input contains nothing speakable (only rules, symbols or blanks)")
+        return EXIT_ERROR
+
+    # ---- --save: no terminal needed -------------------------------------
+    if args.save:
+        return save_wav(doc, args.save, voice=args.voice, speed=args.speed,
+                        lang=lang, repo=args.repo)
+
+    # ---- TUI ------------------------------------------------------------
+    # stdin has been drained; point fd 0 (and fd 1, if redirected) at the real
+    # terminal before curses touches anything.  Skipping this fails silently:
+    # initscr() succeeds and every getch() returns -1 forever.
+    from .ui import reopen_tty
+
+    try:
+        reopen_tty()
+    except OSError as exc:
+        _err(f"no controlling terminal to draw on ({exc.strerror or exc}); "
+             "run readaloud from a terminal, or use --save FILE.wav")
+        return EXIT_ERROR
+    if not os.isatty(0):  # pragma: no cover - belt and braces
+        _err("stdin is still not a terminal after reopening /dev/tty")
+        return EXIT_ERROR
+
+    from .app import run
+
+    # `--start N` counts the *speakable* chunks, which is what the status bar
+    # shows ("chunk N/M"); App itself works in document chunk indices.
+    speakable = doc.speakable_chunks
+    nth = min(max(0, int(args.start) - 1), len(speakable) - 1)
+    start = speakable[nth]
+    return run(
+        doc,
+        voice=args.voice,
+        speed=args.speed,
+        lang=lang,
+        repo=args.repo,
+        prefetch=args.prefetch,
+        device=args.device,
+        start_chunk=start,
+        no_color=args.no_color,
+    )
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Console-script entry point.  Never raises; returns a process exit code."""
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        # The TUI catches its own Ctrl-C; this is the pre-curses / --save path.
+        print("", file=sys.stderr)
+        _err("interrupted")
+        return EXIT_INTERRUPT
+    except BrokenPipeError:  # pragma: no cover - `readaloud --list-voices | head`
+        return EXIT_OK
+
+
+entry = main  # backwards-compatible alias
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
