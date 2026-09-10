@@ -30,6 +30,11 @@ PLAY     af_heart  1.15x  chunk 7/26  follow on                            42%
   before the voice has finished loading.
 - **`less` navigation that is independent of playback.** Scroll wherever you like;
   playback carries on. `F` or `c` snaps the view back to the spoken word.
+- **Follow mode reads ahead.** When the spoken word reaches the bottom of the screen
+  the view jumps `follow_lead` rows further than it strictly has to, so the text about
+  to be read sits near the middle instead of the last row.
+- **Your defaults live in `~/.readaloud.conf`.** Voice, speed, chunking, colours and
+  the follow lead, in a commented INI file that the first run writes for you.
 - **Survives the awkward cases**: terminal resize, empty input, input with nothing
   speakable, a chunk whose synthesis fails, and `q` during synthesis.
 
@@ -100,9 +105,111 @@ the terminal rather than into `log`.
 | `--save FILE.wav` | | render everything to a WAV and exit |
 | `--lang CODE` | from the voice | Kokoro language code (`a`, `b`, `j`, …) |
 | `--repo ID` | `mlx-community/Kokoro-82M-4bit` | model repo |
+| `--color` | | render the input's colours (overrides `color = false` in the config) |
 | `--no-color` | | render monochrome, ignoring the input's colours |
+| `--config PATH` | `~/.readaloud.conf` | read defaults from `PATH` instead |
+| `--no-config` | | ignore the config file; built-in defaults only |
+| `--write-config` | | write a fresh commented template (overwriting) and exit |
 | `--list-voices` | | print the voices for the chosen language |
 | `--list-devices` | | print the audio output devices |
+
+The "Default" column is the *built-in* default. Anything you have set in
+`~/.readaloud.conf` wins over it, and the flag wins over both — see below.
+
+## Configuration — `~/.readaloud.conf`
+
+Everything that is otherwise a flag can be a preference. The first run writes a fully
+commented template with every key present but commented out, so a file you have not
+touched means "all defaults", and says so on stderr once:
+
+```
+readaloud: created /Users/you/.readaloud.conf -- your defaults live there now
+```
+
+### Precedence
+
+```
+explicit command-line flag   >   ~/.readaloud.conf   >   built-in default
+```
+
+Key by key, not file by file: `readaloud --speed 2.0` with `speed = 1.4` and
+`voice = bm_george` in the file runs at 2.0x in `bm_george`. A flag counts as
+"explicit" even when it happens to match the built-in default — `--speed 1.0` really
+does mean 1.0, whatever the file says.
+
+`--config PATH` reads a different file, `--no-config` ignores the file entirely (useful
+in a script, and for working out whether the file is to blame), and `--write-config`
+writes a fresh template over whatever is there and exits.
+
+### Every key
+
+```ini
+[readaloud]
+# Kokoro voice name.  --list-voices prints the ones your model repo has; the
+# first letter picks the language (a=American English, b=British, ...).
+voice = af_heart
+
+# Speech rate multiplier.  Clamped to 0.5 - 3.0.
+speed = 1.0
+
+# Kokoro language code.  Leave empty to derive it from the voice name.
+lang =
+
+# HuggingFace model repo to load the voice from.
+repo = mlx-community/Kokoro-82M-4bit
+
+# Maximum sentences per spoken chunk (minimum 1).
+sentences = 4
+
+# Maximum characters per spoken chunk, whichever limit is hit first (minimum 1).
+chars = 380
+
+# Chunks to synthesize ahead of the one being spoken.  0 disables prefetching.
+prefetch = 2
+
+# Audio output device: an index, a substring of the name, or 'default'.
+# Empty means the system default output device.  --list-devices lists them.
+device =
+
+# Render the input's colours.  false is the equivalent of --no-color.
+# Accepts true/false, yes/no, on/off, 1/0.
+color = true
+
+# Extra rows follow mode scrolls past the strict minimum (see below).
+follow_lead = 20
+
+# Rows kept between the spoken word and the top/bottom edge before follow
+# mode scrolls at all.
+follow_margin = 2
+```
+
+The file is meant to be hand-edited and is read forgivingly: a missing file is not an
+error, a value that makes no sense keeps its default, one that is out of range is
+clamped, and either way the rest of the file still applies. Anything odd is reported —
+on stderr for `--save`, `--write-config` and the `--list-*` flags, and in the status bar
+for the reader, because a `print()` would land on top of the curses screen:
+
+```
+PLAY     af_heart  1.00x  chunk 1/12  follow on  |  config: speed: 'maybe' is not a number; using 1.0
+```
+
+### `follow_lead` — how far ahead follow mode scrolls
+
+Follow mode used to do the smallest scroll that kept the spoken word on screen, which
+pins the reading position to the bottom row: you can see everything you have already
+heard and nothing you are about to. `follow_lead` scrolls that many rows *further* at
+the moment a scroll is needed, so the view advances in stable jumps and the next chunk
+lands around the middle of the screen.
+
+On a 30-row terminal with the default `follow_lead = 20`, the spoken word lands on about
+row 7 and roughly 23 rows of unread text stay visible below it; it then drifts down to
+the bottom margin and the view jumps again. `follow_lead = 0` restores the old
+creep-one-row-at-a-time behaviour. The lead never scrolls so far that the spoken word
+itself would leave the screen, and it applies only when scrolling *down*: moving back up
+to a word behind the viewport is unchanged.
+
+`c` is unaffected: it is a deliberate "put the spoken word in the middle **now**", and
+stays a true centre.
 
 ## Keys
 
@@ -131,13 +238,15 @@ The viewport moves independently of playback. Most movement keys take a numeric 
 | `]` | speed up (+0.1x) |
 | `[` | slow down (−0.1x) |
 | `F` | toggle follow-the-word auto-scroll |
-| `c` | centre the view on the spoken word and turn follow back on |
+| `c` | jump to the spoken word's line, placed as follow mode would (see `follow_lead`), and turn follow back on |
 | click a word | jump playback to that word |
 | `^L` &middot; `^R` | force a full redraw |
 | `q` | quit |
 
 Any manual scroll — key or wheel — switches follow mode **off**, so you can read ahead
-while it talks. `F` and `c` switch it back on.
+while it talks. `F` and `c` switch it back on. With follow mode on, the view jumps
+`follow_lead` rows ahead each time the spoken word reaches the bottom margin (see
+[Configuration](#configuration--readaloudconf)).
 
 Changing the speed re-synthesizes from the word you are on, so the cache is dropped and
 there is a short pause before the audio resumes.
@@ -183,6 +292,7 @@ language packs, which this project does not install by default.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
+| `config.py` | `~/.readaloud.conf`: parsing, clamping, and the commented template |
 
 ## Development
 

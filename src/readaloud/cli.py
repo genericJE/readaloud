@@ -2,7 +2,8 @@
 
 Responsibilities, in order:
 
-1. parse arguments;
+1. parse arguments, then fill every flag the user did *not* pass from
+   ``~/.readaloud.conf`` (see `readaloud.config`);
 2. answer the "just tell me something" flags (``--list-voices``,
    ``--list-devices``) and exit;
 3. obtain the input text -- ``-f FILE``, positional ``TEXT``, or piped stdin --
@@ -10,6 +11,14 @@ Responsibilities, in order:
 4. build the `Document`;
 5. either render the whole document to a WAV file (``--save``) or hand over to
    `readaloud.app.run`, which owns the curses session.
+
+Precedence is strictly::
+
+    explicit CLI flag  >  ~/.readaloud.conf  >  built-in default
+
+which is why every flag with a config counterpart parses with ``default=None``:
+an argparse default would make "did the user actually pass this?" unanswerable.
+`_apply_config` is the only place the holes get filled.
 
 Every failure the user can plausibly cause turns into a one-line message on
 stderr and a non-zero exit status, never a traceback.
@@ -21,6 +30,7 @@ import argparse
 import os
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__
@@ -43,6 +53,10 @@ _LANG_OF_VOICE = {
     "p": "p",  # Brazilian Portuguese
     "z": "z",  # Mandarin
 }
+
+
+#: shown in --help; the real path is resolved at call time, not import time
+_CONFIG_HINT = "~/.readaloud.conf"
 
 
 def _err(msg: str) -> None:
@@ -71,15 +85,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="text to read (joined with spaces)")
     p.add_argument("-f", "--file", metavar="FILE",
                    help="read from FILE instead of stdin/TEXT ('-' means stdin)")
-    p.add_argument("-v", "--voice", default=DEFAULT_VOICE, metavar="NAME",
+    # Everything with a `~/.readaloud.conf` counterpart defaults to None and is
+    # filled in by `_apply_config`; the help text shows the built-in default.
+    p.add_argument("-v", "--voice", default=None, metavar="NAME",
                    help=f"Kokoro voice (default: {DEFAULT_VOICE})")
-    p.add_argument("-s", "--speed", type=float, default=1.0, metavar="X",
+    p.add_argument("-s", "--speed", type=float, default=None, metavar="X",
                    help="speech rate multiplier (default: 1.0)")
-    p.add_argument("--sentences", type=int, default=4, metavar="N",
+    p.add_argument("--sentences", type=int, default=None, metavar="N",
                    help="max sentences per chunk (default: 4)")
-    p.add_argument("--chars", type=int, default=380, metavar="N",
+    p.add_argument("--chars", type=int, default=None, metavar="N",
                    help="max characters per chunk (default: 380)")
-    p.add_argument("--prefetch", type=int, default=2, metavar="N",
+    p.add_argument("--prefetch", type=int, default=None, metavar="N",
                    help="chunks to synthesize ahead of the current one (default: 2)")
     p.add_argument("--device", default=None, metavar="DEV",
                    help="audio output device: index, name substring, or 'default'")
@@ -89,16 +105,90 @@ def build_parser() -> argparse.ArgumentParser:
                    help="render the whole document to a WAV file and exit (no TUI)")
     p.add_argument("--lang", default=None, metavar="CODE",
                    help="Kokoro language code (default: derived from the voice name)")
-    p.add_argument("--repo", default=DEFAULT_REPO_ID, metavar="ID",
+    p.add_argument("--repo", default=None, metavar="ID",
                    help=f"HuggingFace model repo (default: {DEFAULT_REPO_ID})")
-    p.add_argument("--no-color", action="store_true",
+    # One destination, two spellings: `--color` exists so a flag can override
+    # `color = false` in the config file, which `--no-color` alone cannot do.
+    p.add_argument("--color", dest="color", action="store_true", default=None,
+                   help="render the input's colours (overrides color=false in the "
+                        "config file)")
+    p.add_argument("--no-color", dest="color", action="store_false",
                    help="ignore colours in the input and render monochrome")
+    p.add_argument("--config", default=None, metavar="PATH",
+                   help=f"read defaults from PATH instead of {_CONFIG_HINT}")
+    p.add_argument("--no-config", action="store_true",
+                   help="ignore the config file entirely (built-in defaults only)")
+    p.add_argument("--write-config", action="store_true",
+                   help="write a commented config template (overwriting it) and exit")
     p.add_argument("--list-voices", action="store_true",
                    help="print the available voices and exit")
     p.add_argument("--list-devices", action="store_true",
                    help="print the available audio output devices and exit")
     p.add_argument("--version", action="version", version=f"readaloud {__version__}")
     return p
+
+
+# --------------------------------------------------------------------------- #
+# ~/.readaloud.conf
+# --------------------------------------------------------------------------- #
+
+
+def config_path(args: argparse.Namespace) -> Path:
+    """Which file `args` points the preferences at."""
+    from . import config as config_mod
+
+    if getattr(args, "config", None):
+        return Path(args.config).expanduser()
+    return config_mod.DEFAULT_PATH
+
+
+def load_config(args: argparse.Namespace):
+    """Return ``(Config, warnings)`` for `args`, honouring ``--no-config``."""
+    from . import config as config_mod
+
+    if getattr(args, "no_config", False):
+        return config_mod.Config(), []
+    return config_mod.load(config_path(args))
+
+
+def short_notices(warnings: Sequence[str], target: Path) -> list[str]:
+    """Config warnings, re-pointed for the one-line status bar.
+
+    `config` prefixes every warning with the file's path so a stderr line says
+    *which* file is wrong.  In the status bar that path is most of an 80-column
+    terminal and pushes the actual complaint off the end, so swap it for the
+    word "config": the reader only has one config file open.
+    """
+    prefix = f"{target}: "
+    return [f"config: {w[len(prefix):]}" if w.startswith(prefix) else w
+            for w in warnings]
+
+
+def _apply_config(args: argparse.Namespace, cfg) -> None:
+    """Fill the flags the user did not pass.  Explicit flags are never touched.
+
+    `lang` and `device` use "" as their "unset" value in the config but None on
+    the namespace, so an empty string there has to stay None: `lang_for` and
+    `Player` both read None as "work it out yourself".
+    """
+    if args.voice is None:
+        args.voice = cfg.voice
+    if args.speed is None:
+        args.speed = cfg.speed
+    if args.sentences is None:
+        args.sentences = cfg.sentences
+    if args.chars is None:
+        args.chars = cfg.chars
+    if args.prefetch is None:
+        args.prefetch = cfg.prefetch
+    if args.repo is None:
+        args.repo = cfg.repo
+    if args.lang is None:
+        args.lang = cfg.lang or None
+    if args.device is None:
+        args.device = cfg.device or None
+    if args.color is None:
+        args.color = bool(cfg.color)
 
 
 def lang_for(voice: str, override: str | None) -> str:
@@ -284,8 +374,41 @@ def save_wav(doc, path: str, *, voice: str, speed: float, lang: str,
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
+    from . import config as config_mod
+
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    # ---- ~/.readaloud.conf ----------------------------------------------
+    target = config_path(args)
+    cfg, warnings = load_config(args)
+    _apply_config(args, cfg)
+
+    # Anything that is not the TUI can print to stderr; the reader gets its
+    # warnings through the status bar instead (see `notices=` below), because a
+    # print() lands on top of the curses screen.
+    headless = bool(args.save or args.write_config or args.list_voices
+                    or args.list_devices)
+    if headless:
+        for warning in warnings:
+            _err(warning)
+
+    if args.write_config:
+        try:
+            written = config_mod.write_template(target)
+        except OSError as exc:
+            _err(f"could not write {target}: {exc.strerror or exc}")
+            return EXIT_ERROR
+        print(f"wrote {written}")
+        return EXIT_OK
+
+    # First run: leave a fully commented template behind.  `ensure` never
+    # raises and never overwrites, so an unwritable HOME just means no file.
+    if not args.no_config and config_mod.ensure(target):
+        if not args.save:
+            # --save's stdout is the machine-readable half; keep it clean and
+            # say nothing there.  Before curses starts, stderr is still safe.
+            _err(f"created {target} -- your defaults live there now")
 
     if args.list_devices:
         from .player import format_devices
@@ -332,11 +455,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
             _err("try 'readaloud --help', or 'mdcat --ansi notes.md | readaloud'")
         return EXIT_USAGE
 
+    no_color = not args.color
     doc = build_document(
         data,
         max_sentences=args.sentences,
         max_chars=args.chars,
-        no_color=args.no_color,
+        no_color=no_color,
     )
     if not doc.speakable_chunks:
         _err("the input contains nothing speakable (only rules, symbols or blanks)")
@@ -379,7 +503,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
         prefetch=args.prefetch,
         device=args.device,
         start_chunk=start,
-        no_color=args.no_color,
+        no_color=no_color,
+        follow_lead=cfg.follow_lead,
+        follow_margin=cfg.follow_margin,
+        notices=short_notices(warnings, target),
     )
 
 

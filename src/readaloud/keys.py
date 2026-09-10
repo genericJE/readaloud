@@ -362,7 +362,7 @@ _HELP: tuple[tuple[str, str], ...] = (
     (", / Left", "previous chunk"),
     ("[  ]", "speed down / up"),
     ("F", "toggle follow-the-word"),
-    ("c", "centre on the current word"),
+    ("c", "jump to the spoken line, follow mode placement"),
     ("wheel", "scroll"),
     ("click", "jump playback to that word"),
     ("q", "quit"),

@@ -796,8 +796,25 @@ class Screen:
 
     # -- scrolling helpers ------------------------------------------------
 
-    def top_for_word(self, widx: int, top_row: int, margin: int = 2) -> int:
-        """Smallest scroll that brings `widx` into view with `margin` rows spare."""
+    def top_for_word(
+        self, widx: int, top_row: int, margin: int = 2, lead: int = 0
+    ) -> int:
+        """Scroll `widx` into view, keeping `margin` rows spare at both edges.
+
+        With ``lead == 0`` this is the *smallest* scroll that brings the word
+        back on screen, which pins the reading position to the bottom margin and
+        hides everything that is about to be spoken.
+
+        A positive `lead` applies only when the view has to scroll **down** (the
+        word has reached the bottom margin): the new top goes `lead` rows past
+        that minimum, so the upcoming text lands around the middle of the
+        viewport and the view advances in stable jumps rather than creeping one
+        row at a time.  The `min` caps the lead so the spoken word can never be
+        pushed off the top: the new top always stays ``<= row - m``.
+
+        Scrolling *up*, and the case where the word is already comfortably
+        visible, ignore `lead` entirely.
+        """
         row = self.row_of_word(widx)
         if row is None:
             return self.clamp_top(top_row)
@@ -808,8 +825,38 @@ class Screen:
         if row < top_row + m:
             return self.clamp_top(row - m)
         if row > top_row + h - 1 - m:
-            return self.clamp_top(row - h + 1 + m)
+            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
         return self.clamp_top(top_row)
+
+    def follow_top_for_word(self, widx: int, margin: int = 2, lead: int = 0) -> int:
+        """Where follow mode would park the view for `widx`, unconditionally.
+
+        `top_for_word` is a *reaction*: if the word is already on screen it
+        leaves the view alone.  That is right for the auto-scroll tick and wrong
+        for the `c` key, which is a deliberate "put me back where the reading
+        is" and must reposition even when the word happens to be visible.
+
+        So this always takes the scroll-down branch, giving the same placement
+        the next auto-scroll would produce -- the word `lead` rows below the top
+        with the upcoming text underneath -- and pressing `c` never causes a
+        second jump a moment later.
+        """
+        row = self.row_of_word(widx)
+        if row is None:
+            return self.clamp_top(self._top_row)
+        h = self.body_height
+        if h <= 0:
+            return self.clamp_top(self._top_row)
+        m = min(margin, max(0, (h - 1) // 2))
+        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+
+    def follow_top_for_row(self, row: int, margin: int = 2, lead: int = 0) -> int:
+        """`follow_top_for_word` for a bare display row (no word is highlighted yet)."""
+        h = self.body_height
+        if h <= 0:
+            return self.clamp_top(self._top_row)
+        m = min(margin, max(0, (h - 1) // 2))
+        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
     def center_on_word(self, widx: int) -> int:
         """Top row that puts `widx` in the middle of the viewport."""

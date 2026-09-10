@@ -26,12 +26,13 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Sequence
 
 from .keys import Action, Command, Keymap, SCROLL_ACTIONS
 from .ui import Screen, Status, Theme, screen_session
 
-__all__ = ["Prefetcher", "App", "run", "POLL_MS", "MIN_SPEED", "MAX_SPEED"]
+__all__ = ["Prefetcher", "App", "run", "POLL_MS", "MIN_SPEED", "MAX_SPEED",
+           "FOLLOW_MARGIN", "FOLLOW_LEAD"]
 
 #: how long the curses loop waits for a key before doing housekeeping
 POLL_MS = 30
@@ -44,8 +45,16 @@ SPEED_STEP = 0.1
 #: how long a transient status message stays up
 MESSAGE_TTL = 4.0
 
+#: config-file warnings sit around longer: the user has to read a path
+NOTICE_TTL = 12.0
+
 #: rows of context follow-mode keeps above/below the spoken word
 FOLLOW_MARGIN = 2
+
+#: extra rows follow mode scrolls past the strict minimum, so the text about to
+#: be spoken lands around the middle of the viewport instead of on the last row.
+#: `~/.readaloud.conf`'s ``follow_lead`` overrides it; keep the two in step.
+FOLLOW_LEAD = 20
 
 #: don't let a pathological pattern build a million highlight spans
 MAX_MATCHES = 5000
@@ -271,7 +280,8 @@ class App:
 
     def __init__(self, doc: Any, screen: Screen, player: Any, engine: Any, *,
                  ahead: int = 2, start_chunk: int = 0, voice: str = "",
-                 autoplay: bool = True) -> None:
+                 autoplay: bool = True, follow_lead: int = FOLLOW_LEAD,
+                 follow_margin: int = FOLLOW_MARGIN) -> None:
         self.doc = doc
         self.screen = screen
         self.player = player
@@ -282,6 +292,11 @@ class App:
 
         self.top = 0
         self.follow = True
+        #: how far follow mode scrolls past the minimum, and how much context it
+        #: keeps at the edges.  `c` deliberately ignores the lead: it is a
+        #: "put the word in the middle right now", not a scroll-ahead.
+        self.follow_lead = max(0, int(follow_lead))
+        self.follow_margin = max(0, int(follow_margin))
         self.want_play = bool(autoplay)
         self.quit = False
 
@@ -622,14 +637,23 @@ class App:
             return
 
         if a is Action.CENTER:
+            # `c` is "put me back where the reading is".  It parks the view
+            # exactly where follow mode would -- the spoken line `follow_lead`
+            # rows down with the upcoming text below it -- so the view does not
+            # jump a second time on the very next auto-scroll.  `F` still
+            # centres, which is what makes the two keys usefully different.
             self.follow = True
             if self.cur_word is not None:
-                self.top = self.screen.center_on_word(self.cur_word)
+                self.top = self.screen.follow_top_for_word(
+                    self.cur_word, self.follow_margin, self.follow_lead
+                )
             elif self._current_chunk() is not None:
                 row = self.screen.first_row_of_line(
                     self.doc.chunks[self._current_chunk()].line_start
                 )
-                self.top = self.screen.center_on_row(row)
+                self.top = self.screen.follow_top_for_row(
+                    row, self.follow_margin, self.follow_lead
+                )
             return
 
         if a is Action.CLICK_WORD:
@@ -790,7 +814,7 @@ class App:
             self._advance()
         if self.follow and self.cur_word is not None:
             self.top = self.screen.top_for_word(
-                self.cur_word, self.top, FOLLOW_MARGIN
+                self.cur_word, self.top, self.follow_margin, self.follow_lead
             )
 
     def step(self, timeout_ms: int = POLL_MS) -> None:
@@ -888,7 +912,9 @@ def _close_engine_async(engine: Any) -> None:
 def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
         lang: str = "a", repo: str | None = None, prefetch: int = 2,
         device: Any = None, start_chunk: int = 0,
-        no_color: bool = False) -> int:
+        no_color: bool = False, follow_lead: int = FOLLOW_LEAD,
+        follow_margin: int = FOLLOW_MARGIN,
+        notices: Sequence[str] = ()) -> int:
     """Open the audio device, enter curses, and run until the user quits."""
     from .player import Player, PlayerError
     from .speech import DEFAULT_REPO_ID, Engine
@@ -916,8 +942,15 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
         try:
             with screen_session(theme) as screen:
                 app = App(doc, screen, player, engine, ahead=prefetch,
-                          start_chunk=start_chunk, voice=voice)
+                          start_chunk=start_chunk, voice=voice,
+                          follow_lead=follow_lead, follow_margin=follow_margin)
                 app.start()
+                if notices:
+                    # config-file complaints: the status bar, never a print()
+                    # -- stdout belongs to curses from here on.
+                    first, extra = notices[0], len(notices) - 1
+                    app.notify(first + (f"  (+{extra} more)" if extra else ""),
+                               ttl=NOTICE_TTL)
                 try:
                     app.run()
                 except KeyboardInterrupt:

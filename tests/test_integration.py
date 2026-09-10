@@ -25,10 +25,12 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import wave
@@ -38,8 +40,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
 
-from readaloud import cli  # noqa: E402
-from readaloud.app import App, MAX_SPEED, MIN_SPEED, Prefetcher  # noqa: E402
+from readaloud import cli, config  # noqa: E402
+from readaloud.app import (  # noqa: E402
+    App, FOLLOW_LEAD, FOLLOW_MARGIN, MAX_SPEED, MIN_SPEED, Prefetcher,
+)
 from readaloud.document import Document  # noqa: E402
 from readaloud.keys import Action, MouseEvent  # noqa: E402
 from readaloud.speech import Spoken, Timed  # noqa: E402
@@ -194,6 +198,8 @@ class FakeScreen:
         self.invalidations = 0
         self.resizes = 0
         self.last_draw = None
+        #: every (widx, top, margin, lead) follow mode asked for
+        self.follow_calls: list[tuple] = []
         self.layout(doc, width)
 
     # geometry
@@ -256,15 +262,29 @@ class FakeScreen:
         w = self._doc.words[widx]
         return (self.first_row_of_line(w.line), w.start)
 
-    def top_for_word(self, widx, top_row, margin=2):
+    def top_for_word(self, widx, top_row, margin=2, lead=0):
+        # mirrors `ui.Screen.top_for_word`, lead and all
+        self.follow_calls.append((widx, top_row, margin, lead))
         row = self.row_of_word(widx)
         h = self.body_height
         m = min(margin, max(0, (h - 1) // 2))
         if row < top_row + m:
             return self.clamp_top(row - m)
         if row > top_row + h - 1 - m:
-            return self.clamp_top(row - h + 1 + m)
+            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
         return self.clamp_top(top_row)
+
+    def follow_top_for_word(self, widx, margin=2, lead=0):
+        # mirrors `ui.Screen.follow_top_for_word`: always the scroll-down branch
+        row = self.row_of_word(widx)
+        h = self.body_height
+        m = min(margin, max(0, (h - 1) // 2))
+        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+
+    def follow_top_for_row(self, row, margin=2, lead=0):
+        h = self.body_height
+        m = min(margin, max(0, (h - 1) // 2))
+        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
     def center_on_word(self, widx):
         return self.clamp_top(self.row_of_word(widx) - self.body_height // 2)
@@ -299,13 +319,13 @@ class FakeScreen:
 
 
 def make_app(doc=None, *, ahead=2, fail_on=(), raise_on=(), load_error=None,
-             start_chunk=0):
+             start_chunk=0, height=24, **kw):
     doc = doc or make_doc()
     engine = FakeEngine(fail_on=fail_on, raise_on=raise_on, load_error=load_error)
     player = FakePlayer()
-    screen = FakeScreen(doc)
+    screen = FakeScreen(doc, height=height)
     app = App(doc, screen, player, engine, ahead=ahead,
-              start_chunk=start_chunk, voice="af_heart")
+              start_chunk=start_chunk, voice="af_heart", **kw)
     return app, doc, engine, player, screen
 
 
@@ -327,15 +347,34 @@ def settle(app, tries=60, want=None):
 
 
 def test_parser_defaults():
+    """Every config-backed flag parses to None -- the sentinel that says "the
+    user did not pass this", without which the config file could never lose."""
     args = cli.build_parser().parse_args([])
-    assert args.voice == "af_heart"
-    assert args.speed == 1.0
-    assert args.sentences == 4
-    assert args.chars == 380
-    assert args.prefetch == 2
+    assert args.voice is None
+    assert args.speed is None
+    assert args.sentences is None
+    assert args.chars is None
+    assert args.prefetch is None
+    assert args.repo is None
+    assert args.lang is None
+    assert args.device is None
+    assert args.color is None
+    assert args.config is None
+    assert args.no_config is False
+    assert args.write_config is False
+    # `--start` has no config counterpart, so it keeps a real default
     assert args.start == 1
     assert args.save is None
-    assert args.device is None
+
+
+def test_parser_defaults_become_the_built_in_defaults():
+    args = cli.build_parser().parse_args([])
+    cli._apply_config(args, config.Config())
+    assert (args.voice, args.speed, args.sentences) == ("af_heart", 1.0, 4)
+    assert (args.chars, args.prefetch) == (380, 2)
+    assert args.repo == "mlx-community/Kokoro-82M-4bit"
+    assert args.lang is None and args.device is None   # "" means "work it out"
+    assert args.color is True
 
 
 def test_parser_flags():
@@ -349,7 +388,16 @@ def test_parser_flags():
     assert args.prefetch == 0
     assert args.device == "2"
     assert args.start == 7
-    assert args.no_color and args.save == "out.wav"
+    assert args.color is False and args.save == "out.wav"
+
+
+def test_parser_color_flags_are_two_spellings_of_one_setting():
+    parse = cli.build_parser().parse_args
+    assert parse([]).color is None
+    assert parse(["--color"]).color is True
+    assert parse(["--no-color"]).color is False
+    # last one wins, like every other argparse flag
+    assert parse(["--no-color", "--color"]).color is True
 
 
 def test_lang_derived_from_voice():
@@ -519,6 +567,245 @@ def test_save_reports_a_load_failure(tmp_path, monkeypatch, capsys):
     assert cli.main(["--save", str(out)]) == cli.EXIT_ERROR
     assert "could not load the voice model" in capsys.readouterr().err
     assert not out.exists()
+
+
+
+# --------------------------------------------------------------------------- #
+# 1b. ~/.readaloud.conf  ->  flags  ->  App
+# --------------------------------------------------------------------------- #
+
+
+def write_conf(tmp_path, body: str) -> str:
+    """A config file with a real [readaloud] header, returned as a path str."""
+    path = tmp_path / "readaloud.conf"
+    path.write_text("[readaloud]\n" + body, encoding="utf-8")
+    return str(path)
+
+
+@pytest.fixture()
+def known_voices(monkeypatch):
+    """`--voice` validation, offline and deterministic."""
+    voices = ["af_heart", "af_sarah", "am_adam", "bf_emma", "bm_george"]
+    monkeypatch.setattr("readaloud.speech.list_voices",
+                        lambda repo_id="r", lang_code=None, allow_download=False:
+                        sorted(v for v in voices
+                               if not lang_code or v[:1] == str(lang_code)[:1]))
+
+
+@pytest.fixture()
+def launched(monkeypatch, known_voices):
+    """Intercept the TUI: `cli.main` returns the kwargs it would have run with."""
+    from readaloud import app as app_mod
+
+    seen: dict = {}
+
+    def fake_run(doc, **kw):
+        seen.clear()
+        seen.update(kw)
+        seen["doc"] = doc
+        return 0
+
+    monkeypatch.setattr(app_mod, "run", fake_run)
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: SAMPLE)
+    monkeypatch.setattr("readaloud.ui.reopen_tty", lambda: None)
+    monkeypatch.setattr(os, "isatty", lambda fd: True)
+    return seen
+
+
+def test_config_file_supplies_the_defaults(tmp_path, launched):
+    conf = write_conf(tmp_path, "speed = 1.4\nvoice = bm_george\nprefetch = 5\n")
+    assert cli.main(["--config", conf]) == 0
+    assert launched["speed"] == 1.4
+    assert launched["voice"] == "bm_george"
+    assert launched["prefetch"] == 5
+    assert launched["lang"] == "b"          # derived from the config's voice
+
+
+def test_an_explicit_flag_beats_the_config_file(tmp_path, launched):
+    conf = write_conf(tmp_path, "speed = 1.4\nvoice = bm_george\n")
+    assert cli.main(["--config", conf, "--speed", "2.0"]) == 0
+    assert launched["speed"] == 2.0         # the flag
+    assert launched["voice"] == "bm_george"  # still the file, key by key
+
+
+def test_a_flag_equal_to_the_built_in_default_still_beats_the_config(
+        tmp_path, launched):
+    """The `default=None` sentinel earns its keep here: `--speed 1.0` is
+    indistinguishable from "not passed" if argparse fills in 1.0 itself."""
+    conf = write_conf(tmp_path, "speed = 1.4\n")
+    assert cli.main(["--config", conf, "--speed", "1.0"]) == 0
+    assert launched["speed"] == 1.0
+
+
+def test_no_config_ignores_the_file(tmp_path, launched):
+    conf = write_conf(tmp_path, "speed = 1.4\nvoice = bm_george\n")
+    assert cli.main(["--config", conf, "--no-config"]) == 0
+    assert launched["speed"] == 1.0
+    assert launched["voice"] == "af_heart"
+
+
+def test_a_missing_config_file_is_not_an_error(tmp_path, launched, capsys):
+    conf = str(tmp_path / "nowhere" / "no.conf")
+    assert cli.main(["--config", conf]) == 0
+    assert launched["speed"] == 1.0
+    assert "could not" not in capsys.readouterr().err
+
+
+def test_no_color_overrides_color_true_and_color_overrides_color_false(
+        tmp_path, launched):
+    conf_on = tmp_path / "on.conf"
+    conf_on.write_text("[readaloud]\ncolor = true\n", encoding="utf-8")
+    conf_off = tmp_path / "off.conf"
+    conf_off.write_text("[readaloud]\ncolor = false\n", encoding="utf-8")
+
+    assert cli.main(["--config", str(conf_on)]) == 0
+    assert launched["no_color"] is False
+    assert cli.main(["--config", str(conf_on), "--no-color"]) == 0
+    assert launched["no_color"] is True
+    assert cli.main(["--config", str(conf_off)]) == 0
+    assert launched["no_color"] is True
+    assert cli.main(["--config", str(conf_off), "--color"]) == 0
+    assert launched["no_color"] is False
+
+
+def test_config_follow_lead_reaches_the_app(tmp_path, launched):
+    conf = write_conf(tmp_path, "follow_lead = 7\nfollow_margin = 3\n")
+    assert cli.main(["--config", conf]) == 0
+    assert launched["follow_lead"] == 7
+    assert launched["follow_margin"] == 3
+
+
+def test_follow_lead_defaults_to_twenty(tmp_path, launched):
+    assert cli.main(["--config", write_conf(tmp_path, "")]) == 0
+    assert launched["follow_lead"] == 20
+    assert launched["follow_lead"] == FOLLOW_LEAD
+    assert launched["follow_margin"] == FOLLOW_MARGIN
+
+
+def test_config_warnings_reach_the_tui_as_notices_not_stdout(
+        tmp_path, launched, capsys):
+    """A print() here would land on top of the curses screen."""
+    conf = write_conf(tmp_path, "speed = 9.0\nvolume = 11\n")
+    assert cli.main(["--config", conf]) == 0
+    out, err = capsys.readouterr()
+    assert out == "" and err == ""
+    notices = list(launched["notices"])
+    assert any("speed" in n and "clamped" in n for n in notices)
+    assert any("volume" in n for n in notices)
+    # the path is stripped: it would fill an 80-column status bar on its own
+    assert all(n.startswith("config: ") and str(conf) not in n for n in notices)
+    assert launched["speed"] == 3.0                     # clamped, not refused
+
+
+def test_config_warnings_go_to_stderr_for_save(tmp_path, monkeypatch, capsys,
+                                               known_voices):
+    from readaloud import speech as speech_mod
+
+    monkeypatch.setattr(speech_mod, "Engine", FakeEngine)
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: SAMPLE)
+    conf = write_conf(tmp_path, "speed = 9.0\n")
+    out = tmp_path / "out.wav"
+    assert cli.main(["--config", conf, "--save", str(out)]) == cli.EXIT_OK
+    err = capsys.readouterr().err
+    assert "speed" in err and "clamped" in err
+
+
+def test_an_unreadable_config_does_not_stop_the_run(tmp_path, launched):
+    conf = tmp_path / "adirectory.conf"
+    conf.mkdir()
+    assert cli.main(["--config", str(conf)]) == 0
+    assert launched["speed"] == 1.0
+    assert any("could not be read" in n for n in launched["notices"])
+
+
+def test_first_run_creates_the_config_and_says_so(tmp_path, launched, capsys):
+    conf = tmp_path / "fresh.conf"
+    assert cli.main(["--config", str(conf)]) == 0
+    assert conf.exists()
+    err = capsys.readouterr().err
+    assert str(conf) in err and "created" in err
+
+    # second run: the file is there, so nothing is said and nothing is clobbered
+    conf.write_text("[readaloud]\nspeed = 1.3\n", encoding="utf-8")
+    assert cli.main(["--config", str(conf)]) == 0
+    assert capsys.readouterr().err == ""
+    assert launched["speed"] == 1.3
+
+
+def test_first_run_says_nothing_when_saving(tmp_path, monkeypatch, capsys,
+                                            known_voices):
+    """`--save` prints a machine-readable line; keep the chatter out of it."""
+    from readaloud import speech as speech_mod
+
+    monkeypatch.setattr(speech_mod, "Engine", FakeEngine)
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: SAMPLE)
+    conf = tmp_path / "fresh.conf"
+    assert cli.main(["--config", str(conf), "--save",
+                     str(tmp_path / "o.wav")]) == cli.EXIT_OK
+    assert conf.exists()                    # still created
+    assert "created" not in capsys.readouterr().err
+
+
+def test_no_config_does_not_create_a_file(tmp_path, launched, capsys):
+    conf = tmp_path / "never.conf"
+    assert cli.main(["--config", str(conf), "--no-config"]) == 0
+    assert not conf.exists()
+
+
+def test_the_default_path_is_used_when_no_config_flag_is_given(
+        tmp_path, launched, monkeypatch):
+    """`--config` is a detour; the plain run must read ~/.readaloud.conf."""
+    conf = tmp_path / "home.conf"
+    conf.write_text("[readaloud]\nvoice = bf_emma\n", encoding="utf-8")
+    monkeypatch.setattr(config, "DEFAULT_PATH", conf)
+    assert cli.main([]) == 0
+    assert launched["voice"] == "bf_emma"
+
+
+def test_write_config_writes_a_template_that_parses_back_to_defaults(
+        tmp_path, capsys):
+    conf = tmp_path / "out.conf"
+    assert cli.main(["--config", str(conf), "--write-config"]) == cli.EXIT_OK
+    assert str(conf) in capsys.readouterr().out
+    cfg, warnings = config.load(conf)
+    assert warnings == []
+    assert cfg == config.Config()
+    # and every key is present, commented out, with its default spelled out
+    text = conf.read_text(encoding="utf-8")
+    for field in ("voice", "speed", "follow_lead", "follow_margin", "color"):
+        assert f"#{field} = " in text or f"#{field} =" in text
+
+
+def test_write_config_overwrites_and_exits_without_reading_input(tmp_path,
+                                                                 capsys):
+    conf = tmp_path / "out.conf"
+    conf.write_text("nonsense that is not a config at all\n", encoding="utf-8")
+    assert cli.main(["--config", str(conf), "--write-config"]) == cli.EXIT_OK
+    assert conf.read_text(encoding="utf-8").startswith("# ~/.readaloud.conf")
+
+
+def test_write_config_to_an_impossible_path_is_a_message(tmp_path, capsys):
+    conf = tmp_path / "no-such-dir" / "out.conf"
+    assert cli.main(["--config", str(conf), "--write-config"]) == cli.EXIT_ERROR
+    assert "could not write" in capsys.readouterr().err
+
+
+def test_config_speed_still_goes_through_the_flag_validation(tmp_path,
+                                                             launched):
+    """An absurd speed in the file is clamped by `config`, so the run starts;
+    the same value on the command line is still a usage error."""
+    conf = write_conf(tmp_path, "speed = 99\n")
+    assert cli.main(["--config", conf]) == 0
+    assert launched["speed"] == 3.0
+    assert cli.main(["--config", conf, "--speed", "0"]) == cli.EXIT_USAGE
+
+
+def test_config_voice_is_validated_like_the_flag(tmp_path, capsys, known_voices,
+                                                 monkeypatch):
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: SAMPLE)
+    conf = write_conf(tmp_path, "voice = af_sarahh\n")
+    assert cli.main(["--config", conf]) == cli.EXIT_USAGE
+    assert "unknown voice" in capsys.readouterr().err
 
 
 # --------------------------------------------------------------------------- #
@@ -763,6 +1050,180 @@ def test_scrolling_turns_follow_off_and_f_turns_it_back_on():
         assert app.follow is False
         app.handle(Command(Action.CENTER))
         assert app.follow is True
+    finally:
+        app.close()
+
+
+# ---- follow-mode scroll lead ---------------------------------------------
+
+
+def play_and_watch(app, player, until_top=120, ticks=4000, step=0.2):
+    """Run playback until the viewport has scrolled to `until_top`.
+
+    Returns the ``row_of_word(cur_word) - top`` offset seen at every tick: 0 is
+    the top body row, ``body_height - 1`` the last one.  Sampling stops at
+    `until_top` so the end-of-document clamp -- where `clamp_top` refuses to
+    scroll further and the word does drift past the bottom margin -- cannot
+    contaminate the measurement.
+    """
+    offsets = []
+    for _ in range(ticks):
+        app.tick()
+        if app.top >= min(until_top, app.screen.max_top):
+            break
+        # Only once the view has actually scrolled: before the first scroll the
+        # word sits wherever the document starts, which says nothing about the
+        # follow policy.
+        if app.cur_word is not None and app.top > 0:
+            offsets.append(app.screen.row_of_word(app.cur_word) - app.top)
+        player.advance(step)
+        time.sleep(0.001)
+    return offsets
+
+
+def test_follow_without_a_lead_pins_the_word_to_the_bottom_margin():
+    """The behaviour the lead exists to fix: a smallest-possible scroll leaves
+    the reading position on the last usable row, hiding what comes next."""
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=0)
+    app.start()
+    try:
+        assert settle(app)
+        offsets = play_and_watch(app, player)
+        assert app.top >= 120, "playback never got far enough to scroll"
+        bottom = screen.body_height - 1 - FOLLOW_MARGIN     # 26 on a 30-row term
+        assert max(offsets) == bottom
+        # once it has scrolled at all, the word never leaves that row again
+        tail = offsets[len(offsets) // 2:]
+        assert set(tail) == {bottom}, sorted(set(tail))
+    finally:
+        app.close()
+
+
+def test_follow_lead_puts_the_word_near_the_top_and_shows_what_is_coming():
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        offsets = play_and_watch(app, player)
+        assert app.top >= 120, "playback never got far enough to scroll"
+        h = screen.body_height                              # 29
+        landing = h - 1 - FOLLOW_MARGIN - 20                 # 6
+        assert min(offsets) == landing
+        assert max(offsets) <= h - 1 - FOLLOW_MARGIN
+        # the point of the whole feature: rows of unread text below the word
+        below = h - 1 - landing
+        assert below >= 20, below
+    finally:
+        app.close()
+
+
+def test_the_lead_leaves_more_text_visible_than_no_lead():
+    """The two runs side by side, which is the claim the feature makes."""
+    seen = {}
+    for lead in (0, 20):
+        app, doc, engine, player, screen = make_app(doc=make_doc(LONG),
+                                                    height=30, follow_lead=lead)
+        app.start()
+        try:
+            assert settle(app)
+            offsets = play_and_watch(app, player)
+            seen[lead] = sum(offsets) / len(offsets)
+        finally:
+            app.close()
+    assert seen[20] < seen[0] - 5, seen
+
+
+def test_the_lead_never_pushes_the_spoken_word_off_the_top():
+    """A lead far larger than the screen must saturate, not overscroll."""
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=24,
+                                                follow_lead=500)
+    app.start()
+    try:
+        assert settle(app)
+        offsets = play_and_watch(app, player)
+        assert app.top >= 120
+        assert min(offsets) == FOLLOW_MARGIN        # parked at the top margin
+        assert all(o >= 0 for o in offsets)
+    finally:
+        app.close()
+
+
+def test_the_app_passes_its_lead_and_margin_to_the_screen():
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG),
+                                                follow_lead=7, follow_margin=3)
+    app.start()
+    try:
+        assert settle(app)
+        play_and_watch(app, player, until_top=1)
+        assert screen.follow_calls
+        assert {(m, lead) for _, _, m, lead in screen.follow_calls} == {(3, 7)}
+    finally:
+        app.close()
+
+
+def test_the_default_lead_is_the_module_constant():
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG))
+    app.start()
+    try:
+        assert (app.follow_lead, app.follow_margin) == (FOLLOW_LEAD,
+                                                        FOLLOW_MARGIN)
+        assert settle(app)
+        play_and_watch(app, player, until_top=1)
+        assert {lead for _, _, _, lead in screen.follow_calls} == {FOLLOW_LEAD}
+    finally:
+        app.close()
+
+
+def test_c_parks_the_view_where_follow_mode_would():
+    """`c` is "put me back where the reading is", so it uses the follow-mode
+    placement (lead and all) rather than centring.  The point is that the view
+    must NOT jump again on the very next tick."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        play_and_watch(app, player)
+        assert app.top >= 120
+        app.handle(Command(Action.CENTER))
+        assert app.follow is True
+        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        # the spoken word sits near the top with the upcoming text below it,
+        # NOT in the middle -- that is what distinguishes `c` from `F` now
+        offset = screen.row_of_word(app.cur_word) - app.top
+        assert offset < screen.body_height // 2, (
+            f"c centred the word (offset {offset}) instead of using the lead")
+        # and the placement is already stable: one tick changes nothing
+        before = app.top
+        app.tick()
+        assert app.top == before, "c left the view somewhere follow mode would move again"
+    finally:
+        app.close()
+
+
+def test_F_still_centres_and_differs_from_c():
+    """`F` keeps its old behaviour, so the two keys are usefully different."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        play_and_watch(app, player)
+        app.handle(Command(Action.TOGGLE_FOLLOW))   # off
+        assert app.follow is False
+        app.handle(Command(Action.TOGGLE_FOLLOW))   # on -> centres
+        assert app.follow is True
+        centred = app.top
+        assert centred == screen.center_on_word(app.cur_word)
+        app.handle(Command(Action.CENTER))
+        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        assert app.top != centred, "c and F ended up identical"
     finally:
         app.close()
 
@@ -1092,16 +1553,26 @@ def test_app_close_joins_the_worker():
 class PtyRun:
     """Run a command with a *pipe* on stdin and a pty on stdout, like a user."""
 
-    def __init__(self, argv, stdin_bytes=b"", rows=24, cols=80, env=None, cwd=None):
+    def __init__(self, argv, stdin_bytes=b"", rows=24, cols=80, env=None,
+                 cwd=None, home=None):
         self.argv = list(argv)
         self.stdin_bytes = stdin_bytes
         self.rows, self.cols = rows, cols
         self.out = bytearray()
         self.pid = self.master = None
         self._env, self._cwd = env, cwd
+        # The child reads (and, on a first run, writes) ~/.readaloud.conf.  A
+        # throwaway HOME keeps the suite out of the developer's real one and
+        # stops their own preferences from steering these assertions.  Pass
+        # `home=` to hand the child a directory with a config file in it.
+        self._home = home
+        self._temp_home = None
         self.status = None
 
     def __enter__(self):
+        if self._home is None:
+            self._temp_home = tempfile.mkdtemp(prefix="readaloud-home-")
+            self._home = self._temp_home
         r, w = os.pipe()
         pid, master = pty.fork()
         if pid == 0:  # child: pty.fork already gave us a controlling terminal
@@ -1112,6 +1583,7 @@ class PtyRun:
                     os.close(r)
                 env = dict(os.environ)
                 env["TERM"] = "xterm-256color"
+                env["HOME"] = self._home
                 env.pop("LINES", None)
                 env.pop("COLUMNS", None)
                 env.update(self._env or {})
@@ -1207,6 +1679,8 @@ class PtyRun:
             os.close(self.master)
         except OSError:
             pass
+        if self._temp_home:
+            shutil.rmtree(self._temp_home, ignore_errors=True)
 
 
 def render(data: bytes, rows=24, cols=80):
@@ -1551,6 +2025,66 @@ def test_pty_start_flag_lands_on_that_chunk(stub_child):
         assert p.wait_screen("chunk ", 30, where=-1), p.screen()[-1]
         p.send(" ", 0.4)                            # pause before it advances
         assert _chunk_no(p.screen()[-1]) == 4, p.screen()[-1]
+        p.send("q", 0.5)
+        st = p.wait(10)
+    assert st is not None and os.WEXITSTATUS(st) == 0
+
+
+def test_pty_reads_the_config_file_from_home(stub_child, tmp_path):
+    """The whole chain in one run: ~/.readaloud.conf -> flags -> status bar."""
+    (tmp_path / ".readaloud.conf").write_text(
+        "[readaloud]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
+    body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
+    with PtyRun(stub_argv(stub_child), stdin_bytes=body, cwd=REPO,
+                home=str(tmp_path)) as p:
+        assert p.wait_screen("Alpha bravo", 30), p.screen()
+        assert p.wait_screen("bm_george", 30, where=-1), p.screen()[-1]
+        assert "1.40x" in p.screen()[-1], p.screen()[-1]
+        p.send("q", 0.5)
+        st = p.wait(10)
+    assert st is not None and os.WEXITSTATUS(st) == 0
+
+
+def test_pty_a_flag_still_beats_the_config_file(stub_child, tmp_path):
+    (tmp_path / ".readaloud.conf").write_text(
+        "[readaloud]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
+    body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
+    with PtyRun(stub_argv(stub_child, "--voice", "af_heart"), stdin_bytes=body,
+                cwd=REPO, home=str(tmp_path)) as p:
+        assert p.wait_screen("af_heart", 30, where=-1), p.screen()[-1]
+        assert "1.40x" in p.screen()[-1], p.screen()[-1]   # the file still wins here
+        p.send("q", 0.5)
+        st = p.wait(10)
+    assert st is not None and os.WEXITSTATUS(st) == 0
+
+
+def test_pty_first_run_leaves_a_config_behind(stub_child, tmp_path):
+    conf = tmp_path / ".readaloud.conf"
+    with PtyRun(stub_argv(stub_child), stdin_bytes=b"Some words to read.\n",
+                cwd=REPO, home=str(tmp_path)) as p:
+        assert p.wait_screen("Some words", 30)
+        p.send("q", 0.5)
+        st = p.wait(10)
+    assert st is not None and os.WEXITSTATUS(st) == 0
+    assert conf.exists(), "the first run did not write ~/.readaloud.conf"
+    cfg, warnings = config.load(conf)
+    assert (cfg, warnings) == (config.Config(), [])
+
+
+def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):
+    """It must reach the user, and it must not be printed over the document."""
+    (tmp_path / ".readaloud.conf").write_text(
+        "[readaloud]\nspeed = maybe\n", encoding="utf-8")
+    # long enough that playback does not reach "end of document" and replace
+    # the notice while the test is still looking for it
+    body = ("Some words to read here.\n\n" + "\n\n".join(
+        f"Paragraph {i} of the document, with a few more words."
+        for i in range(1, 21))).encode()
+    with PtyRun(stub_argv(stub_child), stdin_bytes=body,
+                cwd=REPO, home=str(tmp_path)) as p:
+        assert p.wait_screen("Some words", 30), p.screen()
+        assert p.wait_screen("config: speed", 10, where=-1), p.screen()[-1]
+        assert "Some words" in "\n".join(p.screen()[:-1])
         p.send("q", 0.5)
         st = p.wait(10)
     assert st is not None and os.WEXITSTATUS(st) == 0

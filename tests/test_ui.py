@@ -389,3 +389,259 @@ def test_unicodedata_agrees_with_char_width():
     for cp in (0x4E00, 0x30C6, 0x1F680, 0x2705, 0xFF21):
         ch = chr(cp)
         assert char_width(ch) == 2, unicodedata.name(ch, hex(cp))
+
+
+# --------------------------------------------------------------------------- #
+# follow-mode scroll lead
+#
+# `top_for_word` used to perform the *smallest* scroll that kept the spoken word
+# on screen, so the reading position sat pinned to the bottom margin and nothing
+# of what was coming next was visible.  `lead` scrolls that many rows further,
+# but only when the view has to scroll *down*, and never so far that the spoken
+# word itself would be pushed off the top.
+# --------------------------------------------------------------------------- #
+
+
+def follow_doc(nlines, h=30, w=60):
+    """A synthetic document of `nlines` short lines: display row == line index.
+
+    Each line is ``"line <i> alpha bravo"`` — four words, well inside `w`, so
+    nothing wraps and ``screen.rows[i].line == i``.  Word ``4 * i`` is the first
+    word of line ``i``.
+    """
+    text = "\n".join(f"line {i} alpha bravo" for i in range(nlines))
+    screen, doc, win = make(text, h=h, w=w)
+    assert screen.nrows == nlines, "a line wrapped; widen the viewport"
+    for i in range(nlines):
+        assert screen.row_of_word(4 * i) == i
+    return screen, doc, win
+
+
+def word_on_row(row):
+    """Global word index of the first word on display row `row`."""
+    return 4 * row
+
+
+def old_top_for_word(screen, widx, top_row, margin=2):
+    """Verbatim copy of the pre-`lead` implementation, as the compat oracle."""
+    row = screen.row_of_word(widx)
+    if row is None:
+        return screen.clamp_top(top_row)
+    h = screen.body_height
+    if h <= 0:
+        return screen.clamp_top(top_row)
+    m = min(margin, max(0, (h - 1) // 2))
+    if row < top_row + m:
+        return screen.clamp_top(row - m)
+    if row > top_row + h - 1 - m:
+        return screen.clamp_top(row - h + 1 + m)
+    return screen.clamp_top(top_row)
+
+
+# -- the compatibility contract: lead=0 is exactly the old behaviour ---------
+
+
+@pytest.mark.parametrize("h", [1, 2, 3, 4, 5, 8, 24, 30, 60])
+@pytest.mark.parametrize("margin", [0, 1, 2, 5])
+def test_lead_zero_reproduces_the_old_behaviour_exactly(h, margin):
+    """Exhaustive over every (word, top) pair on a 40-row document."""
+    screen, _doc, _ = follow_doc(40, h=h)
+    for row in range(40):
+        widx = word_on_row(row)
+        for top in range(-3, 44):
+            assert screen.top_for_word(widx, top, margin, 0) == old_top_for_word(
+                screen, widx, top, margin
+            ), f"h={h} margin={margin} row={row} top={top}"
+
+
+def test_lead_defaults_to_zero_and_the_old_call_still_works_positionally():
+    """`top_for_word(w, top, FOLLOW_MARGIN)` is how app.py calls it today."""
+    screen, _doc, _ = follow_doc(200, h=30)
+    for row in range(0, 200, 7):
+        widx = word_on_row(row)
+        for top in (0, 5, 40, 120, 175):
+            assert screen.top_for_word(widx, top, 2) == old_top_for_word(
+                screen, widx, top, 2
+            )
+            assert screen.top_for_word(widx, top) == old_top_for_word(
+                screen, widx, top, 2
+            )
+            assert screen.top_for_word(widx, top, 2) == screen.top_for_word(
+                widx, top, 2, 0
+            )
+
+
+# -- what the lead is actually for ------------------------------------------
+
+
+def test_lead_puts_the_spoken_word_near_the_top_third_on_a_tall_document():
+    """30-row terminal, lead=20: the word lands on screen row 7 (1-based)."""
+    screen, _doc, _ = follow_doc(400, h=30)
+    body = screen.body_height
+    assert body == 29
+    top = 0
+    # walk forward exactly as follow mode does, one word-row at a time
+    seen, jumps = [], []
+    for row in range(0, 120):
+        new_top = screen.top_for_word(word_on_row(row), top, 2, 20)
+        if new_top != top:
+            jumps.append(row - new_top)
+        top = new_top
+        assert top <= row < top + body, f"row {row} off screen (top={top})"
+        seen.append(row - top)
+    # after the very first screenful the word never creeps to the bottom edge
+    # and back a row at a time: it cycles between screen offset 6 and 26.
+    assert seen[:27] == list(range(27)), "the first screenful needs no scroll"
+    assert min(seen[27:]) == 6 and max(seen[27:]) == 26
+    # every scroll parks the word 6 rows below the top (screen row 7, 1-based)
+    assert jumps == [6] * len(jumps) and len(jumps) >= 4
+    # ... and the view jumps in stable strides of 21 rows, not one at a time
+    assert sorted(set(seen[27:])) == list(range(6, 27))
+    # (well clear of the end of the document, where the clamp takes over)
+    for row in (100, 137, 201, 300):
+        got = screen.top_for_word(word_on_row(row), row - 27, 2, 20)
+        assert row - got == 6, f"row {row} landed at screen offset {row - got}"
+        assert body - (row - got) - 1 == 22
+
+
+def test_lead_scrolls_twenty_rows_further_than_the_minimum():
+    screen, _doc, _ = follow_doc(400, h=30)
+    for row in (30, 55, 199):
+        for top in (row - 27, row - 30, row - 40):
+            plain = screen.top_for_word(word_on_row(row), top, 2, 0)
+            led = screen.top_for_word(word_on_row(row), top, 2, 20)
+            assert led == plain + 20, f"row={row} top={top}"
+            assert led <= row - 2, "the spoken word must stay on screen"
+
+
+def test_lead_on_a_short_document_clamps_to_max_top():
+    """Only 25 rows of text on a 30-row terminal: the lead runs into the end."""
+    screen, _doc, _ = follow_doc(25, h=30)
+    assert screen.body_height == 29
+    assert screen.max_top == 0  # 25 rows fit in 29: nothing to scroll
+    for row in range(25):
+        assert screen.top_for_word(word_on_row(row), 0, 2, 20) == 0
+
+    # a genuinely short viewport instead: 12 body rows over 25 rows of document
+    screen, _doc, _ = follow_doc(25, h=13)
+    assert screen.body_height == 12 and screen.max_top == 13
+    plain = screen.top_for_word(word_on_row(20), 0, 2, 0)
+    led = screen.top_for_word(word_on_row(20), 0, 2, 20)
+    assert plain == 11
+    assert led == 13, "clamped to max_top, not 11 + 20"
+    assert led == screen.max_top
+
+
+def test_lead_clamps_at_the_end_of_the_document():
+    screen, _doc, _ = follow_doc(60, h=20)
+    body = screen.body_height
+    assert (body, screen.max_top) == (19, 41)
+    # last row of the document, reached from the very top
+    led = screen.top_for_word(word_on_row(59), 0, 2, 20)
+    assert led == screen.max_top == 41
+    assert 59 - led == 18 <= body - 1, "the word is still on screen"
+    # and it never exceeds max_top however big the lead is
+    for lead in (0, 1, 20, 500):
+        got = screen.top_for_word(word_on_row(59), 0, 2, lead)
+        assert 0 <= got <= screen.max_top
+
+
+# -- the safety cap: the word must never be scrolled off the top -------------
+
+
+@pytest.mark.parametrize("lead", [29, 30, 100, 10_000])
+def test_lead_larger_than_the_viewport_never_pushes_the_word_off_the_top(lead):
+    screen, _doc, _ = follow_doc(400, h=30)
+    for row in (40, 100, 250, 399):
+        for top in (0, row - 27, row - 29, row - 50):
+            got = screen.top_for_word(word_on_row(row), top, 2, lead)
+            assert got <= row - 2, (
+                f"lead={lead} row={row} top={top}: new top {got} scrolls the "
+                f"spoken word off the top"
+            )
+            assert row - got < screen.body_height, "word below the viewport"
+
+
+def test_a_huge_lead_saturates_at_the_top_margin():
+    """Past the cap, more lead changes nothing: the word parks on the margin."""
+    screen, _doc, _ = follow_doc(400, h=30)
+    row = 200
+    saturated = screen.top_for_word(word_on_row(row), 0, 2, 1000)
+    assert saturated == row - 2
+    assert screen.top_for_word(word_on_row(row), 0, 2, 10_000) == saturated
+
+
+# -- degenerate viewports ---------------------------------------------------
+
+
+def test_viewport_shorter_than_twice_the_margin():
+    """body_height < margin*2: `m` collapses, and the lead must still be safe."""
+    for h, expect_body in ((2, 1), (3, 2), (4, 3), (5, 4)):
+        screen, _doc, _ = follow_doc(40, h=h)
+        body = screen.body_height
+        assert body == expect_body
+        m = min(2, max(0, (body - 1) // 2))
+        for row in (10, 25, 39):
+            got = screen.top_for_word(word_on_row(row), 0, 2, 20)
+            assert got <= row - m, f"h={h} row={row}: word pushed off the top"
+            assert row - got < body, f"h={h} row={row}: word below the viewport"
+            # there is no room to lead at all, so the cap always wins and the
+            # word parks exactly on the (collapsed) top margin
+            assert got == screen.clamp_top(row - m), f"h={h} row={row}"
+
+
+def test_zero_height_body_ignores_the_lead():
+    screen, _doc, _ = follow_doc(40, h=1)
+    assert screen.body_height == 0
+    for lead in (0, 20):
+        assert screen.top_for_word(word_on_row(10), 7, 2, lead) == screen.clamp_top(7)
+
+
+def test_unknown_word_ignores_the_lead():
+    screen, _doc, _ = follow_doc(40, h=30)
+    assert screen.row_of_word(99999) is None
+    assert screen.top_for_word(99999, 5, 2, 20) == 5
+
+
+# -- scrolling up is unchanged ----------------------------------------------
+
+
+def test_scrolling_up_ignores_the_lead():
+    screen, _doc, _ = follow_doc(400, h=30)
+    for row in (0, 3, 50, 200):
+        for top in (row + 3, row + 40, row + 100):
+            if top > screen.max_top:
+                continue
+            for lead in (0, 20, 500):
+                assert screen.top_for_word(word_on_row(row), top, 2, lead) == (
+                    old_top_for_word(screen, word_on_row(row), top, 2)
+                ), f"row={row} top={top} lead={lead}"
+
+
+def test_word_already_comfortably_visible_ignores_the_lead():
+    screen, _doc, _ = follow_doc(400, h=30)
+    top = 100
+    for row in range(top + 2, top + 27):  # inside both margins
+        for lead in (0, 20, 500):
+            assert screen.top_for_word(word_on_row(row), top, 2, lead) == top
+
+
+# -- a document that fits entirely on screen --------------------------------
+
+
+def test_lead_on_a_document_that_fits_entirely_on_screen():
+    screen, _doc, _ = follow_doc(10, h=30)
+    assert screen.nrows == 10 and screen.body_height == 29
+    assert screen.max_top == 0
+    for row in range(10):
+        for top in (0, 5, -4):
+            for lead in (0, 20, 500):
+                assert screen.top_for_word(word_on_row(row), top, 2, lead) == 0
+
+
+def test_document_exactly_filling_the_viewport_never_scrolls():
+    screen, _doc, _ = follow_doc(29, h=30)
+    assert screen.nrows == screen.body_height == 29
+    assert screen.max_top == 0
+    for row in range(29):
+        assert screen.top_for_word(word_on_row(row), 0, 2, 20) == 0
