@@ -23,11 +23,13 @@ jobs:
     # `depends_on macos: :sonoma` to match, in the same commit.
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      # setup-uv stopped publishing floating major tags at v8, so this names
+      # an exact (immutable) release rather than @v10.
+      - uses: astral-sh/setup-uv@v10.1.0
       - run: ./scripts/build-bundle.sh "${GITHUB_REF_NAME#v}" dist
       - run: shasum -a 256 dist/*.tar.xz | tee dist/SHA256
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.xz
