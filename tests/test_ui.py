@@ -645,3 +645,46 @@ def test_document_exactly_filling_the_viewport_never_scrolls():
     assert screen.max_top == 0
     for row in range(29):
         assert screen.top_for_word(word_on_row(row), 0, 2, 20) == 0
+
+
+# --------------------------------------------------------------------------- #
+# the current chunk's wash
+#
+# No colours in a test, so the wash shows up as the theme's low colour
+# attribute.
+# --------------------------------------------------------------------------- #
+
+
+def washed(screen, win):
+    """``{(line, char)}`` of every character the chunk wash painted."""
+    assert screen._chunk_bg() is None, "expected the attribute wash in a test"
+    mark = screen.theme.chunk_attr_lowcolor
+    out = set()
+    for y in range(screen.body_height):
+        for x in range(win.w):
+            if win.attrs[y][x] & mark:
+                loc = screen.hit_test_line_col(y, x)
+                assert loc is not None, f"washed past the text of row {y}"
+                out.add(loc)
+    return out
+
+
+def test_a_chunk_without_words_washes_exactly_its_lines(nodraw):
+    """`line_end` is exclusive: the line after the chunk used to be washed."""
+    screen, doc, win = make("one\n----\n====\nfour", h=6, w=40)
+    rules = Chunk(1, [])
+    rules.line_start, rules.line_end = 1, 3
+    screen.draw(doc, 0, current_word=None, current_chunk=rules, status="")
+    assert washed(screen, win) == {(line, c) for line in (1, 2) for c in range(4)}
+
+    last = Chunk(2, [])
+    last.line_start, last.line_end = 3, 99       # clamped to the document
+    screen.invalidate()
+    screen.draw(doc, 0, current_word=None, current_chunk=last, status="")
+    assert washed(screen, win) == {(3, c) for c in range(4)}
+
+    gone = Chunk(3, [])
+    gone.line_start, gone.line_end = 7, 8        # past the end: no wash
+    screen.invalidate()
+    screen.draw(doc, 0, current_word=None, current_chunk=gone, status="")
+    assert washed(screen, win) == set()

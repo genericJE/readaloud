@@ -1157,11 +1157,13 @@ class Screen:
             except (IndexError, TypeError):
                 return None
             return (int(w0.line), int(w0.start), int(w1.line), int(w1.end))
-        ls = int(getattr(chunk, "line_start", 0))
-        le = int(getattr(chunk, "line_end", ls))
-        last = max(ls, min(le, len(self._plain) - 1))
         if not self._plain:
             return None
+        ls = int(getattr(chunk, "line_start", 0))
+        if not 0 <= ls < len(self._plain):
+            return None
+        le = int(getattr(chunk, "line_end", ls + 1))   # exclusive
+        last = max(ls, min(le - 1, len(self._plain) - 1))
         return (ls, 0, last, len(self._plain[last]))
 
     def _chunk_seg(
