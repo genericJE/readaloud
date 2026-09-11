@@ -961,6 +961,8 @@ class App:
         if widx is None:
             return
         cidx = self.doc.chunk_of_word(widx)
+        if not getattr(self.doc.chunks[cidx], "speakable", True):
+            return          # nothing there to play; playback skips it too
         slot = self.doc.slot_of_word(widx)
         self.cur_word = widx
         self.want_play = True

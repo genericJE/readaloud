@@ -1,5 +1,5 @@
 """Regression tests for `readaloud.app`: less-style counts, search, quit,
-and table follow keys.
+clicks, and table follow keys.
 
 These drive the real `App` through its real `Keymap`, with the fake
 screen/player/engine from `test_integration` — the same fakes the rest of the
@@ -356,10 +356,15 @@ def test_close_engine_async_returns_immediately():
 
 
 # --------------------------------------------------------------------------- #
-# 6. a table read one cell at a time: the follow keys
+# 6. a table read one cell at a time: clicks and the follow keys
 #
 # `crew_doc` puts `test_integration.CREW` (a real mdcat render) between lines
-# of prose.  FakeScreen shows one row per line and one cell per char.
+# of prose.  FakeScreen shows one row per line and one cell per char, and with
+# one line of prose before it Bob's wrapped row is lines 5-7:
+#
+#    5  " Bob    Designer with a very      code  "
+#    6  "        long title that wraps     here  "
+#    7  "        around the column               "
 # --------------------------------------------------------------------------- #
 
 
@@ -369,6 +374,45 @@ ROLE = "Designer with a very long title that wraps around the column"
 def cell(doc, text):
     """The cell chunk whose text is `text`."""
     return next(c for c in doc.chunks if c.kind == "cell" and c.text == text)
+
+
+def test_clicking_a_cells_padding_plays_that_cell():
+    app, doc, _screen = build(doc=crew_doc(["Intro."], ["Outro."]))
+    notes, role = cell(doc, "code here"), cell(doc, ROLE)
+    here = next(i for i in notes.words if doc.words[i].text == "here")
+
+    app._click(7, 36)                    # the Notes cell's blank third line
+    assert app._target == (notes.idx, doc.slot_of_word(here))
+    assert app.cur_word == here and app.want_play
+
+    # right of "very", inside the Role column: the nearest word on the line
+    # is the neighbour's "code", but the click is in Role
+    very = next(i for i in role.words if doc.words[i].text == "very")
+    app._click(5, 31)
+    assert app._target == (role.idx, doc.slot_of_word(very))
+
+    app._click(5, 33)                    # the gutter: the nearer column wins
+    assert app._target == (notes.idx, 0)
+
+
+def test_clicking_an_empty_cell_or_a_rule_does_nothing():
+    app, doc, _screen = build(doc=crew_doc(["Intro."], ["Outro."]))
+    assert doc.plain[8] == " Carol                            on    "
+    for line, col in [(8, 12), (9, 20), (3, 5), (10, 39)]:
+        app._click(line, col)
+        assert app._target is None, (line, col)
+        assert app.cur_word is None and not app.want_play
+
+
+def test_a_click_never_starts_a_chunk_with_nothing_to_say():
+    app, doc, _screen = build(doc=crew_doc(["Intro."], ["Outro."]))
+    short = cell(doc, "short")
+    short.speakable = False              # as if the Document had flagged it
+    app._click(4, 36)
+    assert app._target is None and not app.want_play
+    short.speakable = True
+    app._click(4, 36)
+    assert app._target == (short.idx, 0)
 
 
 def test_stepping_onto_a_wrapped_row_brings_the_whole_row_into_view():
