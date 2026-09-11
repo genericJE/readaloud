@@ -15,20 +15,35 @@ Invariants other modules rely on (all covered by tests/test_document.py):
   is a *verbatim* slice of the line, never normalised.  ``readaloud.speech``
   derives each word's end offset as ``offset + len(word.text)``, which is only
   correct because of this.
+* ``doc.words`` is in reading order and ``doc.words[i].idx == i``.  Reading
+  order is line order, except inside a table (see below): there it is row by
+  row, cell by cell, and line then start within a cell, so a wrapped cell's
+  second line comes before its right-hand neighbour's first.
 * ``chunk.text[chunk.offsets[i]:][:len(w.text)] == w.text`` where
   ``w = doc.words[chunk.words[i]]``.
 * ``chunk.words`` is contiguous and ascending; concatenating the ``words`` lists
   of all chunks in order reproduces ``range(len(doc.words))`` exactly -- every
   word lives in exactly one chunk.
-* ``chunk.text`` is always a verbatim slice of ``"\\n".join(doc.plain)``, so a
-  chunk that spans several lines keeps its newlines and its indentation.
+* ``chunk.text`` is a verbatim slice of ``"\\n".join(doc.plain)``, so a chunk
+  that spans several lines keeps its newlines and its indentation -- except a
+  table cell, whose text is its trimmed per line segments joined by the
+  cell's ``joins`` (a wrapped cell's lines interleave with its neighbours').
 * Chunks cover every line of the document.  ``chunk.line_start`` is inclusive,
   ``chunk.line_end`` is **exclusive**.  Consecutive chunks may share one line
   (when a long paragraph is split at a sentence boundary in the middle of a
   line), so ``chunks[k].line_start`` can equal ``chunks[k-1].line_end - 1``.
-* A chunk with no speakable words (blank runs, horizontal rules, table
-  separators) is *kept* -- so the line coverage above holds -- but is flagged
+  Every cell chunk of one table row claims the whole row's line range, so
+  consecutive cells of a row share all of it; the next row, or the rule that
+  follows, starts exactly at that row's ``line_end``.
+* A chunk with no speakable words (blank runs, horizontal rules, table rules,
+  empty cells) is *kept* -- so the line coverage above holds -- but is flagged
   ``speakable=False`` and must be skipped by playback.
+
+Tables: a :class:`Table` handed to the Document (the caller maps them from
+mdcat's render) is chunked as one ``kind="rule"`` chunk per rule line and
+one ``kind="cell"`` chunk per cell, header row included, never split into
+sentences.  A Table that does not fit the lines and words is ignored and its
+lines read as ordinary text; ``doc.tables`` holds the ones in use.
 
 Word segmentation keeps as ONE word: contractions (``it's``, ``don't``),
 hyphenated compounds (``well-known``), money and decimals (``$4.50``,
@@ -52,6 +67,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Iterator, Sequence
 
 from .ansi import Run, Style
+from .width import cell_offsets
 
 __all__ = [
     "DEFAULT_MAX_SENTENCES",
@@ -59,6 +75,8 @@ __all__ = [
     "ABBREVIATIONS",
     "Word",
     "Chunk",
+    "Table",
+    "TableCell",
     "Document",
     "line_word_spans",
     "split_words",
@@ -108,7 +126,19 @@ class Chunk:
     # --- additive: defaulted, so the positional order above stays valid ---
     speakable: bool = True     # False => nothing to say; playback skips it
     word_texts: list[str] = field(default_factory=list)  # doc.words[i].text
-    kind: str = "text"         # "text" | "code" | "blank"
+    #: "para" | "code" | "blank" | "cell" | "rule"; "text" is only the
+    #: default, for chunks built by hand
+    kind: str = "text"
+    #: (table, row, col) when ``kind == "cell"``; row 0 is the header row
+    cell: tuple[int, int, int] | None = None
+    #: (line, start, end) ranges that make up this chunk on screen, one per
+    #: physical line, end exclusive.  Empty means "from the first word to the
+    #: last", which is right for prose; a table cell sets it, because its lines
+    #: interleave with its neighbours' and that stream would wash them too.
+    regions: list[tuple[int, int, int]] = field(default_factory=list)
+    #: the last spoken cell of its table row, where the pause between rows
+    #: belongs; a row with nothing to say has none
+    row_end: bool = False
 
     @property
     def line_span(self) -> tuple[int, int]:
@@ -118,6 +148,35 @@ class Chunk:
     def spans(self) -> list[tuple[int, int]]:
         """(start, end) of every word slot inside ``self.text``."""
         return [(o, o + len(t)) for o, t in zip(self.offsets, self.word_texts)]
+
+
+@dataclass
+class TableCell:
+    """One cell of a rendered table, in display (``Document.plain``) coordinates."""
+
+    row: int                   # 0 is the header row
+    col: int
+    #: (line, start, end): the cell's column on EVERY physical line of its row,
+    #: as char offsets into that line, end exclusive -- blank lines included
+    spans: list[tuple[int, int, int]]
+    #: joins[i] goes between the text gathered so far and span i's text when
+    #: both are non-empty: "" where the renderer wrapped inside a word (a URL,
+    #: a hard-split long word, CJK), " " where it wrapped at a space.  Missing
+    #: entries mean " ".
+    joins: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Table:
+    """Where one rendered table sits and how its lines divide into cells."""
+
+    line_start: int            # the top rule, inclusive
+    line_end: int              # one past the bottom rule
+    ncols: int
+    #: (line_start, line_end) of every row, header row first, end exclusive
+    rows: list[tuple[int, int]]
+    #: every cell of every row, in reading order: row by row, left to right
+    cells: list[TableCell]
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +265,7 @@ def split_words(text: str) -> list[str]:
 
 
 def extract_words(plain: Sequence[str]) -> list[Word]:
-    """Every speakable word of a document, in reading order."""
+    """Every speakable word of a document, in line order."""
     words: list[Word] = []
     for line_no, text in enumerate(plain):
         if not text or _REF_DEF_RE.match(text):
@@ -326,16 +385,19 @@ def _starts_code(line: str) -> bool:
     return _is_indented(line) and not _LIST_MARK_RE.match(line.strip())
 
 
-def _line_groups(plain: Sequence[str]) -> list[tuple[int, int, str]]:
-    """Partition the lines into (start, end_exclusive, kind) groups.
+def _line_groups(plain: Sequence[str], lo: int = 0, hi: int | None = None
+                 ) -> list[tuple[int, int, str]]:
+    """Partition lines ``[lo, hi)`` into (start, end_exclusive, kind) groups.
 
     kind is "blank", "code" (fenced or indented -- never split further) or
-    "para".  The groups tile the whole document.
+    "para".  The groups tile the range, the whole document by default.  A
+    table cuts the document into ranges, so no group (a fence opened by a
+    cell that happens to start with backticks, say) runs through one.
     """
     groups: list[tuple[int, int, str]] = []
-    n = len(plain)
-    i = 0
-    prev_blank = True
+    n = len(plain) if hi is None else hi
+    i = lo
+    prev_blank = lo <= 0 or not plain[lo - 1].strip()
     while i < n:
         if not plain[i].strip():
             j = i
@@ -471,68 +533,327 @@ def _paragraph_spans(text: str, lo: int, hi: int, max_sentences: int,
     return out
 
 
+# ---------------------------------------------------------------------------
+# tables
+# ---------------------------------------------------------------------------
+
+
+def _gap(col: int, start: int, end: int) -> int:
+    """How many chars `col` lies outside ``[start, end)``; 0 inside."""
+    if col < start:
+        return start - col
+    return max(0, col - end + 1)
+
+
+def _trimmed(plain: Sequence[str], line: int, start: int, end: int
+             ) -> tuple[int, str]:
+    """Where ``plain[line][start:end]`` starts once trimmed, and its text."""
+    seg = plain[line][start:end]
+    core = seg.strip()
+    return start + len(seg) - len(seg.lstrip()), core
+
+
+def _claim_table(plain: Sequence[str], by_line: dict[int, list[Word]],
+                 table: Table) -> list[list[Word]] | None:
+    """The words of every cell of `table`, or None when it does not fit.
+
+    A Table comes from another module's reading of a render, so it is checked
+    rather than trusted: rows must tile the lines between the three rules,
+    cells must come in reading order with in-range spans that never overlap,
+    and every word on a row line must sit inside exactly one cell (none may sit
+    on a rule).  Anything else means the render and the map disagree, and
+    reading such a table cell by cell would drop or repeat words.
+    """
+    top, end, ncols = table.line_start, table.line_end, table.ncols
+    rows = [(a, b) for a, b in table.rows]
+    cells = list(table.cells)
+    if not (isinstance(ncols, int) and ncols >= 1 and rows
+            and isinstance(top, int) and isinstance(end, int)
+            and all(isinstance(a, int) and isinstance(b, int) for a, b in rows)
+            and 0 <= top and end <= len(plain)
+            and len(cells) == len(rows) * ncols):
+        return None
+
+    rules = {top, end - 1}
+    expect = top + 1
+    for r, (a, b) in enumerate(rows):
+        if a != expect or b <= a:
+            return None
+        expect = b
+        if r == 0:                      # the header rule follows the header
+            rules.add(b)
+            expect = b + 1
+    if expect != end - 1:
+        return None
+
+    spans_on: dict[int, list[tuple[int, int, int]]] = {}
+    for k, cell in enumerate(cells):
+        r, c = divmod(k, ncols)
+        if cell.row != r or cell.col != c:
+            return None
+        first, stop = rows[r]
+        last = -1
+        for line, s, e in cell.spans:
+            if not (isinstance(line, int) and isinstance(s, int)
+                    and isinstance(e, int) and first <= line < stop
+                    and line > last and 0 <= s <= e <= len(plain[line])):
+                return None
+            last = line
+            spans_on.setdefault(line, []).append((s, e, k))
+
+    claimed: list[list[Word]] = [[] for _ in cells]
+    for line in range(top, end):
+        here = by_line.get(line, ())
+        if line in rules:
+            if here:
+                return None
+            continue
+        spans = sorted(spans_on.get(line, ()))
+        prev_end = 0
+        for s, e, _k in spans:
+            if s < prev_end:
+                return None
+            prev_end = e
+        starts = [s for s, _e, _k in spans]
+        for w in here:
+            i = bisect_right(starts, w.start) - 1
+            if i < 0 or w.end > spans[i][1]:
+                return None
+            claimed[spans[i][2]].append(w)
+    for words in claimed:
+        words.sort(key=lambda w: (w.line, w.start))
+    return claimed
+
+
+def _place_tables(plain: Sequence[str], words: Sequence[Word],
+                  tables: Iterable[Table] | None
+                  ) -> tuple[list[Table], list[list[list[Word]]]]:
+    """The tables that fit, in document order, with each cell's words.
+
+    Overlapping tables keep the one that starts first.
+    """
+    fits: list[tuple[Table, list[list[Word]]]] = []
+    by_line: dict[int, list[Word]] | None = None
+    for table in tables or ():
+        if by_line is None:
+            by_line = {}
+            for w in words:
+                by_line.setdefault(w.line, []).append(w)
+        try:
+            claimed = _claim_table(plain, by_line, table)
+        except (AttributeError, TypeError, ValueError, IndexError):
+            claimed = None
+        if claimed is not None:
+            fits.append((table, claimed))
+    fits.sort(key=lambda pair: pair[0].line_start)
+
+    used: list[Table] = []
+    cells: list[list[list[Word]]] = []
+    floor = 0
+    for table, claimed in fits:
+        if table.line_start >= floor:
+            used.append(table)
+            cells.append(claimed)
+            floor = table.line_end
+    return used, cells
+
+
+def _layout_tables(plain: Sequence[str], words: list[Word],
+                   tables: Iterable[Table] | None
+                   ) -> tuple[list[Table], list[list[list[int]]]]:
+    """Fit `tables` to `words`, then put `words` into reading order in place.
+
+    Sorts every table's words row by row and cell by cell between the words
+    around the table, and renumbers ``Word.idx``.  Returns the tables in use
+    and, per table, per cell, the global indices of that cell's words.
+    """
+    used, claimed = _place_tables(plain, words, tables)
+    if not used:
+        return [], []
+    order: dict[int, tuple[int, int]] = {}      # id(word) -> (row line, col)
+    for table, cells in zip(used, claimed):
+        for k, cell_words in enumerate(cells):
+            row, col = divmod(k, table.ncols)
+            for w in cell_words:
+                order[id(w)] = (table.rows[row][0], col)
+
+    def reading(w: Word) -> tuple[int, int, int, int]:
+        at = order.get(id(w))
+        return (at[0], at[1], w.line, w.start) if at else (w.line, 0, w.line,
+                                                           w.start)
+
+    words.sort(key=reading)
+    for i, w in enumerate(words):
+        w.idx = i
+    return used, [[[w.idx for w in cw] for cw in cells] for cells in claimed]
+
+
+def _cell_text(plain: Sequence[str], words: Sequence[Word], cell: TableCell,
+               widxs: Sequence[int]) -> tuple[str, list[int], list[str]]:
+    """(text, offsets, word_texts) of one cell chunk.
+
+    The text is the cell's trimmed segments, line by line, joined by the
+    cell's ``joins`` -- "" rejoins a word the renderer broke across lines, so
+    the TTS hears one word where the screen shows two pieces.
+    """
+    ws = [words[i] for i in widxs]
+    joins = cell.joins if isinstance(cell.joins, (list, tuple)) else ()
+    parts: list[str] = []
+    size = 0
+    landed: dict[int, tuple[int, int]] = {}   # line -> (start, pos in text)
+    for i, (line, s, e) in enumerate(cell.spans):
+        start, core = _trimmed(plain, line, s, e)
+        if not core:
+            continue
+        if parts:
+            join = joins[i] if i < len(joins) else " "
+            join = join if isinstance(join, str) else " "
+            parts.append(join)
+            size += len(join)
+        landed[line] = (start, size)
+        parts.append(core)
+        size += len(core)
+    text = "".join(parts)
+    offsets = [landed[w.line][1] + w.start - landed[w.line][0] for w in ws]
+    return text, offsets, [w.text for w in ws]
+
+
+def _table_chunks(plain: Sequence[str], words: Sequence[Word], table: Table,
+                  ti: int, cells: Sequence[Sequence[int]], idx: int
+                  ) -> list[Chunk]:
+    """Rule, header cells, rule, body cells row by row, rule."""
+    out: list[Chunk] = []
+
+    def rule(line: int) -> None:
+        out.append(Chunk(idx=idx + len(out), words=[], text=plain[line],
+                         offsets=[], line_start=line, line_end=line + 1,
+                         speakable=False, word_texts=[], kind="rule"))
+
+    ncols = table.ncols
+    rule(table.line_start)
+    for r, (first, stop) in enumerate(table.rows):
+        if r == 1:
+            rule(table.rows[0][1])
+        # the beat between rows goes after the row's last cell that is read
+        last = max((c for c in range(ncols) if cells[r * ncols + c]),
+                   default=-1)
+        for c in range(ncols):
+            k = r * ncols + c
+            cell = table.cells[k]
+            widxs = list(cells[k])
+            text, offsets, texts = _cell_text(plain, words, cell, widxs)
+            out.append(Chunk(
+                idx=idx + len(out), words=widxs, text=text, offsets=offsets,
+                line_start=first, line_end=stop, speakable=bool(widxs),
+                word_texts=texts, kind="cell", cell=(ti, r, c),
+                regions=[(line, s, e) for line, s, e in cell.spans],
+                row_end=c == last,
+            ))
+    if len(table.rows) == 1:
+        rule(table.rows[0][1])
+    rule(table.line_end - 1)
+    return out
+
+
 def build_chunks(plain: Sequence[str], words: Sequence[Word],
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
-                 max_chars: int = DEFAULT_MAX_CHARS) -> list[Chunk]:
+                 max_chars: int = DEFAULT_MAX_CHARS, *,
+                 tables: Sequence[Table] = (),
+                 cells: Sequence[Sequence[Sequence[int]]] = ()
+                 ) -> list[Chunk]:
     """Group lines into chunks: paragraphs first, then sentence splits.
 
     Blank runs, horizontal rules and code blocks are kept as chunks so the
     chunk list still covers every line; the ones with nothing to say come back
     with ``speakable=False``.
+
+    Each table becomes rule and cell chunks instead (see :class:`Document`).
+    `tables`, `words` and `cells` then come from the Document's table layout:
+    the tables that fit, the words in reading order and, per table, per cell,
+    the indices of its words.  Raises ValueError when `cells` does not have
+    one entry per table.
     """
+    if len(cells) != len(tables):
+        raise ValueError(f"build_chunks: {len(tables)} tables but cells for "
+                         f"{len(cells)}")
     if not plain:
         return []
     flat, line_offsets = _flatten(plain)
     nlines = len(plain)
 
-    word_at: list[int] = [line_offsets[w.line] + w.start for w in words]
+    # The document outside the tables, as (first, stop, table index) pieces.
+    pieces: list[tuple[int, int, int | None]] = []
+    loose: Sequence[Word] = words
+    cur = 0
+    for ti, table in enumerate(tables):
+        if table.line_start > cur:
+            pieces.append((cur, table.line_start, None))
+        pieces.append((table.line_start, table.line_end, ti))
+        cur = table.line_end
+    if cur < nlines:
+        pieces.append((cur, nlines, None))
+    if tables:
+        inside = bytearray(nlines)
+        for table in tables:
+            inside[table.line_start:table.line_end] = (
+                b"\x01" * (table.line_end - table.line_start))
+        loose = [w for w in words if not inside[w.line]]
 
-    # (flat_start, flat_end, kind, line_start, line_end) -- a line range of
-    # None means "derive it from the flat span" (paragraph sub-chunks only).
-    spans: list[tuple[int, int, str, int | None, int | None]] = []
-    for first, stop, kind in _line_groups(plain):
-        lo = line_offsets[first]
-        hi = line_offsets[stop - 1] + len(plain[stop - 1])
-        # A group with nothing to say (blank run, horizontal rule, table
-        # separator) is never split: it exists only to keep line coverage.
-        has_words = bisect_left(word_at, lo) < bisect_left(word_at, hi)
-        if kind == "para" and has_words:
-            for a, b in _paragraph_spans(flat, lo, hi, max_sentences, max_chars):
-                spans.append((a, b, kind, None, None))
-        else:
-            spans.append((lo, hi, kind, first, stop))
+    word_at: list[int] = [line_offsets[w.line] + w.start for w in loose]
 
     chunks: list[Chunk] = []
     wi = 0
-    nwords = len(words)
-    for a, b, kind, first, stop in spans:
-        picked: list[int] = []
-        offsets: list[int] = []
-        texts: list[str] = []
-        while wi < nwords and word_at[wi] < b:
-            if word_at[wi] >= a:
-                picked.append(words[wi].idx)
-                offsets.append(word_at[wi] - a)
-                texts.append(words[wi].text)
-            wi += 1
-        if first is not None and stop is not None:
-            line_start, line_end = first, stop
-        else:
-            line_start = bisect_right(line_offsets, a) - 1
-            line_end = bisect_right(line_offsets, b - 1 if b > a else a)
-        line_start = max(0, min(line_start, nlines - 1))
-        line_end = max(line_start + 1, min(line_end, nlines))
-        chunks.append(Chunk(
-            idx=len(chunks),
-            words=picked,
-            text=flat[a:b],
-            offsets=offsets,
-            line_start=line_start,
-            line_end=line_end,
-            speakable=bool(picked),
-            word_texts=texts,
-            kind="blank" if kind == "blank" else kind,
-        ))
+    nwords = len(loose)
+    for piece_first, piece_stop, ti in pieces:
+        if ti is not None:
+            chunks.extend(_table_chunks(plain, words, tables[ti], ti, cells[ti],
+                                        len(chunks)))
+            continue
+
+        # (flat_start, flat_end, kind, line_start, line_end) -- a line range of
+        # None means "derive it from the flat span" (paragraph sub-chunks only).
+        spans: list[tuple[int, int, str, int | None, int | None]] = []
+        for first, stop, kind in _line_groups(plain, piece_first, piece_stop):
+            lo = line_offsets[first]
+            hi = line_offsets[stop - 1] + len(plain[stop - 1])
+            # A group with nothing to say (blank run, horizontal rule, table
+            # separator) is never split: it exists only to keep line coverage.
+            has_words = bisect_left(word_at, lo) < bisect_left(word_at, hi)
+            if kind == "para" and has_words:
+                for a, b in _paragraph_spans(flat, lo, hi, max_sentences,
+                                             max_chars):
+                    spans.append((a, b, kind, None, None))
+            else:
+                spans.append((lo, hi, kind, first, stop))
+
+        for a, b, kind, first, stop in spans:
+            picked: list[int] = []
+            offsets: list[int] = []
+            texts: list[str] = []
+            while wi < nwords and word_at[wi] < b:
+                if word_at[wi] >= a:
+                    picked.append(loose[wi].idx)
+                    offsets.append(word_at[wi] - a)
+                    texts.append(loose[wi].text)
+                wi += 1
+            if first is not None and stop is not None:
+                line_start, line_end = first, stop
+            else:
+                line_start = bisect_right(line_offsets, a) - 1
+                line_end = bisect_right(line_offsets, b - 1 if b > a else a)
+            line_start = max(0, min(line_start, nlines - 1))
+            line_end = max(line_start + 1, min(line_end, nlines))
+            chunks.append(Chunk(
+                idx=len(chunks),
+                words=picked,
+                text=flat[a:b],
+                offsets=offsets,
+                line_start=line_start,
+                line_end=line_end,
+                speakable=bool(picked),
+                word_texts=texts,
+                kind="blank" if kind == "blank" else kind,
+            ))
     return chunks
 
 
@@ -617,19 +938,27 @@ def strip_reference_markers(lines: Iterable[Sequence[Run]]) -> list[list[Run]]:
 
 
 class Document:
-    """A parsed document: styled lines, plain lines, words and chunks."""
+    """A parsed document: styled lines, plain lines, words and chunks.
+
+    `tables` maps rendered tables onto `lines` (the caller builds them);
+    each one that fits is read one cell at a time, see :class:`Table`.
+    """
 
     def __init__(self, lines: Iterable[Sequence[Run]] | None = None, *,
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
-                 max_chars: int = DEFAULT_MAX_CHARS) -> None:
+                 max_chars: int = DEFAULT_MAX_CHARS,
+                 tables: Sequence[Table] = ()) -> None:
         self.max_sentences = int(max_sentences)
         self.max_chars = int(max_chars)
         self.lines: list[list[Run]] = strip_reference_markers(lines or ())
         self.plain: list[str] = ["".join(r.text for r in line)
                                  for line in self.lines]
         self.words: list[Word] = extract_words(self.plain)
+        self.tables: list[Table]
+        self.tables, cells = _layout_tables(self.plain, self.words, tables)
         self.chunks: list[Chunk] = build_chunks(
-            self.plain, self.words, self.max_sentences, self.max_chars)
+            self.plain, self.words, self.max_sentences, self.max_chars,
+            tables=self.tables, cells=cells)
 
         # word index -> (chunk index, slot inside that chunk)
         self._chunk_of: list[int] = [0] * len(self.words)
@@ -639,15 +968,36 @@ class Document:
                 self._chunk_of[widx] = chunk.idx
                 self._slot_of[widx] = slot
 
-        # line -> the word indices on it, ascending by start offset
+        # line -> the word indices on it, ascending by start offset.  Sorted
+        # outright: word_at bisects, and inside a table the global order is
+        # reading order, not line order.
         self._line_words: dict[int, list[int]] = {}
         for w in self.words:
             self._line_words.setdefault(w.line, []).append(w.idx)
+        for idxs in self._line_words.values():
+            idxs.sort(key=lambda i: self.words[i].start)
         self._line_starts: dict[int, list[int]] = {
             line: [self.words[i].start for i in idxs]
             for line, idxs in self._line_words.items()
         }
-        self._chunk_line_starts: list[int] = [c.line_start for c in self.chunks]
+
+        # line -> the first chunk covering it (every cell of a row covers the
+        # row's lines, so on a row that is its first cell)
+        self._line_chunk: list[int] = [-1] * len(self.plain)
+        for c in self.chunks:
+            for li in range(c.line_start, c.line_end):
+                if self._line_chunk[li] < 0:
+                    self._line_chunk[li] = c.idx
+
+        # line -> (start, end, chunk index) of every cell region on it
+        self._cell_regions: dict[int, list[tuple[int, int, int]]] = {}
+        for c in self.chunks:
+            if c.kind != "cell":
+                continue
+            for line, s, e in c.regions:
+                self._cell_regions.setdefault(line, []).append((s, e, c.idx))
+        for regions in self._cell_regions.values():
+            regions.sort()
 
     # -- construction helpers ------------------------------------------------
 
@@ -690,7 +1040,19 @@ class Document:
         return self._slot_of[widx]
 
     def nearest_word(self, line: int, col: int) -> int | None:
-        """The word at ``(line, col)``, or the closest one on that line."""
+        """The word at ``(line, col)``, or the closest one on that line.
+
+        On a table row line the answer never leaves the cell: a click in a
+        cell, or in the gutter or prefix beside it (the nearest cell on that
+        line), picks that cell's closest word on any line of the row, and None
+        when the cell is empty -- a neighbour's word would play the wrong cell.
+        """
+        regions = self._cell_regions.get(line)
+        if regions:
+            cidx = self.cell_at(line, col)
+            if cidx is None:
+                cidx = min(regions, key=lambda r: _gap(col, r[0], r[1]))[2]
+            return self._nearest_in_cell(cidx, line, col)
         hit = self.word_at(line, col)
         if hit is not None:
             return hit
@@ -706,17 +1068,44 @@ class Document:
                 best, best_d = widx, d
         return best
 
+    def _nearest_in_cell(self, cidx: int, line: int, col: int) -> int | None:
+        """The word of cell chunk `cidx` closest to ``(line, col)``.
+
+        The same line wins, then the nearest line, then the nearest column.
+        Columns are compared in terminal cells: the row's lines are laid out
+        on one grid, but a wide glyph earlier on one line shifts its chars.
+        """
+        cols: dict[int, list[int]] = {}
+
+        def columns(li: int) -> list[int]:
+            if li not in cols:
+                cols[li] = cell_offsets(self.plain[li])
+            return cols[li]
+
+        here = columns(line)
+        x = here[max(0, min(col, len(here) - 1))]
+        best, best_key = None, None
+        for widx in self.chunks[cidx].words:
+            w = self.words[widx]
+            x0, x1 = columns(w.line)[w.start], columns(w.line)[w.end]
+            dx = 0 if x0 <= x < x1 else min(abs(x - x0), abs(x - (x1 - 1)))
+            key = (abs(w.line - line), dx)
+            if best_key is None or key < best_key:
+                best, best_key = widx, key
+        return best
+
+    def cell_at(self, line: int, col: int) -> int | None:
+        """The cell chunk whose region on ``line`` holds char ``col``, or None."""
+        for s, e, cidx in self._cell_regions.get(line, ()):
+            if s <= col < e:
+                return cidx
+        return None
+
     def chunk_at_line(self, line: int) -> int | None:
         """The first chunk whose line span covers ``line``."""
-        if not self.chunks:
-            return None
-        k = bisect_right(self._chunk_line_starts, line) - 1
-        if k < 0:
-            return None
-        while k > 0 and self.chunks[k - 1].line_end > line:
-            k -= 1
-        c = self.chunks[k]
-        return c.idx if c.line_start <= line < c.line_end else None
+        if 0 <= line < len(self._line_chunk) and self._line_chunk[line] >= 0:
+            return self._line_chunk[line]
+        return None
 
     def word_span_in_chunk(self, widx: int) -> tuple[int, int]:
         """``(start, end)`` of word ``widx`` inside its own chunk's text."""
