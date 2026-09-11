@@ -805,27 +805,54 @@ class Screen:
         m = min(margin, max(0, (h - 1) // 2))
         return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
-    def top_for_row(
-        self, row: int, top_row: int, margin: int = 2, lead: int = 0
+    def follow_top_for_row(self, row: int, margin: int = 2, lead: int = 0) -> int:
+        """`follow_top_for_word` for a bare display row (no word is highlighted yet)."""
+        return self.follow_top_for_span(row, row, margin, lead)
+
+    def top_for_span(
+        self, first_row: int, last_row: int, top_row: int, margin: int = 2,
+        lead: int = 0,
     ) -> int:
-        """`top_for_word` for a bare display row, for the chunk-skip keys."""
+        """`top_for_word` for the rows ``first_row..last_row`` (inclusive) at once.
+
+        Follow mode and the chunk-skip keys use it for a table row; a skip onto
+        any other chunk asks for its first row, a span of one.  A table row's
+        cells are read left to right, and each one starts back on the row's
+        first line, so following the spoken word would scroll the view down on
+        a cell's wrapped lines and straight back up for its neighbour.  Keeping
+        the whole span inside the margins holds the view still for the whole
+        row: once a call has scrolled, the next with the same span returns the
+        same top.
+
+        Scrolling down goes `lead` rows past the smallest scroll that shows the
+        span, but never so far that its first row passes the top margin.  A
+        span taller than the viewport less its margins cannot be shown whole;
+        the caller follows the word instead.
+        """
         h = self.body_height
         if h <= 0:
             return self.clamp_top(top_row)
         m = min(margin, max(0, (h - 1) // 2))
-        if row < top_row + m:
-            return self.clamp_top(row - m)
-        if row > top_row + h - 1 - m:
-            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        if first_row < top_row + m:
+            return self.clamp_top(first_row - m)
+        if last_row > top_row + h - 1 - m:
+            return self.clamp_top(min(first_row - m, last_row - h + 1 + m + lead))
         return self.clamp_top(top_row)
 
-    def follow_top_for_row(self, row: int, margin: int = 2, lead: int = 0) -> int:
-        """`follow_top_for_word` for a bare display row (no word is highlighted yet)."""
+    def follow_top_for_span(
+        self, first_row: int, last_row: int, margin: int = 2, lead: int = 0
+    ) -> int:
+        """`follow_top_for_word` for a span: where `top_for_span` would scroll to.
+
+        Always the scroll-down branch, so `c` on a table row (or on a chunk
+        with no word highlighted yet, a span of one) parks the view where the
+        next auto-scroll leaves it, not one jump short of it.
+        """
         h = self.body_height
         if h <= 0:
             return self.clamp_top(self._top_row)
         m = min(margin, max(0, (h - 1) // 2))
-        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        return self.clamp_top(min(first_row - m, last_row - h + 1 + m + lead))
 
     def center_on_word(self, widx: int) -> int:
         """Top row that puts `widx` in the middle of the viewport."""

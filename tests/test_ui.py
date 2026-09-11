@@ -859,3 +859,70 @@ def test_a_chunk_without_words_washes_exactly_its_lines(nodraw):
     screen.invalidate()
     screen.draw(doc, 0, current_word=None, current_chunk=gone, status="")
     assert washed(screen, win) == set()
+
+
+# --------------------------------------------------------------------------- #
+# follow mode over a table row: top_for_span
+#
+# A table row's cells are read left to right and each starts back on the row's
+# first line, so follow mode keeps the whole row in view instead of the word.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("h", [1, 2, 3, 8, 24])
+@pytest.mark.parametrize("margin", [0, 2])
+def test_a_row_scrolls_exactly_like_the_word_on_it(h, margin):
+    """A row is a span of one.  The chunk-skip keys and
+    `c` scroll by row before a word is highlighted, so a row has to land where
+    `top_for_word` would put a word on it, or the view jumps a second time as
+    soon as the first word is read."""
+    screen, _doc, _ = follow_doc(40, h=h)
+    for row in range(40):
+        widx = word_on_row(row)
+        for lead in (0, 20, 500):
+            assert screen.follow_top_for_row(row, margin, lead) == (
+                screen.follow_top_for_word(widx, margin, lead))
+            for top in range(-3, 44):
+                assert screen.top_for_span(row, row, top, margin, lead) == (
+                    screen.top_for_word(widx, top, margin, lead)
+                ), f"h={h} margin={margin} row={row} top={top} lead={lead}"
+
+
+@pytest.mark.parametrize("lead", [0, 20])
+def test_a_span_that_fits_is_shown_whole_and_then_left_alone(lead):
+    screen, _doc, _ = follow_doc(400, h=24)
+    body, m = screen.body_height, 2
+    assert body - 2 * m == 19
+    for first, last in [(100, 100), (100, 102), (100, 118)]:
+        for top in range(first - 40, last + 5):
+            got = screen.top_for_span(first, last, top, m, lead)
+            assert got + m <= first and last <= got + body - 1 - m, (first, last, top)
+            assert screen.top_for_span(first, last, got, m, lead) == got
+            if top + m <= first and last <= top + body - 1 - m:
+                assert got == top, "a span already in view must not move it"
+        parked = screen.follow_top_for_span(first, last, m, lead)
+        assert screen.top_for_span(first, last, parked, m, lead) == parked
+
+
+def test_a_span_scrolls_down_by_the_lead_but_never_past_its_first_row():
+    screen, _doc, _ = follow_doc(400, h=30)           # 29 body rows
+    first, last, top = 127, 129, 100                  # last is below the margin
+    assert screen.top_for_span(first, last, top, 2, 0) == last - 29 + 1 + 2
+    assert screen.top_for_span(first, last, top, 2, 20) == last - 29 + 1 + 2 + 20
+    assert screen.top_for_span(first, last, top, 2, 500) == first - 2
+    # above the top margin it scrolls up to the margin, lead or no lead
+    assert screen.top_for_span(first, last, 126, 2, 20) == first - 2
+
+
+def test_a_span_at_the_end_of_the_document_clamps():
+    screen, _doc, _ = follow_doc(60, h=20)
+    assert screen.max_top == 41
+    assert screen.top_for_span(57, 59, 0, 2, 20) == 41
+    assert screen.follow_top_for_span(57, 59, 2, 20) == 41
+    assert screen.top_for_span(0, 2, 30, 2, 20) == 0
+
+
+def test_a_zero_height_body_leaves_the_span_alone():
+    screen, _doc, _ = follow_doc(40, h=1)
+    assert screen.body_height == 0
+    assert screen.top_for_span(10, 12, 7, 2, 20) == screen.clamp_top(7)

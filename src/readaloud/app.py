@@ -389,6 +389,35 @@ class App:
             return self._target[0]
         return self._active
 
+    def _row_span(self, cidx: int | None) -> tuple[int, int] | None:
+        """The display rows ``(first, last)`` of cell chunk `cidx`'s table row.
+
+        Follow mode keeps a table row in view whole rather than the spoken
+        word: every cell of a wrapped row starts back on the row's first line,
+        so following the word would scroll down through one cell and back up
+        for the next.  None for any other chunk, and for a row too tall to fit
+        between the margins, where only following the word keeps it on screen.
+        """
+        chunks = getattr(self.doc, "chunks", None) or ()
+        if cidx is None or not 0 <= cidx < len(chunks):
+            return None
+        chunk = chunks[cidx]
+        h = self.screen.body_height
+        if getattr(chunk, "kind", None) != "cell" or h <= 0:
+            return None
+        first = self.screen.first_row_of_line(chunk.line_start)
+        if chunk.line_end >= len(self.doc.plain):
+            # first_row_of_line clamps: past the last line it gives the last
+            # row, not one past it
+            last = len(self.screen.rows) - 1
+        else:
+            last = self.screen.first_row_of_line(chunk.line_end) - 1
+        last = max(first, last)
+        m = min(self.follow_margin, max(0, (h - 1) // 2))
+        if last - first + 1 > h - 2 * m:
+            return None
+        return first, last
+
     # -- lifecycle ---------------------------------------------------------
 
     def start(self) -> None:
@@ -800,10 +829,12 @@ class App:
             self.cur_word = None
             if self.follow:
                 # React, don't reposition: a chunk already on screen should
-                # not move the page.
+                # not move the page.  A table cell is on screen when its whole
+                # row is, or the first word read would move it anyway.
                 row = self.screen.first_row_of_line(self.doc.chunks[nxt].line_start)
-                self.top = self.screen.top_for_row(
-                    row, self.top, self.follow_margin, self.follow_lead
+                first, last = self._row_span(nxt) or (row, row)
+                self.top = self.screen.top_for_span(
+                    first, last, self.top, self.follow_margin, self.follow_lead
                 )
             return
 
@@ -835,14 +866,20 @@ class App:
             # jump a second time on the very next auto-scroll.  `F` still
             # centres, which is what makes the two keys usefully different.
             self.follow = True
-            if self.cur_word is not None:
+            cur = (self.doc.chunk_of_word(self.cur_word)
+                   if self.cur_word is not None else self._current_chunk())
+            span = self._row_span(cur)
+            if span is not None:
+                # a table row: where tick's top_for_span leaves it
+                self.top = self.screen.follow_top_for_span(
+                    *span, self.follow_margin, self.follow_lead
+                )
+            elif self.cur_word is not None:
                 self.top = self.screen.follow_top_for_word(
                     self.cur_word, self.follow_margin, self.follow_lead
                 )
-            elif self._current_chunk() is not None:
-                row = self.screen.first_row_of_line(
-                    self.doc.chunks[self._current_chunk()].line_start
-                )
+            elif cur is not None:
+                row = self.screen.first_row_of_line(self.doc.chunks[cur].line_start)
                 self.top = self.screen.follow_top_for_row(
                     row, self.follow_margin, self.follow_lead
                 )
@@ -1006,9 +1043,15 @@ class App:
                 and self.player.finished):
             self._advance()
         if self.follow and self.cur_word is not None:
-            self.top = self.screen.top_for_word(
-                self.cur_word, self.top, self.follow_margin, self.follow_lead
-            )
+            span = self._row_span(self.doc.chunk_of_word(self.cur_word))
+            if span is not None:
+                self.top = self.screen.top_for_span(
+                    *span, self.top, self.follow_margin, self.follow_lead
+                )
+            else:
+                self.top = self.screen.top_for_word(
+                    self.cur_word, self.top, self.follow_margin, self.follow_lead
+                )
         # last: whatever changed the playback state this frame -- the button, a
         # keystroke, a click, the end of the document -- is reported from here.
         self._media_sync()

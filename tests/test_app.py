@@ -1,4 +1,5 @@
-"""Regression tests for `readaloud.app`: less-style counts, search, quit.
+"""Regression tests for `readaloud.app`: less-style counts, search, quit,
+and table follow keys.
 
 These drive the real `App` through its real `Keymap`, with the fake
 screen/player/engine from `test_integration` — the same fakes the rest of the
@@ -20,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from test_integration import (  # noqa: E402
-    FakeEngine, FakePlayer, FakeScreen, make_doc,
+    FakeEngine, FakePlayer, FakeScreen, crew_doc, make_doc, prose,
 )
 
 from readaloud import cli  # noqa: E402
@@ -31,11 +32,12 @@ ESC = 27
 CR = 13
 
 
-def build(text=None, *, height=24, autoplay=False):
+def build(text=None, *, doc=None, height=24, autoplay=False):
     """An App on a fake screen, one display row per logical line."""
-    doc = (make_doc() if text is None
-           else cli.build_document(text, max_sentences=4, max_chars=380,
-                                   no_color=False))
+    if doc is None:
+        doc = (make_doc() if text is None
+               else cli.build_document(text, max_sentences=4, max_chars=380,
+                                       no_color=False))
     engine = FakeEngine()
     player = FakePlayer()
     screen = FakeScreen(doc, height=height)
@@ -351,3 +353,53 @@ def test_close_engine_async_returns_immediately():
     assert time.monotonic() - t0 < 0.5
     assert engine.closed.wait(10.0)
     t.join(10.0)
+
+
+# --------------------------------------------------------------------------- #
+# 6. a table read one cell at a time: the follow keys
+#
+# `crew_doc` puts `test_integration.CREW` (a real mdcat render) between lines
+# of prose.  FakeScreen shows one row per line and one cell per char.
+# --------------------------------------------------------------------------- #
+
+
+ROLE = "Designer with a very long title that wraps around the column"
+
+
+def cell(doc, text):
+    """The cell chunk whose text is `text`."""
+    return next(c for c in doc.chunks if c.kind == "cell" and c.text == text)
+
+
+def test_stepping_onto_a_wrapped_row_brings_the_whole_row_into_view():
+    app, doc, screen = build(doc=crew_doc(prose(30), prose(40, "Outro")))
+    body, margin = screen.body_height, app.follow_margin
+    first, last = 34, 36                 # Bob's row after 30 lines of prose
+    app._set_target(cell(doc, "short").idx, None)
+    # Bob's first line sits on the bottom margin, his other two below it
+    app.top = first - (body - 1 - margin)
+    press(app, ".")
+    assert app._target[0] == cell(doc, "Bob").idx
+    assert app.follow
+    assert app.top + margin <= first and last <= app.top + body - 1 - margin
+    # ... and reading on across the row does not move the view again
+    top = app.top
+    for c in (cell(doc, "Bob"), cell(doc, ROLE), cell(doc, "code here")):
+        for widx in c.words:
+            app.cur_word = widx
+            app.tick()
+            assert app.top == top, doc.words[widx].text
+
+
+def test_c_on_a_table_row_parks_the_view_where_follow_mode_leaves_it():
+    app, doc, screen = build(doc=crew_doc(prose(30), prose(40, "Outro")))
+    body, margin = screen.body_height, app.follow_margin
+    first, last = 34, 36
+    app.cur_word = next(w.idx for w in doc.words if w.text == "title")
+    app.follow = False
+    press(app, "c")
+    assert app.follow
+    assert app.top + margin <= first and last <= app.top + body - 1 - margin
+    before = app.top
+    app.tick()
+    assert app.top == before, "c left the view where follow mode moves it again"

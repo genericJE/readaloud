@@ -34,6 +34,7 @@ import tempfile
 import termios
 import time
 import wave
+from typing import Sequence
 
 import numpy as np
 import pytest
@@ -45,7 +46,7 @@ from readaloud.app import (  # noqa: E402
     App, FOLLOW_LEAD, FOLLOW_MARGIN, MAX_SPEED, MIN_SPEED, Prefetcher,
     MEDIA_ELAPSED_EVERY,
 )
-from readaloud.document import Document  # noqa: E402
+from readaloud.document import Document, Table, TableCell  # noqa: E402
 from readaloud.keys import Action, MouseEvent  # noqa: E402
 from readaloud.speech import Spoken, Timed  # noqa: E402
 from readaloud.ui import Row  # noqa: E402
@@ -79,6 +80,52 @@ LONG = "\n".join(
 
 def make_doc(text: str = SAMPLE) -> Document:
     return cli.build_document(text, max_sentences=4, max_chars=380, no_color=False)
+
+
+#: `mdcat --ansi --columns 40` of
+#:   | Name | Role | Notes |
+#:   |------|------|-------|
+#:   | Alice | Engineer | short |
+#:   | Bob | Designer with a very long title that wraps around the column | code here |
+#:   | Carol |  | on leave |
+#: Bob's Role wraps over three lines and his Notes over two; Carol has no Role.
+CREW = [
+    "─" * 40,
+    " Name   Role                      Notes ",
+    "─" * 40,
+    " Alice  Engineer                  short ",
+    " Bob    Designer with a very      code  ",
+    "        long title that wraps     here  ",
+    "        around the column               ",
+    " Carol                            on    ",
+    "                                  leave ",
+    "─" * 40,
+]
+
+
+def crew_doc(before: Sequence[str] = (), after: Sequence[str] = ()) -> Document:
+    """A Document of `before`, the CREW table and `after`, the table mapped.
+
+    The Table is built by hand from the render: rows as line ranges, and every
+    cell's column on every line of its row.  CREW is all single width, so its
+    display columns are char offsets.
+    """
+    top = len(before)
+    rows = [(1, 2), (3, 4), (4, 7), (7, 9)]
+    cells = [TableCell(r, c, [(top + line, x, x + w) for line in range(a, b)])
+             for r, (a, b) in enumerate(rows)
+             for c, (x, w) in enumerate(zip([1, 8, 34], [5, 24, 5]))]
+    table = Table(top, top + len(CREW), 3,
+                  [(top + a, top + b) for a, b in rows], cells)
+    doc = Document.from_text("\n".join([*before, *CREW, *after]),
+                             tables=[table], references=False)
+    assert doc.tables == [table], "the CREW table no longer fits its lines"
+    return doc
+
+
+def prose(n: int, name: str = "Intro") -> list[str]:
+    """`n` one-line sentences, one display row each on a FakeScreen."""
+    return [f"{name} line {i} has a few words." for i in range(n)]
 
 
 # --------------------------------------------------------------------------- #
@@ -201,6 +248,9 @@ class FakeScreen:
         self.last_draw = None
         #: every (widx, top, margin, lead) follow mode asked for
         self.follow_calls: list[tuple] = []
+        #: every (first_row, last_row, top, margin, lead) asked of top_for_span,
+        #: a row's (row, row) included
+        self.span_calls: list[tuple] = []
         self.layout(doc, width)
 
     # geometry
@@ -282,20 +332,25 @@ class FakeScreen:
         m = min(margin, max(0, (h - 1) // 2))
         return self.clamp_top(min(row - m, row - h + 1 + m + lead))
 
-    def top_for_row(self, row, top_row, margin=2, lead=0):
-        # mirrors `ui.Screen.top_for_row`: react, do not reposition
+    def follow_top_for_row(self, row, margin=2, lead=0):
+        return self.follow_top_for_span(row, row, margin, lead)
+
+    def top_for_span(self, first_row, last_row, top_row, margin=2, lead=0):
+        # mirrors `ui.Screen.top_for_span`: react, do not reposition, and keep
+        # a table row in view whole
+        self.span_calls.append((first_row, last_row, top_row, margin, lead))
         h = self.body_height
         m = min(margin, max(0, (h - 1) // 2))
-        if row < top_row + m:
-            return self.clamp_top(row - m)
-        if row > top_row + h - 1 - m:
-            return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        if first_row < top_row + m:
+            return self.clamp_top(first_row - m)
+        if last_row > top_row + h - 1 - m:
+            return self.clamp_top(min(first_row - m, last_row - h + 1 + m + lead))
         return self.clamp_top(top_row)
 
-    def follow_top_for_row(self, row, margin=2, lead=0):
+    def follow_top_for_span(self, first_row, last_row, margin=2, lead=0):
         h = self.body_height
         m = min(margin, max(0, (h - 1) // 2))
-        return self.clamp_top(min(row - m, row - h + 1 + m + lead))
+        return self.clamp_top(min(first_row - m, last_row - h + 1 + m + lead))
 
     def center_on_word(self, widx):
         return self.clamp_top(self.row_of_word(widx) - self.body_height // 2)
@@ -1904,6 +1959,162 @@ def test_an_app_without_media_keys_never_touches_them():
         assert player.playing
     finally:
         app.close()
+
+
+# --------------------------------------------------------------------------- #
+# 3c. a table read one cell at a time
+#
+# The App knows nothing about Markdown: it plays whatever chunks the Document
+# hands it.  What it does own is follow mode, which has to cope with a table
+# row whose cells are read left to right while their lines interleave.
+# --------------------------------------------------------------------------- #
+
+
+def test_an_app_reads_a_table_one_cell_at_a_time():
+    doc = crew_doc(["The table below lists the crew.", ""],
+                   ["", "That was the crew."])
+    app, doc, engine, player, screen = make_app(doc=doc)
+    app.start()
+    try:
+        assert settle(app)
+        heard = [doc.chunks[app._active].text]
+        while True:
+            before = app._active
+            player.finish()
+            assert settle(app, want=lambda: (app._active != before
+                                             or not app.want_play))
+            if not app.want_play:
+                break
+            heard.append(doc.chunks[app._active].text)
+        assert heard == [
+            "The table below lists the crew.",
+            "Name", "Role", "Notes",
+            "Alice", "Engineer", "short",
+            "Bob", "Designer with a very long title that wraps around the column",
+            "code here",
+            "Carol", "on leave",               # the empty Role is skipped
+            "That was the crew.",
+        ]
+        assert "end of document" in app.message
+        assert app.status().nchunks == len(heard)
+        assert all(doc.chunks[c].speakable for c in engine.synth_calls)
+    finally:
+        app.close()
+
+
+def test_the_highlight_follows_a_wrapped_cell_down_its_lines():
+    doc = crew_doc()
+    role = next(c for c in doc.chunks if c.text.startswith("Designer"))
+    app, doc, engine, player, screen = make_app(doc=doc, start_chunk=role.idx)
+    app.start()
+    try:
+        assert settle(app)
+        assert app._active == role.idx
+        seen = []
+        for slot in range(len(role.words)):
+            player.now = slot * 0.1 + 0.05
+            app.tick()
+            seen.append(doc.words[app.cur_word].text)
+        assert " ".join(seen) == role.text
+        # "column" is on the cell's third line, below the neighbour's "here"
+        assert doc.words[app.cur_word].line == 6
+    finally:
+        app.close()
+
+
+def up_scrolls(tops):
+    return [(a, b) for a, b in zip(tops, tops[1:]) if b < a]
+
+
+def test_follow_mode_never_scrolls_up_while_reading_a_table_row():
+    """The reproduction: 24 rows, lead 20.  "column" ends Bob's Role cell on
+    the row's third line and the view scrolls down to it; "code" starts the
+    next cell two lines higher, above the top margin, so following the word
+    scrolled the view back up."""
+    doc = crew_doc(prose(15), prose(60, "Outro"))
+    app, doc, engine, player, screen = make_app(doc=doc, height=24,
+                                                follow_lead=20)
+    # the old policy, word by word in reading order, over the same layout
+    top, tops = 0, []
+    for widx in range(len(doc.words)):
+        top = screen.top_for_word(widx, top, FOLLOW_MARGIN, 20)
+        tops.append(top)
+    assert up_scrolls(tops), "this layout no longer reproduces the bug"
+
+    last_cell = max(c.idx for c in doc.chunks if c.kind == "cell")
+    app.start()
+    try:
+        assert settle(app)
+        tops = []
+        for _ in range(4000):
+            app.tick()
+            if app._active is not None and app._active > last_cell:
+                break
+            tops.append(app.top)
+            if app.cur_word is not None:
+                offset = screen.row_of_word(app.cur_word) - app.top
+                assert 0 <= offset < screen.body_height
+            player.advance(0.05)
+            time.sleep(0.001)
+        else:
+            pytest.fail("playback never got past the table")
+        assert max(tops) > 0, "the view never scrolled"
+        assert up_scrolls(tops) == []
+        # Bob's three line row, not just a one-row span from a skip key
+        assert any(first < last for first, last, *_ in screen.span_calls), \
+            "the rows were never followed as rows"
+    finally:
+        app.close()
+
+
+def test_following_a_table_never_scrolls_up_whatever_the_layout():
+    """Word by word through prose, the table and more prose, at every offset
+    of the table against the viewport, for a few heights and leads.  Following
+    the word scrolls up somewhere in this sweep; following the row never does.
+    At 7 rows Bob's three line row does not fit between the margins, so there
+    follow mode keeps to the word, which must still stay on screen."""
+    word_ups, row_ups = [], []
+    for height in (7, 8, 12, 24, 30):
+        for before in range(20):
+            for lead in (0, 20):
+                doc = crew_doc(prose(before), prose(30, "Outro"))
+                screen = FakeScreen(doc, height=height)
+                app = App(doc, screen, FakePlayer(), FakeEngine(), ahead=0,
+                          follow_lead=lead)
+                bob = next(c.idx for c in doc.chunks if c.text == "Bob")
+                assert (app._row_span(bob) is not None) == (height > 7)
+                word_top, word_tops, row_tops = 0, [], []
+                for widx in range(len(doc.words)):
+                    word_top = screen.top_for_word(widx, word_top,
+                                                   FOLLOW_MARGIN, lead)
+                    word_tops.append(word_top)
+                    app.cur_word = widx
+                    app.tick()               # never started: tick only follows
+                    row = screen.row_of_word(widx)
+                    assert app.top <= row < app.top + screen.body_height
+                    row_tops.append(app.top)
+                if up_scrolls(word_tops):
+                    word_ups.append((height, before, lead))
+                if height > 7 and up_scrolls(row_tops):
+                    row_ups.append((height, before, lead))
+    assert word_ups, "the sweep no longer reproduces the bug"
+    assert row_ups == []
+
+
+def test_a_row_that_ends_the_document_ends_on_the_last_row():
+    """first_row_of_line clamps, so ``first_row_of_line(line_end) - 1`` would
+    stop one row short at the end of the document."""
+    doc = crew_doc(prose(3))
+    app, doc, engine, player, screen = make_app(doc=doc, height=30)
+    carol = next(c for c in doc.chunks if c.text == "Carol")
+    assert app._row_span(carol.idx) == (10, 11)
+    carol.line_end = len(doc.plain)          # as if no rule followed the row
+    assert app._row_span(carol.idx) == (10, len(screen.rows) - 1)
+    # not a cell, or too tall to fit between the margins: follow the word
+    assert app._row_span(doc.chunk_of_word(0)) is None
+    small, *_ = make_app(doc=crew_doc(prose(3)), height=7)
+    bob = next(c for c in small.doc.chunks if c.text == "Bob")
+    assert small._row_span(bob.idx) is None
 
 
 # --------------------------------------------------------------------------- #
