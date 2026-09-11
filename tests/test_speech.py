@@ -148,6 +148,31 @@ def test_word_spans_uses_exact_word_texts_when_given():
     assert [text[a:b] for a, b in spans] == ["co-operate", "now"]
 
 
+def test_word_spans_are_exact_in_a_cell_that_names_its_glyphs():
+    """A glyph's slot says its name, spaces and all, and still aligns."""
+    from readaloud.document import Document, Table, TableCell
+
+    # a table drawn like mdcat's, with a row like the README's keys table
+    plain = ["─" * 24, " Keys           Action  ", "─" * 24,
+             " j · ↓ · Enter  down    ", "─" * 24]
+    cells = [TableCell(0, 0, [(1, 1, 14)]), TableCell(0, 1, [(1, 16, 23)]),
+             TableCell(1, 0, [(3, 1, 14)]), TableCell(1, 1, [(3, 16, 23)])]
+    table = Table(0, 5, 2, [(1, 2), (3, 4)], cells)
+    doc = Document.from_text("\n".join(plain), tables=[table], references=False)
+    keys = next(c for c in doc.chunks if c.cell == (0, 1, 0))
+    assert keys.text == "j, down arrow, Enter"
+
+    spans = word_spans(keys.text, keys.offsets, keys.word_texts)
+    assert spans == keys.spans()
+    assert [keys.text[a:b] for a, b in spans] == ["j", "down arrow", "Enter"]
+    toks = [FakeToken("j", "", 0.0, 0.2), FakeToken(",", " ", 0.2, 0.3),
+            FakeToken("down", " ", 0.3, 0.5), FakeToken("arrow", "", 0.5, 0.8),
+            FakeToken(",", " ", 0.8, 0.9), FakeToken("Enter", "", 0.9, 1.2)]
+    timed = align_words(keys.text, spans, [(toks, 1.2)])
+    assert [(slot, round(a, 3), round(b, 3)) for slot, a, b in timed] == [
+        (0, 0.0, 0.2), (1, 0.3, 0.8), (2, 0.9, 1.2)]
+
+
 def test_word_spans_are_sorted_non_overlapping_and_clamped():
     text = "one two"
     # deliberately bogus offsets: out of order and past the end

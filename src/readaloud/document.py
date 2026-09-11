@@ -13,21 +13,29 @@ Invariants other modules rely on (all covered by tests/test_document.py):
 
 * ``doc.plain[w.line][w.start:w.end] == w.text`` for every word -- ``Word.text``
   is a *verbatim* slice of the line, never normalised.  ``readaloud.speech``
-  derives each word's end offset as ``offset + len(word.text)``, which is only
-  correct because of this.
+  ends each slot at ``offset + len(chunk.word_texts[i])``, which is the word's
+  own text except for a symbol a table cell reads by name (below).
 * ``doc.words`` is in reading order and ``doc.words[i].idx == i``.  Reading
   order is line order, except inside a table (see below): there it is row by
   row, cell by cell, and line then start within a cell, so a wrapped cell's
   second line comes before its right-hand neighbour's first.
-* ``chunk.text[chunk.offsets[i]:][:len(w.text)] == w.text`` where
-  ``w = doc.words[chunk.words[i]]``.
+* ``chunk.text[chunk.offsets[i]:][:len(t)] == t`` where
+  ``t = chunk.word_texts[i]``, and ``t == doc.words[chunk.words[i]].text``
+  except for a symbol a table cell reads by name: every symbol of a symbol
+  cell (nothing but symbols, like ✓ or `.` · `→`), whose slots say the names
+  ("yes", "dot", "right arrow") a comma apart, and every glyph (a tick, a
+  cross, an arrow or a key like ⌘) of a cell with words, whose slot says its
+  name in place ("✓³" is "yes ³").  The word still covers its symbol on
+  screen.
 * ``chunk.words`` is contiguous and ascending; concatenating the ``words`` lists
   of all chunks in order reproduces ``range(len(doc.words))`` exactly -- every
   word lives in exactly one chunk.
 * ``chunk.text`` is a verbatim slice of ``"\\n".join(doc.plain)``, so a chunk
   that spans several lines keeps its newlines and its indentation -- except a
   table cell, whose text is its trimmed per line segments joined by the
-  cell's ``joins`` (a wrapped cell's lines interleave with its neighbours').
+  cell's ``joins`` (a wrapped cell's lines interleave with its neighbours'),
+  with the names above in place of their symbols and a separator such as
+  "·" between words said as a comma.
 * Chunks cover every line of the document.  ``chunk.line_start`` is inclusive,
   ``chunk.line_end`` is **exclusive**.  Consecutive chunks may share one line
   (when a long paragraph is split at a sentence boundary in the middle of a
@@ -134,7 +142,8 @@ class Chunk:
     line_end: int              # EXCLUSIVE
     # --- additive: defaulted, so the positional order above stays valid ---
     speakable: bool = True     # False => nothing to say; playback skips it
-    word_texts: list[str] = field(default_factory=list)  # doc.words[i].text
+    #: doc.words[i].text, or the name a table cell says for a symbol
+    word_texts: list[str] = field(default_factory=list)
     #: "para" | "code" | "blank" | "cell" | "rule"; "text" is only the
     #: default, for chunks built by hand
     kind: str = "text"
@@ -558,6 +567,56 @@ def _paragraph_spans(text: str, lo: int, hi: int, max_sentences: int,
 # tables
 # ---------------------------------------------------------------------------
 
+# A table cell holding nothing but symbols is read as their names rather than
+# skipped: in a table of keys (`.` · `→`) or of ticks the symbols ARE the
+# content.  Kokoro says nothing for ✓, ✗ or a lone "." and "white heavy check
+# mark" for ✅ (measured), so the Document supplies the words.  A tick or a
+# cross reads as a plain "yes" or "no".  Beside words only the glyphs below
+# are named: ASCII punctuation and dashes are punctuation to the TTS there.
+_DASHES = "-‐‑–—―"
+_SPOKEN_SYMBOLS: dict[str, str] = {
+    **dict.fromkeys("✓✔✅☑🗸", "yes"),
+    **dict.fromkeys("✗✘❌✖❎🗙", "no"),
+    **dict.fromkeys(_DASHES, "dash"),
+    ".": "dot", ",": "comma", ":": "colon", ";": "semicolon",
+    "/": "slash", "\\": "backslash", "|": "pipe",
+    "?": "question mark", "!": "exclamation mark",
+    "(": "left parenthesis", ")": "right parenthesis",
+    "[": "left bracket", "]": "right bracket",
+    "{": "left brace", "}": "right brace",
+    "<": "less than", ">": "greater than",
+    "=": "equals", "+": "plus", "*": "star", "#": "hash", "@": "at",
+    "&": "ampersand", "%": "percent", "$": "dollar", "^": "caret",
+    "~": "tilde", "_": "underscore", "`": "backtick",
+    "'": "quote", '"': "double quote",
+    "←": "left arrow", "→": "right arrow", "↑": "up arrow", "↓": "down arrow",
+    "↵": "return", "⏎": "return", "⇥": "tab", "⇧": "shift",
+    "⌃": "control", "⌥": "option", "⌘": "command", "⌫": "delete",
+    "⎋": "escape",
+}
+# ticks, crosses, arrows and keys: named wherever they stand in a cell, since
+# beside a word Kokoro drops them or reads them by their Unicode names, so
+# "✓ (partial)" and "✗ (partial)" would sound the same
+_GLYPHS = frozenset(symbol for symbol in _SPOKEN_SYMBOLS
+                    if not symbol.isascii() and symbol not in _DASHES)
+# written between symbols ("`.` · `→`"), never read; between words, a comma
+_SILENT_SYMBOLS = frozenset("·•∙⋅")
+# text (U+FE0E) and emoji (U+FE0F) presentation: the same glyph either way
+_VARIATION_SELECTORS = str.maketrans(
+    "", "", "\N{VARIATION SELECTOR-15}\N{VARIATION SELECTOR-16}")
+
+
+def _symbol_name(token: str) -> str | None:
+    """How to say one whitespace-free piece of a symbol cell, None if unknown.
+
+    One symbol only: "--" is one dash, but "..." or "->" is left unread rather
+    than guessed at.
+    """
+    key = token.translate(_VARIATION_SELECTORS)
+    if len(key) > 1 and not key.strip(_DASHES):
+        key = key[0]
+    return _SPOKEN_SYMBOLS.get(key)
+
 
 def _gap(col: int, start: int, end: int) -> int:
     """How many chars `col` lies outside ``[start, end)``; 0 inside."""
@@ -679,14 +738,63 @@ def _place_tables(plain: Sequence[str], words: Sequence[Word],
     return used, cells
 
 
+_TOKEN_RE = re.compile(r"\S+")
+
+
+def _symbol_words(plain: Sequence[str], cell: TableCell) -> list[Word]:
+    """A Word over each symbol of a word-free cell, so the cell can be spoken.
+
+    Empty unless every piece of the cell is a symbol with a name (or a
+    separator such as "·"): half a cell read aloud is worse than none.
+    """
+    found: list[Word] = []
+    for line, s, e in cell.spans:
+        for m in _TOKEN_RE.finditer(plain[line], s, e):
+            token = m.group()
+            if token.translate(_VARIATION_SELECTORS) in _SILENT_SYMBOLS:
+                continue
+            if _symbol_name(token) is None:
+                return []
+            found.append(Word(text=token, line=line, start=m.start(),
+                              end=m.end(), idx=-1))
+    return found
+
+
+def _glyph_words(plain: Sequence[str], cell: TableCell,
+                 cell_words: Sequence[Word]) -> list[Word]:
+    """A Word over each glyph (see `_GLYPHS`) of a cell that has words.
+
+    Found char by char, because a glyph is often glued to what follows it
+    ("✓³", "⌘K"), but never inside one of `cell_words` (a URL).  A variation
+    selector right after the glyph belongs to its Word.
+    """
+    found: list[Word] = []
+    for line, s, e in cell.spans:
+        text = plain[line]
+        taken = [(w.start, w.end) for w in cell_words if w.line == line]
+        k = s
+        while k < e:
+            if text[k] not in _GLYPHS or any(a <= k < b for a, b in taken):
+                k += 1
+                continue
+            end = k + 1
+            if end < e and ord(text[end]) in _VARIATION_SELECTORS:
+                end += 1
+            found.append(Word(text=text[k:end], line=line, start=k, end=end,
+                              idx=-1))
+            k = end
+    return found
+
+
 def _layout_tables(plain: Sequence[str], words: list[Word],
                    tables: Iterable[Table] | None
                    ) -> tuple[list[Table], list[list[list[int]]]]:
     """Fit `tables` to `words`, then put `words` into reading order in place.
 
-    Sorts every table's words row by row and cell by cell between the words
-    around the table, and renumbers ``Word.idx``.  Returns the tables in use
-    and, per table, per cell, the global indices of that cell's words.
+    Adds a Word for every symbol of a symbol cell and for every glyph of a cell
+    with words, sorts every table's words row by row and cell by cell between
+    the words around the table, and renumbers ``Word.idx``.  Returns the tables
+    in use and, per table, per cell, the global indices of that cell's words.
     """
     used, claimed = _place_tables(plain, words, tables)
     if not used:
@@ -695,6 +803,13 @@ def _layout_tables(plain: Sequence[str], words: list[Word],
     for table, cells in zip(used, claimed):
         for k, cell_words in enumerate(cells):
             row, col = divmod(k, table.ncols)
+            cell = table.cells[k]
+            spoken = (_glyph_words(plain, cell, cell_words) if cell_words
+                      else _symbol_words(plain, cell))
+            if spoken:
+                cell_words.extend(spoken)
+                cell_words.sort(key=lambda w: (w.line, w.start))
+                words.extend(spoken)
             for w in cell_words:
                 order[id(w)] = (table.rows[row][0], col)
 
@@ -715,13 +830,27 @@ def _cell_text(plain: Sequence[str], words: Sequence[Word], cell: TableCell,
 
     The text is the cell's trimmed segments, line by line, joined by the
     cell's ``joins`` -- "" rejoins a word the renderer broke across lines, so
-    the TTS hears one word where the screen shows two pieces.
+    the TTS hears one word where the screen shows two pieces.  A symbol cell
+    says its symbols' names instead, and in a cell with words every glyph Word
+    says its name in place, see :func:`_spoken_glyphs`.
     """
     ws = [words[i] for i in widxs]
+    names = [_symbol_name(w.text) for w in ws]
+    if ws and all(names):
+        # a symbol cell (no real word ever has a name): say the names, a
+        # comma apart so "dot, right arrow" is not heard as one phrase
+        text, offsets = "", []
+        for name in names:
+            if text:
+                text += ", "
+            offsets.append(len(text))
+            text += name
+        return text, offsets, names
     joins = cell.joins if isinstance(cell.joins, (list, tuple)) else ()
     parts: list[str] = []
     size = 0
     landed: dict[int, tuple[int, int]] = {}   # line -> (start, pos in text)
+    edges: set[int] = set()     # where a segment starts, and one past its end
     for i, (line, s, e) in enumerate(cell.spans):
         start, core = _trimmed(plain, line, s, e)
         if not core:
@@ -733,10 +862,61 @@ def _cell_text(plain: Sequence[str], words: Sequence[Word], cell: TableCell,
             size += len(join)
         landed[line] = (start, size)
         parts.append(core)
+        edges.update((size, size + len(core)))
         size += len(core)
     text = "".join(parts)
     offsets = [landed[w.line][1] + w.start - landed[w.line][0] for w in ws]
-    return text, offsets, [w.text for w in ws]
+    if not ws or (not any(names) and _SILENT_SYMBOLS.isdisjoint(text)):
+        return text, offsets, [w.text for w in ws]
+    return _spoken_glyphs(text, offsets, ws, names, edges)
+
+
+def _spoken_glyphs(text: str, offsets: Sequence[int], ws: Sequence[Word],
+                   names: Sequence[str | None], edges: Container[int]
+                   ) -> tuple[str, list[int], list[str]]:
+    """A worded cell's `text`, its glyphs named and its separators commas.
+
+    Each glyph Word (the ones with a name) is replaced by its name, with a
+    space on either side where the text has none ("✓³" is "yes ³", "⌘K" is
+    "command K").  A separator such as "·" standing alone, between whitespace
+    or at a segment's edge (positions in `edges`), becomes a comma after the
+    text before it: "j · ↓ · Enter" is "j, down arrow, Enter".  Kokoro gives
+    "·" no pause, and a token with no sound upsets its word timestamps.
+    Returns (text, offsets, word_texts) with `offsets` moved to match.
+    """
+    slot_at = {off: slot for slot, off in enumerate(offsets)}
+    moved = list(offsets)
+    out = ""
+    j, n = 0, len(text)
+    while j < n:
+        slot = slot_at.get(j)
+        name = names[slot] if slot is not None else None
+        if name:
+            if out and not out[-1].isspace():
+                out += " "
+            moved[slot] = len(out)
+            out += name
+            j += len(ws[slot].text)
+            if j < n and not text[j].isspace():
+                out += " "
+            continue
+        ch = text[j]
+        if (ch in _SILENT_SYMBOLS
+                and (j in edges or text[j - 1].isspace())
+                and (j + 1 in edges or text[j + 1].isspace())):
+            out = out.rstrip()
+            if out and out[-1] not in ",;:":
+                out += ","
+            j += 1
+            if not out:                 # nothing before it: no comma either
+                while j < n and text[j].isspace():
+                    j += 1
+            continue
+        if slot is not None:
+            moved[slot] = len(out)
+        out += ch
+        j += 1
+    return out, moved, [name or w.text for w, name in zip(ws, names)]
 
 
 def _table_chunks(plain: Sequence[str], words: Sequence[Word], table: Table,
@@ -1206,11 +1386,13 @@ class Document:
         return None
 
     def word_span_in_chunk(self, widx: int) -> tuple[int, int]:
-        """``(start, end)`` of word ``widx`` inside its own chunk's text."""
+        """``(start, end)`` of word ``widx``'s slot in its own chunk's text."""
         chunk = self.chunks[self._chunk_of[widx]]
         slot = self._slot_of[widx]
         start = chunk.offsets[slot]
-        return (start, start + len(self.words[widx].text))
+        text = (chunk.word_texts[slot] if slot < len(chunk.word_texts)
+                else self.words[widx].text)
+        return (start, start + len(text))
 
     @property
     def speakable_chunks(self) -> list[int]:

@@ -32,6 +32,8 @@ from readaloud.document import (                                 # noqa: E402
     sentence_spans,
     split_words,
     line_word_spans,
+    _GLYPHS,
+    _symbol_name,
 )
 from readaloud.width import cell_offsets                         # noqa: E402
 
@@ -100,8 +102,21 @@ def check_invariants(d: Document) -> None:
             # the beat between rows follows the last cell that is read
             assert c.row_end == (col == last_spoken.get((t, row), -1)), (
                 f"cell chunk {c.idx} {c.cell}: row_end {c.row_end}")
-            for widx in c.words:
+            names = [_symbol_name(d.words[widx].text) for widx in c.words]
+            symbols = bool(names) and all(names)
+            if symbols:
+                # a symbol cell says the symbols' names, a comma apart
+                assert c.word_texts == names
+                assert c.text == ", ".join(names)
+            for slot, widx in enumerate(c.words):
                 w = d.words[widx]
+                # a symbol's slot says its name, a word's slot its text; beside
+                # words only a glyph (and its variation selector) has a name
+                assert c.word_texts[slot] == (names[slot] or w.text)
+                if names[slot] and not symbols:
+                    assert w.text[0] in _GLYPHS and w.text[1:] in (
+                        "", "\N{VARIATION SELECTOR-15}",
+                        "\N{VARIATION SELECTOR-16}"), w.text
                 assert any(line == w.line and s <= w.start and w.end <= e
                            for line, s, e in c.regions), (
                     f"cell chunk {c.idx}: {w.text!r} outside its regions")
@@ -122,18 +137,19 @@ def check_invariants(d: Document) -> None:
             end = base + len(c.text)
             assert end <= line_off[c.line_end - 1] + len(d.plain[c.line_end - 1]), (
                 f"chunk {c.idx} runs past the line it claims")
+            for slot, widx in enumerate(c.words):
+                assert c.word_texts[slot] == d.words[widx].text
         if c.kind == "rule":
             assert not c.words and c.line_end == c.line_start + 1
         for slot, widx in enumerate(c.words):
-            w = d.words[widx]
             off = c.offsets[slot]
+            wt = c.word_texts[slot]
             assert 0 <= off <= len(c.text)
-            assert c.text[off:off + len(w.text)] == w.text, (
-                f"chunk {c.idx} slot {slot}: {w.text!r} not at offset {off}")
-            assert c.word_texts[slot] == w.text
+            assert c.text[off:off + len(wt)] == wt, (
+                f"chunk {c.idx} slot {slot}: {wt!r} not at offset {off}")
             assert d.chunk_of_word(widx) == c.idx
             assert d.slot_of_word(widx) == slot
-            assert d.word_span_in_chunk(widx) == (off, off + len(w.text))
+            assert d.word_span_in_chunk(widx) == (off, off + len(wt))
         # contiguous and ascending
         if c.words:
             assert c.words == list(range(c.words[0], c.words[0] + len(c.words)))
@@ -853,8 +869,9 @@ def feat_table() -> Table:
                 [7, 4, 23], {(2, 2): ["", "", ""]})
 
 
-# mdcat --ansi --columns 40 of glyphs: a heavy check in emoji presentation,
-# a ballot box, a cancellation X, two checks, and a cross with a full stop
+# mdcat --ansi --columns 40 of more glyphs: a heavy check in emoji
+# presentation, a ballot box, a cancellation X, and two cells that are not a
+# lone glyph (two checks, a cross with a full stop)
 VS16 = "\N{VARIATION SELECTOR-16}"
 GLYPHS = [
     "",
@@ -869,7 +886,7 @@ GLYPHS = [
 ]
 
 
-def glyphs_table(plain: list[str], top: int) -> Table:
+def glyphs_table(plain: list[str] = GLYPHS, top: int = 1) -> Table:
     rows = [(top + 1, top + 2), (top + 3, top + 4), (top + 4, top + 5),
             (top + 5, top + 6)]
     return grid(plain, top, rows, [1, 6], [3, 2])
@@ -997,7 +1014,8 @@ def test_empty_cells_are_kept_but_unspeakable():
 
 
 # mdcat --ansi --columns 40 of a table with a sparse last column: an empty
-# header cell, an empty cell, a star, a row of empty cells and a tick
+# header cell, an empty cell, a symbol with no name, a row of empty cells and
+# a tick
 SPARSE = [
     "",
     "─" * 22,
@@ -1017,8 +1035,8 @@ SPARSE = [
 def test_the_beat_between_rows_follows_the_last_cell_that_is_read():
     """row_end is on the last cell of a row that is read, not the last column.
 
-    A last cell with nothing to say is skipped by playback, so a beat on it
-    would never be heard and the row would run into the next one.
+    An empty or unnamed last cell is skipped by playback, so the beat on it
+    was never heard and the row ran into the next one.
     """
     table = grid(SPARSE, 1, [(2, 3), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9),
                              (9, 10)], [1, 8, 15], [5, 5, 6])
@@ -1031,7 +1049,7 @@ def test_the_beat_between_rows_follows_the_last_cell_that_is_read():
         ("Test", True, False), ("Bob", True, True), ("", False, False),
         ("Ship", True, False), ("Carol", True, True), ("★", False, False),
         ("", False, False), ("", False, False), ("", False, False),
-        ("Lint", True, False), ("Eve", True, True), ("✓", False, False),
+        ("Lint", True, False), ("Eve", True, False), ("yes", True, True),
         ("Docs", True, False), ("Dave", True, False), ("later", True, True)]
     # in playback order, the beat comes exactly where the row changes
     order = []
@@ -1042,6 +1060,162 @@ def test_the_beat_between_rows_follows_the_last_cell_that_is_read():
     rows = [c.cell[1] for c in order] + [None]
     assert [c.row_end for c in order] == [
         rows[k] != rows[k + 1] for k in range(len(order))]
+    check_invariants(d)
+
+
+def test_a_lone_check_or_cross_cell_says_yes_or_no():
+    d = Document.from_text("\n".join(FEAT), tables=[feat_table()],
+                           references=False)
+    cell = cells_of(d)
+    for rc, glyph, spoken in [((1, 1), "✓", "yes"), ((2, 1), "✗", "no"),
+                              ((3, 1), "✅", "yes")]:
+        c = cell[rc]
+        assert c.speakable and c.text == spoken
+        assert c.offsets == [0] and c.word_texts == [spoken]
+        w = d.words[c.words[0]]
+        assert w.text == glyph                  # the highlight covers the glyph
+        assert d.word_at(w.line, w.start) == w.idx
+        assert d.word_span_in_chunk(w.idx) == (0, len(spoken))
+    assert not cell[(3, 2)].speakable           # Retry has no notes
+    check_invariants(d)
+
+    d = Document.from_text("\n".join(GLYPHS), tables=[glyphs_table()])
+    cells = [c for c in d.chunks if c.kind == "cell"]
+    assert [c.text for c in cells] == ["a", "b", "yes", "no", "yes", "no",
+                                       "yes, yes", "✗."]
+    assert [c.speakable for c in cells] == [True] * 7 + [False]
+    assert d.words[cells[2].words[0]].text == "✔" + VS16
+    check_invariants(d)
+    # outside a table a glyph stays silent, as before
+    assert Document.from_text("✓").words == []
+
+
+# mdcat --ansi --columns 40 of a keys table like the README's:
+#   | Key | Action |
+#   | --- | --- |
+#   | `Space` | play / pause |
+#   | `.` &middot; `→` | next chunk |
+#   | `]` &middot; `[` | faster / slower |
+#   | — | none |
+#   | `->` ★ | not read |
+KEYS = [
+    "",
+    "─" * 24,
+    " Key    Action          ",
+    "─" * 24,
+    " Space  play / pause    ",
+    " . · →  next chunk      ",
+    " ] · [  faster / slower ",
+    " —      none            ",
+    " -> ★   not read        ",
+    "─" * 24,
+    "",
+]
+
+
+def test_a_cell_of_symbols_reads_their_names():
+    table = grid(KEYS, 1, [(2, 3), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9)],
+                 [1, 8], [5, 15])
+    d = Document.from_text("\n".join(KEYS), tables=[table], references=False)
+    cell = cells_of(d)
+    dot = cell[(2, 0)]
+    assert dot.text == "dot, right arrow"          # the "·" between is not read
+    assert dot.word_texts == ["dot", "right arrow"] and dot.offsets == [0, 5]
+    # each spoken name highlights its own symbol on screen
+    assert [d.words[w].text for w in dot.words] == [".", "→"]
+    assert d.word_at(5, 5) == dot.words[1]
+    assert cell[(3, 0)].text == "right bracket, left bracket"
+    assert cell[(4, 0)].text == "dash"
+    # "->" is not one symbol and "★" has no name: rather than half the cell,
+    # none of it
+    assert not cell[(5, 0)].speakable
+    assert cell[(5, 1)].text == "not read"
+    check_invariants(d)
+
+
+# mdcat --ansi --columns 40 of glyphs beside words: ticks and crosses before
+# a note, a footnote number and a word, command glued to a letter or not, the
+# README's keys, a dash and ASCII punctuation, a tick inside a URL, and
+# arrows between separators
+GLYPH_MIX = [
+    "",
+    "─" * 38,
+    " Feature  Mark                        ",
+    "─" * 38,
+    " Paren    ✓ (partial)                 ",
+    " Paren    ✗ (partial)                 ",
+    " Sup      ✓³                          ",
+    " Emoji    ✅ Supported                ",
+    " Heavy    ✔" + VS16 + " ok                        ",
+    " Keys     ⌘ K                         ",
+    " Glued    ⌘K                          ",
+    " Nav      j · ↓ · Enter               ",
+    " Del      d · ^D                      ",
+    " Dash     a — b. c, d                 ",
+    " Link     https://x.io/✓ ok           ",
+    " Wrap     open · ← back · → next page ",
+    "─" * 38,
+    "",
+]
+
+
+def glyph_mix_table() -> Table:
+    rows = [(2, 3)] + [(line, line + 1) for line in range(4, 16)]
+    return grid(GLYPH_MIX, 1, rows, [1, 10], [7, 27])
+
+
+def test_a_glyph_beside_words_is_read_by_name_in_place():
+    """Kokoro drops ✓, ✗ and ⌘ and names ✅ by Unicode, so a cell names them."""
+    d = Document.from_text("\n".join(GLYPH_MIX), tables=[glyph_mix_table()],
+                           references=False)
+    assert d.tables == [glyph_mix_table()]
+    mark = [c for c in d.chunks if c.kind == "cell" and c.cell[2] == 1]
+    assert [c.text for c in mark] == [
+        "Mark",
+        "yes (partial)", "no (partial)",      # not both "partial"
+        "yes ³",                              # not "three"
+        "yes Supported",                      # not "white heavy check mark"
+        "yes ok",
+        "command K", "command K",
+        "j, down arrow, Enter",               # "·" is a pause, not nothing
+        "d, ^D",                              # an ASCII caret stays text
+        "a — b. c, d",                        # so do a dash and punctuation
+        "https://x.io/✓ ok",                  # and a glyph inside a word
+        "open, left arrow back, right arrow next page"]
+
+    # every glyph has a word of its own, which says its name
+    nav = mark[8]
+    assert [d.words[w].text for w in nav.words] == ["j", "↓", "Enter"]
+    assert nav.word_texts == ["j", "down arrow", "Enter"]
+    assert nav.offsets == [0, 3, 15]
+    assert [d.words[w].text for w in mark[5].words] == ["✔" + VS16, "ok"]
+    assert mark[3].word_texts == ["yes", "³"]
+    assert mark[9].word_texts == ["d", "D"]
+    assert mark[10].word_texts == ["a", "b", "c", "d"]
+    assert mark[11].word_texts == ["https://x.io/✓", "ok"]
+
+    # the highlight covers the glyph, and a click on it finds that word
+    tick = d.words[mark[3].words[0]]
+    assert (tick.text, tick.line, tick.start, tick.end) == ("✓", 6, 10, 11)
+    assert d.word_at(6, 10) == tick.idx
+    assert d.nearest_word(6, 10) == tick.idx
+    assert d.word_span_in_chunk(tick.idx) == (0, len("yes"))
+    command = d.words[mark[7].words[0]]
+    assert (command.text, d.word_at(10, 10)) == ("⌘", command.idx)
+    check_invariants(d)
+
+    # a separator at the edge of a wrapped line, next to the text of the
+    # next, is a comma too
+    wrapped = GLYPH_MIX[:15] + [" Wrap     open · ← back ·             ",
+                                "          → next page                 "
+                                ] + GLYPH_MIX[16:]
+    rows = [(2, 3)] + [(line, line + 1) for line in range(4, 15)] + [(15, 17)]
+    table = grid(wrapped, 1, rows, [1, 10], [7, 27], {(12, 1): [" ", ""]})
+    d = Document.from_text("\n".join(wrapped), tables=[table],
+                           references=False)
+    assert d.tables == [table]
+    assert d.chunks[d.cell_at(16, 12)].text == (
+        "open, left arrow back, right arrow next page")
     check_invariants(d)
 
 
@@ -1134,7 +1308,7 @@ def test_references_false_silences_the_references_of_images_in_links():
         ("para", "A fast tool[1]. See the docs."),
         ("cell", "Flag"), ("cell", "Meaning"),
         ("cell", "-i"), ("cell", "ignore case[1]"),
-        ("cell", "CI"),
+        ("cell", "CI"), ("cell", "yes"),
         ("para", "[1]: Measured on a laptop."),
     ]
     # the markers leave the screen as they do on the pipe; the references and
@@ -1312,7 +1486,8 @@ def test_two_tables_and_the_prose_around_them_keep_reading_order():
     assert texts(d) == (
         ["Intro", "one"] + texts(Document.from_text("\n".join(BASIC),
                                                     tables=[basic_table()]))
-        + ["Between", "the", "tables", "a", "b", "Outro"])
+        + ["Between", "the", "tables", "a", "b", "✔" + VS16, "❌", "☑", "🗙",
+           "✓", "✓", "Outro"])
     assert [c.kind for c in d.chunks if c.kind != "cell"] == [
         "para", "rule", "rule", "rule", "blank", "para", "rule", "rule", "rule",
         "para"]
@@ -1503,7 +1678,16 @@ def test_fuzz_random_tables_keep_every_invariant():
                 continue
             t, r, k = c.cell
             tokens = sources[t][r][k].split()
-            assert c.text == " ".join(tokens)
+            names = {"✓": "yes", "✗": "no", "--": "dash"}
+            glyphs = {"✓": "yes", "✗": "no"}
+            if tokens and all(tok in names for tok in tokens):
+                assert c.text == ", ".join(names[tok] for tok in tokens)
+            elif c.words:
+                # beside words a tick or a cross is named too, a dash is not
+                assert c.text == " ".join(glyphs.get(tok, tok)
+                                          for tok in tokens)
+            else:
+                assert c.text == " ".join(tokens)
             for line, s, e in c.regions:
                 for col in (s, e - 1):
                     assert d.cell_at(line, col) == c.idx
