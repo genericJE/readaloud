@@ -12,6 +12,7 @@ import copy
 import os
 import sys
 from bisect import bisect_left
+from dataclasses import replace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), "src"))
@@ -826,6 +827,32 @@ def blanks_table() -> Table:
     return grid(BLANKS, 1, rows, [1, 5], [2, 4])
 
 
+# mdcat --ansi --columns 40 of a paragraph, a table of ticks with a footnote
+# reference and a wrapped URL, and the footnote
+FEAT = [
+    "",
+    "Features compared below.",
+    "",
+    "─" * 40,
+    " Feature  Fast  Notes                   ",
+    "─" * 40,
+    " Cache     ✓    warm starts[1]          ",
+    " Sync      ✗    see https://            ",
+    "                example.com/a/very/     ",
+    "                long/path/here          ",
+    " Retry     ✅                           ",
+    "─" * 40,
+    "",
+    "[1]: Only after the first run.",
+    "",
+]
+
+
+def feat_table() -> Table:
+    return grid(FEAT, 3, [(4, 5), (6, 7), (7, 10), (10, 11)], [1, 10, 16],
+                [7, 4, 23], {(2, 2): ["", "", ""]})
+
+
 # mdcat --ansi --columns 40 of glyphs: a heavy check in emoji presentation,
 # a ballot box, a cancellation X, two checks, and a cross with a full stop
 VS16 = "\N{VARIATION SELECTOR-16}"
@@ -1018,6 +1045,171 @@ def test_the_beat_between_rows_follows_the_last_cell_that_is_read():
     check_invariants(d)
 
 
+def test_references_false_keeps_footnote_numbers_and_reads_footnotes():
+    d = Document.from_text("\n".join(FEAT), tables=[feat_table()],
+                           references=False)
+    assert d.plain == FEAT                      # the [1] stays on screen
+    notes = cells_of(d)[(1, 2)]
+    assert notes.text == "warm starts[1]"
+    assert notes.word_texts == ["warm", "starts", "1"]
+    footnote = d.chunks[d.chunk_at_line(13)]
+    assert footnote.speakable
+    assert footnote.word_texts == ["1", "Only", "after", "the", "first", "run"]
+    check_invariants(d)
+
+    # the default strips the marker, which moves the row off the columns the
+    # table was measured on: the table no longer fits and is read as lines
+    d = Document.from_text("\n".join(FEAT), tables=[feat_table()])
+    assert "[1]" not in d.plain[6]
+    assert not d.chunks[d.chunk_at_line(13)].speakable
+    assert d.tables == []
+    check_invariants(d)
+
+
+# mdcat --ansi --columns 40 (no config) of
+#   # Demo
+#
+#   [![Build status](https://ci.example/o/r/badge.svg)](https://ci.example/o/r)
+#   [![Crates.io](https://img.example/r.svg)](https://crates.example/r)
+#
+#   A fast tool[^speed]. See [the docs](https://example.com/docs).
+#
+#   | Flag | Meaning |
+#   |---|---|
+#   | `-i` | ignore case[^speed] |
+#   | [![CI](https://img.example/ci.svg)](https://ci.example) | ✓ |
+#
+#   [^speed]: Measured on a laptop.
+BADGES_ANSI = (
+    "\n"
+    "\n"
+    "\x1b[94m\x1b[104m \x1b[0m\x1b[1m\x1b[97m\x1b[104mDemo\x1b[0m"
+    "\x1b[94m\x1b[104m \x1b[0m\n"
+    "\n"
+    "\n"
+    "\x1b]8;;https://ci.example/o/r\x1b\\\x1b[34mBuild status\x1b[0m"
+    "\x1b[35m[1]\x1b[0m\x1b]8;;\x1b\\ "
+    "\x1b]8;;https://crates.example/r\x1b\\\x1b[34mCrates.io\x1b[0m"
+    "\x1b[35m[2]\x1b[0m\x1b]8;;\x1b\\\n"
+    "\n"
+    "A fast tool\x1b[36m[1]\x1b[0m. See "
+    "\x1b]8;;https://example.com/docs\x1b\\\x1b[34mthe docs\x1b[0m"
+    "\x1b]8;;\x1b\\.\n"
+    "\n"
+    "──────────────────────\n"
+    " \x1b[1mFlag\x1b[0m  \x1b[1mMeaning\x1b[0m        \n"
+    "──────────────────────\n"
+    " \x1b[33m-i\x1b[0m    ignore case[1] \n"
+    " \x1b[35mCI\x1b[0m    ✓              \n"
+    "──────────────────────\n"
+    "\n"
+    "\x1b[35m[1]: \x1b[0m\x1b]8;;https://ci.example/o/r/badge.svg\x1b\\"
+    "\x1b[35mhttps://ci.example/o/r/badge.svg\x1b[0m\x1b]8;;\x1b\\\n"
+    "\x1b[35m[2]: \x1b[0m\x1b]8;;https://img.example/r.svg\x1b\\"
+    "\x1b[35mhttps://img.example/r.svg\x1b[0m\x1b]8;;\x1b\\\n"
+    "\n"
+    "\x1b[36m[1]: Measured on a laptop.\x1b[0m\n"
+    "\n"
+)
+
+
+def badges_table(plain: list[str]) -> Table:
+    return grid(plain, 9, [(10, 11), (12, 13), (13, 14)], [1, 7], [4, 14])
+
+
+def test_references_false_silences_the_references_of_images_in_links():
+    """A README badge is read as its alt text, as through the pipe.
+
+    ``mdcat --ansi`` writes an image inside a link as ``alt[1]`` and a
+    ``[1]: <image URL>`` reference, which used to be read as "one" and a URL
+    spelled out.  A footnote looks the same but carries no link, and is read.
+    """
+    lines = ansi.parse(BADGES_ANSI)
+    rendered = ansi.plain_lines(lines)
+    d = Document(lines, tables=[badges_table(rendered)], references=False)
+    assert d.tables == [badges_table(rendered)]
+    assert [(c.kind, c.text) for c in d.chunks if c.speakable] == [
+        ("para", "Demo"),
+        ("para", "Build status Crates.io"),
+        ("para", "A fast tool[1]. See the docs."),
+        ("cell", "Flag"), ("cell", "Meaning"),
+        ("cell", "-i"), ("cell", "ignore case[1]"),
+        ("cell", "CI"),
+        ("para", "[1]: Measured on a laptop."),
+    ]
+    # the markers leave the screen as they do on the pipe; the references and
+    # every table line stay exactly as rendered
+    assert rendered[5] == "Build status[1] Crates.io[2]"
+    assert d.plain[5] == "Build status Crates.io"
+    assert d.plain[:5] + d.plain[6:] == rendered[:5] + rendered[6:]
+    assert [(r.text, r.style.href) for r in d.lines[5]] == [
+        ("Build status", "https://ci.example/o/r"), (" ", None),
+        ("Crates.io", "https://crates.example/r")]
+    assert not d.chunks[d.chunk_at_line(16)].speakable
+    assert not any("example" in w.text for w in d.words)
+    # the footnote keeps its number, in the prose and in the cell, and is read
+    assert d.chunks[d.chunk_at_line(7)].word_texts == [
+        "A", "fast", "tool", "1", "See", "the", "docs"]
+    assert d.chunks[d.chunk_at_line(19)].word_texts == [
+        "1", "Measured", "on", "a", "laptop"]
+    check_invariants(d)
+
+    # a marker on a table line is left alone, link or not: the cells were
+    # measured on the render as it is
+    linked = [list(line) for line in lines]
+    linked[5] = [ansi.Run(r.text, replace(r.style, href=None))
+                 for r in linked[5]]
+    linked[12] = [ansi.Run(r.text, replace(r.style, href="https://x.io"))
+                  for r in linked[12]]
+    d = Document(linked, tables=[badges_table(rendered)], references=False)
+    assert d.tables == [badges_table(rendered)]
+    assert d.plain == rendered
+    check_invariants(d)
+
+
+# mdcat --ansi --columns 60 (no config) of a paragraph written on one line,
+#   [![](https://x.io/e.svg)](https://x.io/e)
+#   [![shot](docs/shot.png "Shot")](https://x.io/s)
+#   and [buf[1]](https://x.io/b) or `[2]: x`[^n].
+#
+#   [^n]: See [2]: https://x.io/fake.
+# with the file URL mdcat resolves docs/shot.png to shortened
+LINKED_ANSI = (
+    "\n"
+    "\x1b]8;;https://x.io/e\x1b\\\x1b[35m[1]\x1b[0m\x1b]8;;\x1b\\ "
+    "\x1b]8;;https://x.io/s\x1b\\\x1b[34mshot\x1b[0m\x1b[35m[2]\x1b[0m"
+    "\x1b]8;;\x1b\\ and \x1b]8;;https://x.io/b\x1b\\\x1b[34mbuf\x1b[0m"
+    "\x1b[34m[\x1b[0m\x1b[34m1\x1b[0m\x1b[34m]\x1b[0m\x1b]8;;\x1b\\ or"
+    "\x1b[33m [2]: x\x1b[0m\x1b[36m[1]\x1b[0m.\n"
+    "\n"
+    "\x1b[35m[1]: \x1b[0m\x1b]8;;https://x.io/e.svg\x1b\\"
+    "\x1b[35mhttps://x.io/e.svg\x1b[0m\x1b]8;;\x1b\\\n"
+    "\x1b[35m[2]: \x1b[0m\x1b]8;;file://host/project/docs/shot.png\x1b\\"
+    "\x1b[35mdocs/shot.png\x1b[0m\x1b]8;;\x1b\\\x1b[35m Shot\x1b[0m\n"
+    "\n"
+    "\x1b[36m[1]: See [2]: https://x.io/fake.\x1b[0m\n"
+    "\n"
+)
+
+
+def test_an_image_reference_is_told_from_a_footnote_by_its_link():
+    d = Document(ansi.parse(LINKED_ANSI), references=False)
+    # the image without alt text leaves no marker, and neither does the one
+    # whose path mdcat resolved and wrote with a title; the [1] in the text
+    # of a later link, the [2] in code and the footnote's [1] have no image
+    assert d.plain[1] == " shot and buf[1] or [2]: x[1]."
+    assert [c.word_texts for c in d.chunks if c.speakable] == [
+        ["shot", "and", "buf", "1", "or", "2", "x", "1"],
+        ["1", "See", "2", "https://x.io/fake"]]
+    assert d.plain[3:5] == ["[1]: https://x.io/e.svg",
+                            "[2]: docs/shot.png Shot"]
+    check_invariants(d)
+
+    # the pipe's handling is untouched
+    assert Document(ansi.parse(LINKED_ANSI)).plain[1] == (
+        "[1] shot and buf or [2]: x.")
+
+
 def test_table_lookups_on_a_wrapped_row():
     d = Document.from_text("\n".join(BASIC), tables=[basic_table()])
     cell = {rc: c.idx for rc, c in cells_of(d).items()}
@@ -1197,11 +1389,12 @@ def test_a_table_that_does_not_fit_is_read_as_lines():
 
 
 def test_no_tables_changes_nothing():
-    for text in (MDCAT_PLAIN, "\n".join(BASIC), "\n".join(QUOTE)):
+    for text in (MDCAT_PLAIN, "\n".join(BASIC), "\n".join(QUOTE),
+                 "\n".join(FEAT)):
         assert shape(Document.from_text(text, tables=())) == shape(
             Document.from_text(text))
     d = Document.from_text("\n".join(BASIC))
-    assert d.tables == []
+    assert d.tables == [] and d.references is True
     assert [c.kind for c in d.chunks] == ["blank", "para", "blank"]
     assert all(c.cell is None and c.regions == [] and not c.row_end
                for c in d.chunks)

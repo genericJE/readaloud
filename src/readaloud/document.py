@@ -56,7 +56,16 @@ still hears them.
 ``mdcat``'s degraded (non-tty) output writes links as ``homepage[1]`` plus a
 trailing ``[1]: https://...`` block.  Both halves are silenced: the reference
 block yields no words, and the inline markers are removed by
-:func:`strip_reference_markers` before ``plain`` is derived.
+:func:`strip_reference_markers` before ``plain`` is derived.  For output
+of ``mdcat --ansi``, pass ``references=False``: there ``[1]`` is mostly
+a footnote number (removing it would shift the table columns measured on the
+render) and ``[1]: ...`` a footnote, and both are read.  ``--ansi`` still
+writes that block for an image inside a link (a README badge), because
+terminal links cannot nest, and numbers it from 1 like the footnotes.  Its
+link gives it away: such a marker sits inside the enclosing link and the
+reference's URL is a link itself, while a footnote carries no link at all.
+Outside the tables those markers are removed and those references give no
+words, so the prose sounds as it does through the pipe.
 """
 
 from __future__ import annotations
@@ -64,7 +73,7 @@ from __future__ import annotations
 import re
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, Sequence
+from typing import Container, Iterable, Iterator, Sequence
 
 from .ansi import Run, Style
 from .width import cell_offsets
@@ -244,6 +253,10 @@ _REF_DEF_RE = re.compile(r"^[ \t]*\[([^\]]{1,40})\]:[ \t]*\S+")
 # `[1]: https://...` definition really is present (see
 # :func:`strip_reference_markers`).
 _REF_MARKER_RE = re.compile(r"(?<=[\w\]])\[(\d{1,4})\]")
+# The same marker when its link shows what it is (see
+# :func:`_image_link_references`): an image without alt text leaves nothing
+# before it, and alt text may end in any char ("coverage 90%[2]").
+_LINKED_MARKER_RE = re.compile(r"\[(\d{1,4})\]")
 
 
 def line_word_spans(text: str) -> list[tuple[int, int]]:
@@ -264,11 +277,19 @@ def split_words(text: str) -> list[str]:
     return [text[s:e] for s, e in line_word_spans(text)]
 
 
-def extract_words(plain: Sequence[str]) -> list[Word]:
-    """Every speakable word of a document, in line order."""
+def extract_words(plain: Sequence[str], *, references: bool = True,
+                  silent: Container[int] = ()) -> list[Word]:
+    """Every speakable word of a document, in line order.
+
+    With ``references=False`` a ``[1]: ...`` line is read like any other: it is
+    a footnote, not the link reference block of mdcat's degraded output.  The
+    line numbers in `silent` give no words either (the Document puts the
+    references of images inside links there, see the module docstring).
+    """
     words: list[Word] = []
     for line_no, text in enumerate(plain):
-        if not text or _REF_DEF_RE.match(text):
+        if (not text or (references and _REF_DEF_RE.match(text))
+                or line_no in silent):
             continue          # a link-reference definition has nothing to say
         for s, e in line_word_spans(text):
             words.append(Word(text=text[s:e], line=line_no, start=s, end=e,
@@ -932,6 +953,70 @@ def strip_reference_markers(lines: Iterable[Sequence[Run]]) -> list[list[Run]]:
     return out
 
 
+def _hrefs(line: Sequence[Run]) -> list[str | None]:
+    """The link of every char of `line`, None where there is none."""
+    return [run.style.href for run in line for _ in run.text]
+
+
+def _image_link_references(lines: Iterable[Sequence[Run]],
+                           tables: Iterable[Table] = ()
+                           ) -> tuple[list[list[Run]], set[int]]:
+    """``mdcat --ansi``'s markers of images inside links cut from `lines`.
+
+    Terminal links cannot nest, so ``--ansi`` writes an image inside a link as
+    ``Build status[1]`` and, after the paragraph, ``[1]: <image URL>``: the
+    shapes of a footnote, and numbered from 1 like the footnotes.  A reference
+    is a ``[n]: `` line whose target is a link (its URL, or its path resolved
+    to a file URL), which a footnote's text never is.  Its marker is the first
+    ``[n]`` before it every char of which is inside a link: mdcat writes each
+    number once, so a later ``[1]`` in the text of a link stays.  Neither is
+    looked for on the lines of `tables`, whose cells were measured on the
+    render as it is.
+
+    Returns the lines, the markers cut out as :func:`strip_reference_markers`
+    cuts them, and the line numbers of the references, which say nothing.
+    """
+    out = [list(line) for line in lines]
+    plain = ["".join(run.text for run in line) for line in out]
+    tabled: set[int] = set()
+    for table in tables:
+        try:
+            tabled.update(range(max(0, table.line_start),
+                                min(len(out), table.line_end)))
+        except (AttributeError, TypeError):
+            continue                    # a Table that does not fit anyway
+
+    silent: set[int] = set()
+    unmarked: dict[str, int] = {}       # label -> its reference line
+    for i, text in enumerate(plain):
+        m = _REF_DEF_RE.match(text)
+        if i in tabled or not m or not m.group(1).isdigit():
+            continue
+        hrefs = _hrefs(out[i])
+        target = m.end(1) + 2           # past "]:"
+        while text[target] in " \t":
+            target += 1
+        if hrefs[target] and not any(hrefs[:target]):
+            silent.add(i)
+            unmarked.setdefault(m.group(1), i)
+
+    for i, text in enumerate(plain):
+        if not unmarked:
+            break
+        if i in tabled or i in silent or "[" not in text:
+            continue
+        hrefs = _hrefs(out[i])
+        cuts = []
+        for m in _LINKED_MARKER_RE.finditer(text):
+            if (unmarked.get(m.group(1), -1) > i
+                    and all(hrefs[m.start():m.end()])):
+                cuts.append(m.span())
+                del unmarked[m.group(1)]
+        if cuts:
+            out[i] = _cut_spans(out[i], cuts)
+    return out, silent
+
+
 # ---------------------------------------------------------------------------
 # Document
 # ---------------------------------------------------------------------------
@@ -942,18 +1027,31 @@ class Document:
 
     `tables` maps rendered tables onto `lines` (the caller builds them);
     each one that fits is read one cell at a time, see :class:`Table`.
+    ``references=False`` turns off the handling of mdcat's degraded link
+    reference output and handles only the references ``mdcat --ansi`` writes
+    for images inside links, see the module docstring.
     """
 
     def __init__(self, lines: Iterable[Sequence[Run]] | None = None, *,
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
                  max_chars: int = DEFAULT_MAX_CHARS,
-                 tables: Sequence[Table] = ()) -> None:
+                 tables: Sequence[Table] = (),
+                 references: bool = True) -> None:
         self.max_sentences = int(max_sentences)
         self.max_chars = int(max_chars)
-        self.lines: list[list[Run]] = strip_reference_markers(lines or ())
+        self.references = bool(references)
+        source = lines or ()
+        tables = list(tables or ())
+        self.lines: list[list[Run]]
+        silent: set[int] = set()
+        if self.references:
+            self.lines = strip_reference_markers(source)
+        else:
+            self.lines, silent = _image_link_references(source, tables)
         self.plain: list[str] = ["".join(r.text for r in line)
                                  for line in self.lines]
-        self.words: list[Word] = extract_words(self.plain)
+        self.words: list[Word] = extract_words(
+            self.plain, references=self.references, silent=silent)
         self.tables: list[Table]
         self.tables, cells = _layout_tables(self.plain, self.words, tables)
         self.chunks: list[Chunk] = build_chunks(
