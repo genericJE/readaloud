@@ -22,6 +22,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "src"))
 
+from readaloud import width  # noqa: E402
 from readaloud.ui import (  # noqa: E402
     Screen,
     cell_offsets,
@@ -202,6 +203,19 @@ def test_char_width_matches_unicode_tr11():
     assert char_width("́") == 0  # combining acute
     assert text_width("日本語 テスト") == 13
     assert text_width("plain words") == 11
+
+
+def test_ascii_width_skips_the_per_character_walk(monkeypatch):
+    assert all(width.char_width(chr(i)) == 1 for i in range(128))
+
+    def walk(ch):
+        raise AssertionError(f"walked {ch!r}")
+
+    monkeypatch.setattr(width, "char_width", walk)
+    assert width.text_width("plain | ascii\x01") == 14
+    assert width.cell_offsets("ab\x7f") == [0, 1, 2, 3]
+    with pytest.raises(AssertionError):
+        width.text_width("caf\N{LATIN SMALL LETTER E WITH ACUTE}")
 
 
 def test_cell_offsets_are_prefix_columns():

@@ -42,7 +42,13 @@ def char_width(ch: str) -> int:
 
 
 def text_width(text: str) -> int:
-    """Terminal cells occupied by `text`."""
+    """Terminal cells occupied by `text`.
+
+    ASCII text skips the per-character walk: every ASCII character, control
+    characters included, is one cell to `char_width`.
+    """
+    if text.isascii():
+        return len(text)
     n = 0
     for ch in text:
         n += char_width(ch)
@@ -53,7 +59,10 @@ def cell_offsets(text: str) -> list[int]:
     """Prefix cell widths: ``out[i]`` is the column of ``text[i]``.
 
     Length is ``len(text) + 1``; the last entry is the whole line's width.
+    ASCII text takes the same shortcut as `text_width`.
     """
+    if text.isascii():
+        return list(range(len(text) + 1))
     out = [0] * (len(text) + 1)
     n = 0
     for i, ch in enumerate(text):
