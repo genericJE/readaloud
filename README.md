@@ -327,6 +327,7 @@ language packs, which this project does not install by default.
 | --- | --- |
 | `ansi.py` | escape-sequence parser to styled `Run`s; Markdown cleanup for non-ANSI input |
 | `document.py` | words with character offsets, and the sentence/paragraph chunker |
+| `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
 | `speech.py` | Kokoro pipeline, and the token to word-slot timestamp alignment |
 | `player.py` | one persistent PortAudio stream with a lock-free callback |
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |

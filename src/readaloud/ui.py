@@ -16,12 +16,13 @@ pairs 1-255 are addressable; `curses.init_pair` raises `ValueError` (not
 `curses.error`) for an out-of-range colour; and `A_ITALIC` is bit 31, so any
 composed attribute containing it overflows `curses.pair_number()`.
 
-Its only intra-package import is `readaloud.keys` (for the SGR mouse strings
-and `read_event`).  It deliberately does *not* import `readaloud.ansi` or
-`readaloud.document`: it reads the documented attributes off whatever objects
-it is handed (`Run.text`, `Run.style`, `Style.fg`, `Word.line/start/end`,
-`Chunk.words` …), so the view can be exercised on its own and cannot be broken
-by a change in how those modules construct their objects.
+Its only intra-package imports are `readaloud.keys` (for the SGR mouse strings
+and `read_event`) and `readaloud.width` (display widths).  It deliberately does
+*not* import `readaloud.ansi` or `readaloud.document`: it reads the documented
+attributes off whatever objects it is handed (`Run.text`, `Run.style`,
+`Style.fg`, `Word.line/start/end`, `Chunk.words` …), so the view can be
+exercised on its own and cannot be broken by a change in how those modules
+construct their objects.
 """
 
 from __future__ import annotations
@@ -30,12 +31,12 @@ import bisect
 import curses
 import os
 import sys
-import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 from readaloud.keys import SGR_MOUSE_OFF, SGR_MOUSE_ON, read_event as _read_event
+from readaloud.width import cell_offsets, char_width, text_width
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from readaloud.document import Document
@@ -64,55 +65,8 @@ __all__ = [
 # display width
 # --------------------------------------------------------------------------
 
-# A character index is NOT a terminal column: an East-Asian-wide or emoji
-# glyph occupies two cells.  Everything that talks to the terminal (paint
-# positions, wrap decisions, hit-testing a mouse cell) has to go through these
-# helpers, or the highlight lands on the wrong characters and a click resolves
-# to a word one cell per wide glyph to the left of the one the user pointed at.
-_WIDE_EAW = frozenset(("W", "F"))
-_ZERO_CATEGORIES = frozenset(("Mn", "Me", "Cf"))
-
-
-def char_width(ch: str) -> int:
-    """Terminal cells occupied by one character: 0, 1 or 2.
-
-    Matches what ``wcwidth`` (and hence pyte, ncurses and every terminal that
-    follows Unicode TR11) does for the cases that occur in real input:
-    combining marks and format characters take no cell of their own, East
-    Asian Wide/Fullwidth characters and emoji take two, everything else one.
-    """
-    if not ch:
-        return 0
-    o = ord(ch)
-    if 0x20 <= o < 0x7F:  # ASCII fast path, by far the common case
-        return 1
-    if unicodedata.combining(ch) or unicodedata.category(ch) in _ZERO_CATEGORIES:
-        return 0
-    if unicodedata.east_asian_width(ch) in _WIDE_EAW:
-        return 2
-    return 1
-
-
-def text_width(text: str) -> int:
-    """Terminal cells occupied by `text`."""
-    n = 0
-    for ch in text:
-        n += char_width(ch)
-    return n
-
-
-def cell_offsets(text: str) -> list[int]:
-    """Prefix cell widths: ``out[i]`` is the column of ``text[i]``.
-
-    Length is ``len(text) + 1``; the last entry is the whole line's width.
-    """
-    out = [0] * (len(text) + 1)
-    n = 0
-    for i, ch in enumerate(text):
-        out[i] = n
-        n += char_width(ch)
-    out[len(text)] = n
-    return out
+# char_width, text_width and cell_offsets live in readaloud.width (curses-free,
+# so the document can measure columns too) and are re-exported from here.
 
 
 def _truncate_cells(text: str, cells: int) -> str:
