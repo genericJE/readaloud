@@ -9,7 +9,9 @@ Public surface:
 `Engine.load()` is blocking (~3.5s, mostly spaCy inside `KokoroPipeline`), safe to
 call from a worker thread, and idempotent.  `Engine.synth()` never raises on
 ordinary text: a broken alignment degrades to evenly distributed timings and a
-broken pipeline degrades to empty audio plus `Engine.last_error`.
+broken pipeline degrades to empty audio plus `Engine.last_error`.  A table cell
+(`chunk.kind == "cell"`) comes back with most of Kokoro's silence padding cut
+off (`trim_silence`), so a table read cell by cell does not stall between cells.
 
 The token -> word-slot alignment (`align_words`) is the version proven by the
 token-align spike against mlx-community/Kokoro-82M-4bit + misaki 0.9.4 over 16
@@ -42,6 +44,7 @@ __all__ = [
     "word_spans",
     "even_timings",
     "build_timings",
+    "trim_silence",
     "list_voices",
     "to_mono_f32",
 ]
@@ -447,6 +450,85 @@ def build_timings(
 
 
 # --------------------------------------------------------------------------
+# silence trimming (table cells)
+# --------------------------------------------------------------------------
+
+#: Kokoro pads every call with ~0.2-0.4 s of silence before the speech and up
+#: to ~0.6 s after it, depending on the voice.  A paragraph never notices, but
+#: a table read one cell at a time would stall for about a second between
+#: cells, so cell chunks keep only this much of it: a little lead so an onset
+#: is never clipped, a short tail between cells and a longer one after the
+#: last cell of a row.
+CELL_LEAD = 0.06
+CELL_TAIL = 0.12
+ROW_END_TAIL = 0.35
+
+_MIN_TRIM = 0.02  # seconds; a smaller change is not worth a new buffer
+
+
+def trim_silence(
+    audio: np.ndarray,
+    timings: list[Timed],
+    sample_rate: int,
+    *,
+    lead: float = CELL_LEAD,
+    tail: float = CELL_TAIL,
+    floor: float = 1e-4,
+    ratio: float = 0.003,
+    window: float = 0.01,
+) -> tuple[np.ndarray, list[Timed]]:
+    """Cut `audio` down to `lead` seconds before the speech and `tail` after it.
+
+    Speech is where the RMS envelope (`window`-second frames) rises above
+    `ratio` of its loudest frame, or `floor` for very quiet audio.  The kept
+    padding is measured from the first and last such frame.  `ratio` sits at
+    -50 dB because the weakest consonants of some voices do not reach -40 dB
+    (af_alloy's final "t" burst, af_nicole's final "s"); a 1% threshold
+    measured the tail from before them and cut them off.
+
+    Some voices (bf_emma) end the audio almost on the last phoneme, so a tail
+    shorter than `tail` is extended with zeros: the pause after a cell, and
+    the longer one after a row, must not depend on the voice.  The lead is
+    only ever cut, never padded: it just protects the onset, and the previous
+    cell's tail already makes the pause.
+
+    Timings move with the start cut and are clamped into the new duration.
+    Returns the inputs unchanged when nothing rises above the threshold or the
+    cut and the padding together come to less than 20 ms, so silent or
+    already tight audio keeps its exact length.
+    """
+    n = int(audio.shape[0])
+    sr = int(sample_rate) or SAMPLE_RATE
+    if n == 0:
+        return audio, timings
+    win = max(1, int(round(window * sr)))
+    frames = -(-n // win)
+    power = np.zeros(frames * win, dtype=np.float64)
+    power[:n] = np.square(audio, dtype=np.float64)
+    counts = np.full(frames, win, dtype=np.float64)
+    counts[-1] = n - (frames - 1) * win  # the last frame may be short
+    envelope = np.sqrt(power.reshape(frames, win).sum(axis=1) / counts)
+
+    loud = np.flatnonzero(envelope > max(floor, ratio * float(envelope.max())))
+    if loud.size == 0:
+        return audio, timings
+    onset = int(loud[0]) * win
+    offset = min(n, (int(loud[-1]) + 1) * win)
+    start = max(0, onset - int(round(lead * sr)))
+    end = offset + int(round(tail * sr))  # past `n` when the tail needs zeros
+    if start + abs(n - end) < int(round(_MIN_TRIM * sr)):
+        return audio, timings
+
+    # A fresh buffer, not a view: a view would pin the whole padded original.
+    out = np.zeros(end - start, dtype=np.float32)
+    kept = audio[start:min(n, end)]
+    out[: kept.shape[0]] = kept
+    shift = start / float(sr)
+    moved = [Timed(t.word_slot, t.start - shift, t.end - shift) for t in timings]
+    return out, _sanitize(moved, len(timings), out.shape[0] / float(sr))
+
+
+# --------------------------------------------------------------------------
 # voices
 # --------------------------------------------------------------------------
 
@@ -706,6 +788,17 @@ class Engine:
         duration = audio.shape[0] / float(self.sample_rate)
 
         timings = build_timings(text, spans, feed, duration, nslots)
+        if getattr(chunk, "kind", None) == "cell":
+            # Only cells: every other chunk keeps Kokoro's padding, which is
+            # the breath between paragraphs.
+            tail = ROW_END_TAIL if getattr(chunk, "row_end", False) else CELL_TAIL
+            try:
+                audio, timings = trim_silence(
+                    audio, timings, self.sample_rate, lead=CELL_LEAD, tail=tail
+                )
+            except Exception:  # noqa: BLE001 - padding is cosmetic
+                log.warning("silence trim failed; keeping the padded audio",
+                            exc_info=True)
         return Spoken(
             chunk_idx=chunk_idx,
             audio=audio,

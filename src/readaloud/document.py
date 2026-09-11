@@ -154,8 +154,8 @@ class Chunk:
     #: last", which is right for prose; a table cell sets it, because its lines
     #: interleave with its neighbours' and that stream would wash them too.
     regions: list[tuple[int, int, int]] = field(default_factory=list)
-    #: the last spoken cell of its table row, where the pause between rows
-    #: belongs; a row with nothing to say has none
+    #: the last spoken cell of its table row, after which the reader pauses a
+    #: beat longer; a row with nothing to say has none
     row_end: bool = False
 
     @property

@@ -12,14 +12,18 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from readaloud import speech
 from readaloud.speech import (
+    CELL_LEAD,
+    CELL_TAIL,
     DEFAULT_REPO_ID,
     FALLBACK_VOICES,
+    ROW_END_TAIL,
     SAMPLE_RATE,
     Engine,
     Spoken,
@@ -29,6 +33,7 @@ from readaloud.speech import (
     even_timings,
     list_voices,
     to_mono_f32,
+    trim_silence,
     word_spans,
 )
 
@@ -47,6 +52,8 @@ class FakeChunk:
     offsets: list[int]
     line_start: int = 0
     line_end: int = 0
+    kind: str = "text"
+    row_end: bool = False
 
 
 @dataclass
@@ -388,6 +395,129 @@ def test_build_timings_no_slots():
 
 
 # --------------------------------------------------------------------------
+# trim_silence
+# --------------------------------------------------------------------------
+
+
+def secs(seconds: float) -> int:
+    return int(round(seconds * SAMPLE_RATE))
+
+
+def padded_tone(before: float, tone: float, after: float, amp: float = 0.5) -> np.ndarray:
+    """Zeros around a 440 Hz block: the shape of one short Kokoro call."""
+    t = np.arange(secs(tone)) / SAMPLE_RATE
+    block = (amp * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
+    return np.concatenate(
+        [np.zeros(secs(before), np.float32), block, np.zeros(secs(after), np.float32)]
+    )
+
+
+def test_trim_silence_keeps_lead_and_tail_around_the_speech():
+    audio = padded_tone(0.4, 0.3, 0.5)
+    timings = [Timed(0, 0.40, 0.55), Timed(1, 0.55, 0.70)]
+
+    out, moved = trim_silence(audio, timings, SAMPLE_RATE, lead=0.06, tail=0.12)
+
+    assert out.dtype == np.float32 and out.ndim == 1 and out.flags["C_CONTIGUOUS"]
+    assert out.shape[0] == secs(0.06 + 0.3 + 0.12)
+    start = secs(0.40 - 0.06)
+    np.testing.assert_array_equal(out, audio[start : start + out.shape[0]])
+    # timings follow the start cut
+    assert [t.start for t in moved] == pytest.approx([0.06, 0.21])
+    assert [t.end for t in moved] == pytest.approx([0.21, 0.36])
+    assert_monotonic(moved, 2, out.shape[0] / SAMPLE_RATE)
+    # the inputs are left alone
+    assert audio.shape[0] == secs(1.2)
+    assert timings[0] == Timed(0, 0.40, 0.55)
+
+
+def test_trim_silence_defaults_to_the_cell_padding():
+    out, _ = trim_silence(padded_tone(0.4, 0.3, 0.5), [], SAMPLE_RATE)
+    assert out.shape[0] == secs(CELL_LEAD) + secs(0.3) + secs(CELL_TAIL)
+
+
+def test_trim_silence_extends_a_short_tail_with_zeros():
+    # some voices stop the audio right after the last phoneme
+    audio = padded_tone(0.4, 0.3, 0.05)
+    out, _ = trim_silence(audio, [], SAMPLE_RATE, lead=0.06, tail=0.35)
+    assert out.shape[0] == secs(0.06 + 0.3 + 0.35)
+    kept = audio[secs(0.34) :]
+    np.testing.assert_array_equal(out[: kept.shape[0]], kept)
+    assert not out[kept.shape[0] :].any()
+
+
+def test_trim_silence_never_pads_the_lead():
+    audio = padded_tone(0.01, 0.3, 0.5)
+    out, _ = trim_silence(audio, [Timed(0, 0.01, 0.31)], SAMPLE_RATE, lead=0.06, tail=0.12)
+    np.testing.assert_array_equal(out, audio[: secs(0.01 + 0.3 + 0.12)])
+
+
+def test_trim_silence_clamps_timings_into_the_new_duration():
+    audio = padded_tone(0.4, 0.3, 0.5)
+    # alignment put the first word in the lead and the last one in the tail
+    timings = [Timed(0, 0.10, 0.50), Timed(1, 0.60, 1.20)]
+
+    out, moved = trim_silence(audio, timings, SAMPLE_RATE, lead=0.06, tail=0.12)
+
+    duration = out.shape[0] / SAMPLE_RATE
+    assert moved[0].start == 0.0
+    assert moved[0].end == pytest.approx(0.50 - 0.34)
+    assert moved[1].start == pytest.approx(0.60 - 0.34)
+    assert moved[1].end == pytest.approx(duration)
+    assert_monotonic(moved, 2, duration)
+
+
+def test_trim_silence_returns_silent_audio_unchanged():
+    audio = np.zeros(secs(1.0), np.float32)
+    timings = [Timed(0, 0.2, 0.6)]
+    out, moved = trim_silence(audio, timings, SAMPLE_RATE)
+    assert out is audio and moved is timings
+
+    # below the absolute floor is silence too, however it compares to its own peak
+    hum = padded_tone(0.4, 0.3, 0.5, amp=1e-5)
+    assert trim_silence(hum, [], SAMPLE_RATE)[0] is hum
+
+    empty = np.zeros(0, np.float32)
+    assert trim_silence(empty, [], SAMPLE_RATE)[0] is empty
+
+
+def test_trim_silence_leaves_tight_audio_alone():
+    # 10 ms too much tail, or 10 ms too little: not worth a new buffer
+    for after in (0.13, 0.11):
+        audio = padded_tone(0.05, 0.5, after)
+        timings = [Timed(0, 0.05, 0.55)]
+        out, moved = trim_silence(audio, timings, SAMPLE_RATE, lead=0.06, tail=0.12)
+        assert out is audio and moved is timings
+
+
+def test_trim_silence_is_idempotent():
+    out, moved = trim_silence(padded_tone(0.4, 0.3, 0.5), [Timed(0, 0.4, 0.7)], SAMPLE_RATE)
+    again, moved_again = trim_silence(out, moved, SAMPLE_RATE)
+    assert again is out and moved_again is moved
+
+
+def test_trim_silence_threshold_is_relative_to_the_loudest_window():
+    loud = padded_tone(0.4, 0.3, 0.0)
+
+    # a trail at -60 dB is silence: the tail is measured from the loud part
+    whisper = padded_tone(0.0, 0.3, 0.3, amp=0.5 * 0.001)
+    out, _ = trim_silence(np.concatenate([loud, whisper]), [], SAMPLE_RATE,
+                          lead=0.06, tail=0.12)
+    assert out.shape[0] == secs(0.06 + 0.3 + 0.12)
+
+    # at -40 dB, where a voice's weakest final consonants sit, it is speech
+    soft = padded_tone(0.0, 0.3, 0.3, amp=0.5 * 0.01)
+    out, _ = trim_silence(np.concatenate([loud, soft]), [], SAMPLE_RATE,
+                          lead=0.06, tail=0.12)
+    assert out.shape[0] == secs(0.06 + 0.6 + 0.12)
+
+    # the same trail ahead of the speech is kept as an onset
+    out, _ = trim_silence(np.concatenate([soft[::-1], loud[::-1]]), [], SAMPLE_RATE,
+                          lead=0.06, tail=0.12)
+    assert out.shape[0] == secs(0.06 + 0.6 + 0.12)
+
+
+# --------------------------------------------------------------------------
 # audio conversion / Spoken
 # --------------------------------------------------------------------------
 
@@ -541,6 +671,78 @@ def test_engine_synth_result_with_no_audio():
     sp = eng.synth(ch)
     assert sp.audio.shape == (0,)
     assert len(sp.timings) == 2
+
+
+# -- table cells: Kokoro's padding is trimmed --------------------------------
+
+
+def cell_chunk(kind: str = "cell", row_end: bool = False) -> FakeChunk:
+    ch = chunk_from("alpha beta", ["alpha", "beta"])
+    ch.kind = kind
+    ch.row_end = row_end
+    return ch
+
+
+def padded_pipeline(after: float = 0.5) -> FakePipeline:
+    """One Result shaped like Kokoro's: 0.4 s of silence, 0.3 s of speech, `after`."""
+    toks = [FakeToken("alpha", " ", 0.40, 0.55), FakeToken("beta", "", 0.55, 0.70)]
+    return FakePipeline([FakeResult(toks, padded_tone(0.4, 0.3, after)[None, :])])
+
+
+def test_engine_synth_trims_the_padding_of_a_cell():
+    sp = make_engine_with(padded_pipeline()).synth(cell_chunk())
+
+    assert sp.audio.shape[0] == secs(CELL_LEAD) + secs(0.3) + secs(CELL_TAIL)
+    assert sp.audio.dtype == np.float32 and sp.audio.ndim == 1
+    assert [t.start for t in sp.timings] == pytest.approx([CELL_LEAD, CELL_LEAD + 0.15])
+    assert_monotonic(sp.timings, 2, sp.duration)
+    assert sp.word_at(sp.duration) == 1  # the pause after the cell keeps its last word
+
+
+def test_engine_synth_pauses_longer_after_the_last_cell_of_a_row():
+    assert ROW_END_TAIL > CELL_TAIL
+    expected = secs(CELL_LEAD) + secs(0.3) + secs(ROW_END_TAIL)
+
+    sp = make_engine_with(padded_pipeline()).synth(cell_chunk(row_end=True))
+    assert sp.audio.shape[0] == expected
+    assert_monotonic(sp.timings, 2, sp.duration)
+
+    # the beat is there even when the voice left almost no tail of its own
+    sp = make_engine_with(padded_pipeline(after=0.02)).synth(cell_chunk(row_end=True))
+    assert sp.audio.shape[0] == expected
+
+
+def test_engine_synth_never_trims_other_kinds():
+    # the kinds a Document makes, and "text", the default of a hand-built chunk
+    for kind in ("para", "code", "blank", "rule", "text"):
+        sp = make_engine_with(padded_pipeline()).synth(cell_chunk(kind=kind))
+        assert sp.audio.shape[0] == secs(1.2), kind
+    # a chunk that predates `kind` altogether
+    bare = SimpleNamespace(idx=0, words=[0, 1], text="alpha beta", offsets=[0, 6])
+    sp = make_engine_with(padded_pipeline()).synth(bare)
+    assert sp.audio.shape[0] == secs(1.2)
+
+
+def test_engine_synth_silent_or_failed_cell_keeps_its_length():
+    toks = [FakeToken("alpha", " ", 0.0, 0.4), FakeToken("beta", "", 0.4, 0.8)]
+    sp = make_engine_with(FakePipeline([FakeResult(toks, silence(0.8))])).synth(cell_chunk())
+    assert sp.audio.shape[0] == secs(0.8)
+    assert_monotonic(sp.timings, 2, sp.duration)
+
+    eng = make_engine_with(FakePipeline([], raises=RuntimeError("model exploded")))
+    sp = eng.synth(cell_chunk(row_end=True))
+    assert sp.audio.shape == (0,)
+    assert_monotonic(sp.timings, 2, 0.0)
+
+
+def test_engine_synth_keeps_the_padding_when_trimming_fails(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("sabotaged trim")
+
+    monkeypatch.setattr(speech, "trim_silence", boom)
+    sp = make_engine_with(padded_pipeline()).synth(cell_chunk())
+    assert sp.audio.shape[0] == secs(1.2)
+    assert_monotonic(sp.timings, 2, sp.duration)
 
 
 # --------------------------------------------------------------------------
@@ -763,6 +965,38 @@ def test_real_synthesis_long_chunk_may_yield_several_results(real_engine):
     assert_monotonic(sp.timings, len(words), sp.duration)
     # timings must keep climbing across the Result boundary, not restart
     assert sp.timings[-1].start > sp.duration * 0.8
+
+
+@pytest.mark.slow
+def test_real_synthesis_trims_a_cell(real_engine, monkeypatch):
+    # Kokoro is not sample-for-sample deterministic, so compare against the
+    # very buffer that was trimmed rather than a second synthesis.
+    seen = []
+
+    def spy(audio, timings, sample_rate, **kw):
+        out = trim_silence(audio, timings, sample_rate, **kw)
+        seen.append((audio, out[0]))
+        return out
+
+    monkeypatch.setattr(speech, "trim_silence", spy)
+    text, words = "Supports fast sync", ["Supports", "fast", "sync"]
+    ch = chunk_from(text, words)
+    ch.kind = "cell"
+    cell = real_engine.synth(ch)
+
+    assert real_engine.last_error is None
+    [(padded, trimmed)] = seen
+    assert trimmed is cell.audio
+    # Kokoro's padding around one call comes to well over 0.3 s
+    assert cell.duration < padded.shape[0] / SAMPLE_RATE - 0.3
+    assert_monotonic(cell.timings, len(words), cell.duration)
+    assert all(t.end > t.start for t in cell.timings)
+    # the speech itself is all there
+    energy = float(np.square(cell.audio, dtype=np.float64).sum())
+    assert energy > 0.999 * float(np.square(padded, dtype=np.float64).sum())
+    # what is left is exactly lead + speech + tail: trimming again changes nothing
+    again, _ = trim_silence(cell.audio, cell.timings, cell.sample_rate)
+    assert again is cell.audio
 
 
 @pytest.mark.slow
