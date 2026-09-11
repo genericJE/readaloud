@@ -893,7 +893,7 @@ wheels = [
 
 [[package]]
 name = "readaloud"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "en-core-web-sm" },
