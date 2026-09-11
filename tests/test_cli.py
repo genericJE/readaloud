@@ -10,12 +10,15 @@ Two defects are covered:
    "Exception ignored in Wave_write.__del__" traceback on top of the friendly
    message.
 
-And one feature's plumbing:
+And two features' plumbing:
 
 3. ``-md``: the flag's spellings, where the Markdown source comes from, the
    one-line refusals (``-md FILE -f FILE``, no mdcat, input mdcat already
    rendered), and a Document with cell chunks reaching the reader.  mdcat is
    never run: `readaloud.markdown`'s seams return a canned render.
+4. ``[pronunciations]``: the config file's pairs reaching the Document on
+   either path, ``--no-config`` leaving them out, and their problems reaching
+   stderr or the status bar.
 
 Nothing here loads the TTS model: `list_voices` is stubbed and the `--save`
 pre-flight must return before `Engine` is ever constructed.
@@ -722,3 +725,159 @@ def test_build_markdown_document_keeps_mdcat_lines_verbatim(monkeypatch):
     assert doc.plain[0] == "literal *stars* and [1] here"
     assert doc.references is False
     assert notices == ["a notice"] and notices is not rendered.notices
+
+
+# --------------------------------------------------------------------------- #
+# 4. [pronunciations]
+# --------------------------------------------------------------------------- #
+
+
+def test_both_builders_respell_with_the_pronunciations_they_are_given(
+        monkeypatch):
+    from readaloud import markdown
+    from readaloud.pronounce import Lexicon
+
+    lexicon = Lexicon([("id", "ID")])
+    doc = cli.build_document("Look up foo.id.\n", max_sentences=4,
+                             max_chars=380, no_color=False,
+                             pronunciations=lexicon)
+    assert [c.text for c in doc.chunks] == ["Look up foo.ID."]
+    assert doc.plain == ["Look up foo.id."]
+    assert _doc("Look up foo.id.\n").chunks[0].text == "Look up foo.id."
+
+    monkeypatch.setattr("readaloud.markdown.render_markdown",
+                        lambda text, *, mdcat, columns: markdown.Rendered(
+                            ansi.parse(TEAM_ANSI), [team_table()], []))
+    doc, _notices = cli.build_markdown_document(
+        TEAM_MD, mdcat=FAKE_MDCAT, columns=40, max_sentences=4,
+        max_chars=380, no_color=False,
+        pronunciations=Lexicon([("Bob", "Robert"), ("short", "brief")]))
+    assert cell_texts(doc)[5:7] == ["brief[1]", "Robert"]
+    assert doc.tables == [team_table()]
+
+
+def write_conf(tmp_path, body: str):
+    conf = tmp_path / "readaloud.conf"
+    conf.write_text(body, encoding="utf-8")
+    return conf
+
+
+def test_save_says_the_pronunciations_of_the_config_file(
+        tmp_path, monkeypatch, capsys, stub_voices):
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\n")
+    target = tmp_path / "out.wav"
+    assert cli.main(["--config", str(conf), "--save", str(target),
+                     "Look up foo.id."]) == cli.EXIT_OK
+    assert [c.text for c in RecordingEngine.chunks] == ["Look up foo.ID."]
+    assert [c.word_texts for c in RecordingEngine.chunks] == [
+        ["Look", "up", "foo.ID"]]
+    out, err = capsys.readouterr()
+    assert out.startswith(f"wrote {target}") and "readaloud:" not in err
+
+    # --no-config reads it as written
+    assert cli.main(["--config", str(conf), "--no-config", "--save",
+                     str(target), "Look up foo.id."]) == cli.EXIT_OK
+    assert [c.text for c in RecordingEngine.chunks] == ["Look up foo.id."]
+
+
+def test_md_save_says_the_pronunciations_in_the_cells(
+        tmp_path, monkeypatch, stub_voices, fake_mdcat):
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: TEAM_MD)
+    conf = write_conf(tmp_path, "[pronunciations]\nBob = Robert\n")
+    target = tmp_path / "team.wav"
+    assert cli.main(["-md", "--config", str(conf), "--save",
+                     str(target)]) == cli.EXIT_OK
+    cells = [c.text for c in RecordingEngine.chunks if c.kind == "cell"]
+    assert cells == [text.replace("Bob", "Robert") for text in TEAM_CELLS]
+
+
+def test_a_bad_pronunciation_line_is_reported_and_costs_only_itself(
+        tmp_path, monkeypatch, capsys, stub_voices):
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    conf = write_conf(tmp_path, "[readaloud]\nspeed = 1.5\n\n"
+                                "[pronunciations]\nkubectl cube control\n"
+                                "id = ID\n")
+    target = tmp_path / "out.wav"
+    assert cli.main(["--config", str(conf), "--save", str(target),
+                     "kubectl and foo.id"]) == cli.EXIT_OK
+    assert [c.text for c in RecordingEngine.chunks] == ["kubectl and foo.ID"]
+    err = capsys.readouterr().err
+    assert err.startswith(f"readaloud: {conf}: [pronunciations] line 5: "
+                          "'kubectl cube control' has no \"=\"; "
+                          "write it as: text = how to say it\n")
+    assert err.count("readaloud:") == 1
+
+
+def test_the_reader_gets_pronunciation_problems_in_the_status_bar(
+        tmp_path, capsys, launched):
+    conf = write_conf(tmp_path, "[pronunciations]\nid ID\n")
+    assert cli.main(["--config", str(conf), "foo.id"]) == 0
+    assert launched["notices"] == [
+        "config: [pronunciations] line 2: 'id ID' has no \"=\"; "
+        "write it as: text = how to say it"]
+    assert capsys.readouterr() == ("", "")
+
+
+def sabotage_find(monkeypatch):
+    def boom(self, text, symbols=()):
+        raise RuntimeError("sabotaged")
+
+    monkeypatch.setattr("readaloud.pronounce.Lexicon.find", boom)
+
+
+def test_chunks_a_pronunciation_fails_on_are_read_as_written_with_a_notice(
+        tmp_path, monkeypatch, capsys, stub_voices, launched, fake_mdcat):
+    sabotage_find(monkeypatch)
+    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\n")
+    text = "One id.\n\nTwo ids.\n\nThree."
+
+    assert cli.main(["--config", str(conf), text]) == 0
+    doc = launched["doc"]
+    assert doc.respell_failures == 3
+    assert [c.text for c in doc.chunks if c.speakable] == [
+        "One id.", "Two ids.", "Three."]
+    assert launched["notices"] == [
+        "pronunciations: 3 chunks are read as written "
+        "(a pronunciation could not be applied)"]
+    assert capsys.readouterr() == ("", "")
+
+    # in the reader it takes its turn after the config warnings and -md's
+    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\nBob Robert\n")
+    assert cli.main(["-md", "--config", str(conf)]) == 0
+    doc = launched["doc"]
+    assert doc.respell_failures == len(doc.speakable_chunks) == 11
+    assert launched["notices"] == [
+        "config: [pronunciations] line 3: 'Bob Robert' has no \"=\"; "
+        "write it as: text = how to say it",
+        *NOTICES,
+        "pronunciations: 11 chunks are read as written "
+        "(a pronunciation could not be applied)"]
+    assert capsys.readouterr() == ("", "")
+
+    # --save says them on stderr, stdout stays the one line
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    target = tmp_path / "out.wav"
+    assert cli.main(["--config", str(conf), "--save", str(target),
+                     "One id."]) == cli.EXIT_OK
+    out, err = capsys.readouterr()
+    assert out.startswith(f"wrote {target}") and "read as written" not in out
+    assert err.split("\n")[:2] == [
+        f"readaloud: {conf}: [pronunciations] line 3: 'Bob Robert' has no "
+        "\"=\"; write it as: text = how to say it",
+        "readaloud: pronunciations: 1 chunk is read as written "
+        "(a pronunciation could not be applied)"]
+    assert err.count("readaloud:") == 2
+    assert [c.text for c in RecordingEngine.chunks] == ["One id."]
+
+
+def test_no_config_or_no_pronunciations_never_respell(
+        tmp_path, monkeypatch, launched):
+    sabotage_find(monkeypatch)             # never called without an entry
+    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\n")
+    assert cli.main(["--config", str(conf), "--no-config", "foo.id"]) == 0
+    assert launched["doc"].respell_failures == 0
+    assert launched["notices"] == []
+    assert cli.main(["foo.id"]) == 0       # the sandbox has no config file
+    assert launched["doc"].chunks[0].text == "foo.id"

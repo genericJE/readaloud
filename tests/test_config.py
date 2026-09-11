@@ -10,6 +10,9 @@ Two properties matter more than any individual key:
    with every key uncommented -- must yield exactly `Config()`, otherwise the
    documented defaults and the real defaults have drifted apart.
 
+The ``[pronunciations]`` section adds a third: a line there that makes no
+sense costs that line and nothing else, never the settings.
+
 Every test writes to `tmp_path`; the autouse fixture below also re-points
 `config.DEFAULT_PATH` there, so even a test that forgets to pass a path cannot
 touch the real ``~/.readaloud.conf``.
@@ -18,8 +21,10 @@ touch the real ``~/.readaloud.conf``.
 from __future__ import annotations
 
 import os
+import random
 import re
 import stat
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -252,6 +257,18 @@ def test_unknown_key_warns_by_name_and_is_ignored(tmp_path):
     assert not hasattr(cfg, "volume")
 
 
+def test_a_pronunciation_under_readaloud_is_pointed_at_its_section(tmp_path):
+    # a file from before [pronunciations] existed ends inside [readaloud]
+    path = write(tmp_path / "c.conf",
+                 "[readaloud]\nspeed = 1.5\nid = ID\ncolour = true\n")
+    cfg, warnings = config.load(path)
+    assert (cfg.speed, cfg.pronunciations) == (1.5, ())
+    assert warnings == [
+        f"{path}: unknown key 'id' (ignored; a pronunciation goes under "
+        f"[pronunciations])",
+        f"{path}: unknown key 'colour' (ignored)"]      # close to a setting
+
+
 def test_unknown_section_is_ignored_with_a_warning(tmp_path):
     body = "[readaloud]\nspeed = 2\n\n[colors]\nhighlight = red\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
@@ -353,6 +370,443 @@ def test_load_accepts_a_string_path(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# pronunciations: one line
+# --------------------------------------------------------------------------- #
+
+
+def test_pronunciations_are_empty_by_default(tmp_path):
+    assert (config.PRONUNCIATIONS, DEFAULTS.pronunciations) == (
+        "pronunciations", ())
+    assert "PRONUNCIATIONS" in config.__all__
+    cfg, warnings = config.load(write(tmp_path / "c.conf", ALL_KEYS))
+    assert (cfg.pronunciations, warnings) == ((), [])
+
+
+@pytest.mark.parametrize("line,pair", [
+    # configparser would lowercase these, split them at ":", or take them
+    # for a section header
+    ("id = ID", ("id", "ID")),
+    ("GIF = jif", ("GIF", "jif")),
+    ("C# = C sharp", ("C#", "C sharp")),
+    ("std::vector = standard vector", ("std::vector", "standard vector")),
+    ("[x] = checkbox", ("[x]", "checkbox")),
+    ("[1] = footnote one", ("[1]", "footnote one")),
+    # the first "=" with spaces round it separates; failing that, the first
+    ("== = equals equals", ("==", "equals equals")),
+    ("a == b = x", ("a == b", "x")),
+    ("id=ID", ("id", "ID")),
+    ("x = C#", ("x", "C#")),
+    # quotes
+    ('"#include" = hash include', ("#include", "hash include")),
+    ("';' = semicolon", (";", "semicolon")),
+    ('"a = b" = c', ("a = b", "c")),
+    ('"speed" = spead', ("speed", "spead")),
+    ('"id"="ID"', ("id", "ID")),
+    ('C# = "C # sharp"  # the quotes keep the #', ("C#", "C # sharp")),
+    ('id = "/aid/"', ("id", "/aid/")),     # quoted, it is only text
+    ('x = "a" b', ("x", '"a" b')),         # quotes that do not wrap it all
+    # inline comments
+    ("id = ID   # eye dee", ("id", "ID")),
+    ("id = ID ; eye dee", ("id", "ID")),
+    # whitespace and unicode
+    ("  kubectl = cube control  ", ("kubectl", "cube control")),
+    ("New\t York   City =\tNYC", ("New York City", "NYC")),
+    ("cafe\u0301 = caff ay", ("caf\u00e9", "caff ay")),
+    ("id = ID\r", ("id", "ID")),
+])
+def test_pronunciation_lines(tmp_path, line, pair):
+    body = f"[pronunciations]\n{line}\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.pronunciations, warnings) == ((pair,), [])
+
+
+@pytest.mark.parametrize("line", [
+    "", "   ", "# a note", "; a note", "   # id = ID",
+    "#include = hash include",
+])
+def test_blank_and_comment_lines_are_nothing(tmp_path, line):
+    body = f"[pronunciations]\n{line}\nid = ID\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.pronunciations, warnings) == ((("id", "ID"),), [])
+
+
+def test_crlf_file(tmp_path):
+    path = tmp_path / "c.conf"
+    path.write_bytes(b"[readaloud]\r\nspeed = 1.5\r\n\r\n[pronunciations]\r\n"
+                     b"id = ID\r\nkubectl = cube control  # k\r\n")
+    cfg, warnings = config.load(path)
+    assert warnings == []
+    assert cfg.speed == 1.5
+    assert cfg.pronunciations == (("id", "ID"), ("kubectl", "cube control"))
+
+
+def test_pairs_keep_the_file_order(tmp_path):
+    body = ("[pronunciations]\nkubectl = cube control\nid = ID\n"
+            "New York City = NYC\n")
+    cfg, _ = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.pronunciations == (
+        ("kubectl", "cube control"), ("id", "ID"), ("New York City", "NYC"))
+
+
+# --------------------------------------------------------------------------- #
+# pronunciations: problems
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("line,problem", [
+    ("no equals here",
+     "'no equals here' has no \"=\"; write it as: text = how to say it"),
+    ("x" * 50,
+     f"'{'x' * 40}...' has no \"=\"; write it as: text = how to say it"),
+    ("= equals",
+     'nothing before the "="; put quotes round text that has an "=" in it'),
+    ('"" = nothing',
+     'nothing before the "="; put quotes round text that has an "=" in it'),
+    ("x\x00y = z",
+     "the text 'x\\x00y' has a control character (U+0000)"),
+    ("bell = \x07ding",
+     "the pronunciation '\\x07ding' has a control character (U+0007)"),
+    ("caf\ufffd = cafe", "the text 'caf\ufffd' is not valid UTF-8"),
+    ("id =", "'id' has nothing after the \"=\""),
+    ("id = # only a note", "'id' has nothing after the \"=\""),
+    ('id = "  "', "'id' has nothing after the \"=\""),
+    ("x == y",
+     "'x' = '= y': put quotes round text that has an \"=\" in it"),
+    ("x ==y",
+     "'x' = '=y': put quotes round text that has an \"=\" in it"),
+    ("id = /aidi/",
+     "'id': phonemes (/.../) are not supported; write it the way it sounds"),
+    ("id = [ID](/aidi/)",
+     "'id': [text](...) is not supported; write it the way it sounds"),
+    ('id = "[ID](/aidi/)"',
+     "'id': [text](...) is not supported; write it the way it sounds"),
+    ("tick = \u2713",
+     "'tick': '\u2713' has nothing to say (no letters or digits)"),
+    ("speed = 1.5",
+     "'speed' is a setting: move it under [readaloud], or put quotes round "
+     "the word to pronounce it"),
+    ("Follow_Lead = 3",
+     "'Follow_Lead' is a setting: move it under [readaloud], or put quotes "
+     "round the word to pronounce it"),
+])
+def test_each_problem_skips_its_line_with_a_warning(tmp_path, line, problem):
+    path = write(tmp_path / "c.conf", f"[pronunciations]\n{line}\nid = ID\n")
+    cfg, warnings = config.load(path)
+    assert cfg.pronunciations == (("id", "ID"),)
+    assert warnings == [f"{path}: [pronunciations] line 2: {problem}"]
+
+
+def test_bytes_that_are_not_utf8_are_a_problem(tmp_path):
+    path = tmp_path / "c.conf"
+    path.write_bytes(b"[pronunciations]\ncaf\xe9 = cafe\nid = ID\n")
+    cfg, warnings = config.load(path)
+    assert cfg.pronunciations == (("id", "ID"),)
+    assert len(warnings) == 1 and "line 2" in warnings[0]
+    assert "not valid UTF-8" in warnings[0]
+
+
+def test_a_later_duplicate_wins_and_takes_its_own_place(tmp_path):
+    path = write(tmp_path / "c.conf",
+                 "[pronunciations]\nid = eye dee\nkubectl = cube control\n"
+                 "id  =  ID\n")
+    cfg, warnings = config.load(path)
+    assert cfg.pronunciations == (("kubectl", "cube control"), ("id", "ID"))
+    assert warnings == [
+        f"{path}: [pronunciations] line 4: 'id' is also on line 2; "
+        f"line 4 wins"]
+
+
+def test_duplicates_compare_with_case(tmp_path):
+    body = "[pronunciations]\nid = ID\nId = ID\nID = I D\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.pronunciations == (("id", "ID"), ("Id", "ID"), ("ID", "I D"))
+    assert warnings == []
+
+
+def test_duplicates_compare_the_normalised_text(tmp_path):
+    body = "[pronunciations]\nNew York = the big apple\nNew   York = NYC\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.pronunciations == (("New York", "NYC"),)
+    assert len(warnings) == 1 and "also on line 2; line 3 wins" in warnings[0]
+
+
+def test_only_five_problems_are_listed(tmp_path):
+    body = "[pronunciations]\n" + "".join(f"bad line {i}\n" for i in range(8))
+    path = write(tmp_path / "c.conf", body + "id = ID\n")
+    cfg, warnings = config.load(path)
+    assert cfg.pronunciations == (("id", "ID"),)
+    assert warnings[:5] == [
+        f"{path}: [pronunciations] line {n}: 'bad line {n - 2}' has no \"=\"; "
+        f"write it as: text = how to say it" for n in range(2, 7)]
+    assert warnings[5:] == [
+        f"{path}: [pronunciations]: 3 more problems not shown"]
+
+
+def test_one_problem_past_five_is_counted_in_the_singular(tmp_path):
+    body = "[pronunciations]\n" + "".join(f"bad line {i}\n" for i in range(6))
+    path = write(tmp_path / "c.conf", body)
+    _, warnings = config.load(path)
+    assert warnings[5:] == [
+        f"{path}: [pronunciations]: 1 more problem not shown"]
+
+
+def test_five_problems_are_all_listed(tmp_path):
+    body = "[pronunciations]\n" + "".join(f"bad line {i}\n" for i in range(5))
+    _, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert len(warnings) == 5
+    assert not any("not shown" in w for w in warnings)
+
+
+def test_problems_count_file_line_numbers(tmp_path):
+    body = ("# my settings\n"
+            "[readaloud]\n"
+            "speed = 1.5\n"
+            "\n"
+            "[pronunciations]\n"
+            "id = ID\n"
+            "not a pronunciation\n")
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
+    assert len(warnings) == 1 and "[pronunciations] line 7:" in warnings[0]
+
+
+def test_problems_come_after_the_settings_warnings(tmp_path):
+    body = "[pronunciations]\nnot a pronunciation\n[readaloud]\nspeed = fast\n"
+    path = write(tmp_path / "c.conf", body)
+    _, warnings = config.load(path)
+    assert len(warnings) == 2
+    assert warnings[0].startswith(f"{path}: speed:")
+    assert warnings[1].startswith(f"{path}: [pronunciations] line 2:")
+
+
+# --------------------------------------------------------------------------- #
+# pronunciations: next to the settings
+# --------------------------------------------------------------------------- #
+
+
+def test_a_bad_pronunciation_line_keeps_the_settings(tmp_path):
+    body = ("[readaloud]\nspeed = 1.5\n\n[pronunciations]\nid = ID\n"
+            "this line has no equals\n    kubectl = cube control\n")
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.speed == 1.5
+    assert cfg.pronunciations == (("id", "ID"), ("kubectl", "cube control"))
+    assert len(warnings) == 1 and "line 6" in warnings[0]
+
+
+def test_settings_before_any_header_and_pronunciations(tmp_path):
+    body = "speed = 1.5\n[pronunciations]\nid = ID\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
+    assert warnings == []
+
+
+def test_a_readaloud_header_with_a_comment_ends_the_section(tmp_path):
+    body = "[pronunciations]\nid = ID\n[readaloud]  # c\nspeed = 1.5\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
+    assert warnings == []
+
+
+@pytest.mark.parametrize("header", [
+    "[Pronunciations]", "[ pronunciations ]", "[pronunciations] ; words",
+])
+def test_the_section_name_ignores_case_and_spaces(tmp_path, header):
+    body = f"[readaloud]\nspeed = 1.5\n{header}\nid = ID\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
+    assert warnings == []
+
+
+def test_several_pronunciations_sections_are_read_as_one(tmp_path):
+    body = ("[pronunciations]\nid = ID\n[readaloud]\nspeed = 2\n"
+            "[pronunciations]\nkubectl = cube control\nid = eye dee\n")
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.speed == 2.0
+    assert cfg.pronunciations == (("kubectl", "cube control"),
+                                  ("id", "eye dee"))
+    assert len(warnings) == 1 and "also on line 2; line 7 wins" in warnings[0]
+
+
+def test_an_entry_in_brackets_then_a_bad_line_keeps_the_settings(tmp_path):
+    body = ("[readaloud]\nspeed = 1.5\n[pronunciations]\n[1] = footnote one\n"
+            "no equals here\n")
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.pronunciations) == (1.5, (("[1]", "footnote one"),))
+    assert len(warnings) == 1 and "line 5" in warnings[0]
+
+
+def test_a_misspelled_section_keeps_the_settings_and_says_so(tmp_path):
+    path = write(tmp_path / "c.conf",
+                 "[readaloud]\nspeed = 1.5\n\n[pronunciation]\nid = ID\n"
+                 "no equals here\n")
+    cfg, warnings = config.load(path)
+    assert (cfg.speed, cfg.pronunciations) == (1.5, ())
+    assert warnings == [
+        f"{path}: ignoring unknown section [pronunciation] "
+        f"(did you mean [pronunciations]?)"]
+
+
+def test_a_misspelled_readaloud_section_says_so(tmp_path):
+    path = write(tmp_path / "c.conf", "[readalod]\nspeed = 1.5\n")
+    cfg, warnings = config.load(path)
+    assert cfg == DEFAULTS
+    assert warnings == [
+        f"{path}: ignoring unknown section [readalod] "
+        f"(did you mean [readaloud]?)"]
+
+
+@pytest.mark.parametrize("body", [
+    "[DEFAULT]\nspeed = 1.5\n[readaloud]\nvoice = bf_emma\n",
+    "[readaloud]\nvoice = bf_emma\n[pronunciations]\nid = ID\n"
+    "[DEFAULT]\nspeed = 1.5\n",
+])
+def test_a_default_section_still_fills_the_settings(tmp_path, body):
+    # configparser's [DEFAULT] was never an unknown section: its keys are
+    # every section's, [readaloud]'s included.
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.speed, cfg.voice) == (1.5, "bf_emma")
+    assert warnings == []
+
+
+def test_an_unknown_section_ends_the_pronunciations(tmp_path):
+    path = write(tmp_path / "c.conf",
+                 "[pronunciations]\nid = ID\n[colors]\nhighlight = red\n")
+    cfg, warnings = config.load(path)
+    assert cfg.pronunciations == (("id", "ID"),)
+    assert warnings == [f"{path}: ignoring unknown section [colors]"]
+
+
+@pytest.mark.parametrize("line", ["speed = 1.5", "speed: 1.5", "Speed :1.5"])
+def test_a_setting_appended_to_the_template_is_not_a_pronunciation(tmp_path,
+                                                                   line):
+    path = write(tmp_path / "c.conf", config.template() + line + "\n")
+    cfg, warnings = config.load(path)
+    assert cfg == DEFAULTS
+    assert len(warnings) == 1
+    assert "is a setting: move it under [readaloud]" in warnings[0]
+
+
+def test_a_colon_after_a_word_that_is_not_a_setting_has_no_equals(tmp_path):
+    path = write(tmp_path / "c.conf", "[pronunciations]\nNote: hi\n")
+    _, warnings = config.load(path)
+    assert warnings == [f"{path}: [pronunciations] line 2: 'Note: hi' has no "
+                        f"\"=\"; write it as: text = how to say it"]
+
+
+@pytest.mark.parametrize("section", ["[notes]\n# nothing yet\n",
+                                     "[pronunciations]\n# id = ID\n"])
+def test_an_indented_header_after_a_lifted_section_is_a_header(tmp_path,
+                                                                section):
+    # configparser reads the empty lines left in place of the section as
+    # part of voice's value; the indented header after them must not be
+    body = ("[readaloud]\nvoice = af_bella\n\n" + section
+            + "\n    [readaloud]\n    speed = 1.5\n")
+    cfg, _warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.voice, cfg.speed) == ("af_bella", 1.5)
+
+
+@pytest.mark.parametrize("body,speed,voice,warnings", [
+    # an indented header under a key is more of its value, as configparser
+    # has always read it, even right after a lifted section
+    ("[readaloud]\nspeed = 1.5\nvoice = af_sky\n  [colors]\n  [readaloud]\n"
+     "  more\n", 1.5, "af_sky\n[colors]\n[readaloud]\nmore", []),
+    ("[readaloud]\nspeed = 1.5\n  [colors]\nvoice = af_sky\n", 1.0, "af_sky",
+     ["speed: '1.5\\n[colors]' is not a number; using 1.0"]),
+    ("[colors]\nx = 1\n  [readaloud]\nspeed = 1.5\n", 1.0, "af_heart",
+     ["ignoring unknown section [colors]"]),
+    # a comment is found the way configparser finds it, # and ; in turns
+    ("[readaloud]\nspeed = 2\n[x#] #] ;z\n", 2.0, "af_heart",
+     ["ignoring unknown section [x#] #]"]),
+    ("[readaloud]\nspeed = 2\n[foo]\n[a#x #b] ;c\n", 2.0, "af_heart",
+     ["ignoring unknown section [foo]", "ignoring unknown section [a#x #b]"]),
+])
+def test_the_split_reads_lines_as_configparser_does(tmp_path, body, speed,
+                                                     voice, warnings):
+    path = write(tmp_path / "c.conf", body)
+    cfg, got = config.load(path)
+    assert (cfg.speed, cfg.voice) == (speed, voice)
+    assert got == [f"{path}: {warning}" for warning in warnings]
+
+
+def test_an_indented_pronunciations_header_is_still_a_header(tmp_path):
+    # nothing written before [pronunciations] existed meant it as a value
+    body = "[readaloud]\nvoice = af_sky\n  [pronunciations]\n  id = ID\n"
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert (cfg.voice, cfg.pronunciations) == ("af_sky", (("id", "ID"),))
+    assert warnings == []
+
+
+def test_a_repeated_unknown_section_is_reported_once(tmp_path):
+    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n"
+                 "[colors]\na = 1\n[colors]\nb = 2\n")
+    cfg, warnings = config.load(path)
+    assert cfg.speed == 1.5
+    assert warnings == [f"{path}: ignoring unknown section [colors]"]
+
+
+def test_pronunciations_survive_a_broken_readaloud_section(tmp_path):
+    body = ("[readaloud]\nspeed 1.5\n\n[pronunciations]\nid = ID\n"
+            "just words\n")
+    cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+    assert cfg.speed == DEFAULTS.speed
+    assert cfg.pronunciations == (("id", "ID"),)
+    assert len(warnings) == 2
+    assert "could not be parsed" in warnings[0]
+    assert "[pronunciations] line 6:" in warnings[1]
+
+
+def test_a_bug_in_the_section_costs_only_the_pronunciations(tmp_path,
+                                                            monkeypatch):
+    def broken(lines):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(config, "_parse_pronunciations", broken)
+    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n")
+    cfg, warnings = config.load(path)
+    assert (cfg.speed, cfg.pronunciations) == (1.5, ())
+    assert warnings == [
+        f"{path}: [pronunciations] could not be used (RuntimeError('boom'))"]
+
+
+def test_split_keeps_configparser_line_numbers():
+    text = ("speed = 1\n[pronunciations]\nid = ID\n[readaloud]  # c\n"
+            "voice = x\n[nope]\nfoo\n[ Pronunciations ] ; x\n[1] = x\n")
+    ini, lines, warnings = config._split(text)
+    assert ini.split("\n") == ["speed = 1", "", "", "[readaloud]  # c",
+                               "voice = x", "", "", "", "", ""]
+    assert lines == [(3, "id = ID"), (9, "[1] = x"), (10, "")]
+    assert warnings == ["ignoring unknown section [nope]"]
+
+
+def test_load_never_raises_on_garbage_in_the_section(tmp_path):
+    """Random lines under [pronunciations]: whatever they are, the settings
+    above them stay, and every pair that comes out is clean."""
+    rng = random.Random(20260911)
+    alphabet = (list(" \t=#;\"'[]()/\\:.,aZ9_-\u00e9\u0301\u2713\ufffd")
+                + list("\x00\x07\x0c\r\u2028") + [" = "] * 4
+                + ["speed", "id", "[readaloud]", "//", "]("])
+    ends_the_section = re.compile(r"\[[^\[\]]+\]\s*(?:[#;].*)?")
+    lines: list[str] = []
+    while len(lines) < 400:
+        line = "".join(rng.choice(alphabet) for _ in range(rng.randrange(12)))
+        if not ends_the_section.fullmatch(line.strip()):
+            lines.append(line)
+    for start in range(0, len(lines), 20):
+        body = ("[readaloud]\nspeed = 1.5\n[pronunciations]\n"
+                + "\n".join(lines[start:start + 20]) + "\n")
+        cfg, warnings = config.load(write(tmp_path / "c.conf", body))
+        assert cfg.speed == 1.5, body
+        assert all(isinstance(w, str) for w in warnings)
+        assert len(cfg.pronunciations) == len(dict(cfg.pronunciations))
+        for written, spoken in cfg.pronunciations:
+            for side in (written, spoken):
+                assert side and side == " ".join(side.split())
+                assert side == unicodedata.normalize("NFC", side)
+                assert not any(unicodedata.category(ch) == "Cc" for ch in side)
+            assert any(ch.isalnum() for ch in spoken)
+
+
+# --------------------------------------------------------------------------- #
 # template
 # --------------------------------------------------------------------------- #
 
@@ -397,6 +851,50 @@ def test_uncommented_template_round_trips_to_the_defaults(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf", live))
     assert cfg == DEFAULTS
     assert warnings == []
+
+
+TEMPLATE_EXAMPLES = (
+    ("id", "ID"),
+    ("kubectl", "cube control"),
+    ("GIF", "jif"),
+    ("New York City", "NYC"),
+    ("#include", "hash include"),
+)
+
+
+def test_template_ends_with_a_live_pronunciations_section():
+    text = config.template()
+    head, _, block = text.partition(f"\n[{config.PRONUNCIATIONS}]\n")
+    assert block, "no live [pronunciations] header"
+    assert f"[{config.SECTION}]" in head
+    assert all(line.startswith("# ") or line == "#"
+               for line in block.splitlines())
+
+
+def test_template_lines_fit_in_79_columns():
+    assert max(len(line) for line in config.template().splitlines()) <= 79
+
+
+def test_uncommented_pronunciation_examples_are_exactly_the_pairs(tmp_path):
+    """Only the examples hold " = ", so taking the "# " off every line that
+    does must use the examples and leave every help line a comment."""
+    head, header, block = config.template().partition(
+        f"\n[{config.PRONUNCIATIONS}]\n")
+    live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", block)
+    comments = [line for line in live.splitlines() if line.startswith("#")]
+    assert len(comments) == len(block.splitlines()) - len(TEMPLATE_EXAMPLES)
+    path = write(tmp_path / "c.conf", head + header + live)
+    cfg, warnings = config.load(path)
+    assert (cfg.pronunciations, warnings) == (TEMPLATE_EXAMPLES, [])
+    assert cfg == Config(pronunciations=TEMPLATE_EXAMPLES)
+
+
+def test_everything_uncommented_in_the_template(tmp_path):
+    live = re.sub(r"(?m)^#(\w+ =.*)$", r"\1", config.template())
+    live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", live)
+    cfg, warnings = config.load(write(tmp_path / "c.conf", live))
+    assert warnings == []
+    assert cfg == Config(pronunciations=TEMPLATE_EXAMPLES)
 
 
 def test_write_template_returns_the_path_and_writes_the_text(tmp_path):

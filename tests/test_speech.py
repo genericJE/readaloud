@@ -673,6 +673,44 @@ def test_engine_synth_result_with_no_audio():
     assert len(sp.timings) == 2
 
 
+def test_engine_synth_times_the_slots_of_a_respelled_chunk_exactly():
+    """The Engine says the respelling; each word is timed by what its slot says."""
+    from readaloud.document import Document
+    from readaloud.pronounce import Lexicon
+
+    doc = Document.from_text(
+        "Run kubectl on foo.id in New York\nCity, userId now.",
+        pronunciations=Lexicon([("id", "ID"), ("kubectl", "cube control"),
+                                ("New York City", "NYC")]))
+    [ch] = doc.chunks
+    assert ch.text == "Run cube control on foo.ID in NYC, user ID now."
+    spans = word_spans(ch.text, ch.offsets, ch.word_texts)
+    assert spans == ch.spans()
+    assert [ch.text[a:b] for a, b in spans] == [
+        "Run", "cube control", "on", "foo.ID", "in", "N", "Y", "C", "user ID",
+        "now"]
+
+    # tokens the way misaki splits the respelled text
+    toks = [FakeToken("Run", " ", 0.0, 0.3), FakeToken("cube", " ", 0.3, 0.6),
+            FakeToken("control", " ", 0.6, 1.0), FakeToken("on", " ", 1.0, 1.2),
+            FakeToken("foo", "", 1.2, 1.5), FakeToken(".", "", None, None),
+            FakeToken("ID", " ", 1.5, 1.9), FakeToken("in", " ", 1.9, 2.0),
+            FakeToken("NYC", "", 2.0, 2.6), FakeToken(",", " ", 2.6, 2.7),
+            FakeToken("user", " ", 2.7, 3.0), FakeToken("ID", " ", 3.0, 3.3),
+            FakeToken("now", "", 3.3, 3.6), FakeToken(".", "", 3.6, 3.7)]
+    timings = build_timings(ch.text, spans, [(toks, 4.0)], 4.0, len(ch.words))
+    assert_monotonic(timings, len(ch.words), 4.0)
+    assert [(t.start, t.end) for t in timings] == [
+        (0.0, 0.3), (0.3, 1.0), (1.0, 1.2), (1.2, 1.9), (1.9, 2.0),
+        (2.0, pytest.approx(2.2)), (pytest.approx(2.2), pytest.approx(2.4)),
+        (pytest.approx(2.4), 2.6), (2.7, 3.3), (3.3, 3.6)]
+
+    pipe = FakePipeline([FakeResult(toks, silence(4.0))])
+    sp = make_engine_with(pipe).synth(ch)
+    assert pipe.calls[0]["text"] == ch.text
+    assert sp.timings == timings
+
+
 # -- table cells: Kokoro's padding is trimmed --------------------------------
 
 
@@ -997,6 +1035,32 @@ def test_real_synthesis_trims_a_cell(real_engine, monkeypatch):
     # what is left is exactly lead + speech + tail: trimming again changes nothing
     again, _ = trim_silence(cell.audio, cell.timings, cell.sample_rate)
     assert again is cell.audio
+
+
+@pytest.mark.slow
+def test_real_synthesis_says_the_pronunciations(real_engine):
+    from readaloud.document import Document
+    from readaloud.pronounce import Lexicon
+
+    doc = Document.from_text(
+        "Look up foo.id for the userId,\nthen run kubectl in New York\n"
+        "City before the id expires.",
+        pronunciations=Lexicon([("id", "ID"), ("kubectl", "cube control"),
+                                ("New York City", "NYC")]))
+    [ch] = doc.chunks
+    assert doc.respell_failures == 0
+    assert ch.text == ("Look up foo.ID for the user ID,\nthen run cube control "
+                       "in NYC before the ID expires.")
+    sp = real_engine.synth(ch)
+
+    assert real_engine.last_error is None
+    assert len(sp.timings) == len(ch.words)
+    assert_monotonic(sp.timings, len(ch.words), sp.duration)
+    # misaki reads "the id" as Freud's id (ˈɪd) and ID as "eye dee" (ˌIdˈi),
+    # and kubectl as "kjˈubɛktᵊl" where "cube control" has its control
+    phonemes, _tokens = real_engine._pipeline.g2p(ch.text)
+    assert "ˌIdˈi" in phonemes and "kjˈub" in phonemes
+    assert "kəntɹˈOl" in phonemes and "ˈɪd" not in phonemes
 
 
 @pytest.mark.slow

@@ -35,6 +35,7 @@ from readaloud.document import (                                 # noqa: E402
     _GLYPHS,
     _symbol_name,
 )
+from readaloud.pronounce import Lexicon, respell                 # noqa: E402
 from readaloud.width import cell_offsets                         # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -46,8 +47,14 @@ def doc(text: str, **kw) -> Document:
     return Document.from_text(text, **kw)
 
 
-def check_invariants(d: Document) -> None:
-    """Every structural guarantee document.py makes, checked at once."""
+def check_invariants(d: Document, pronounced: bool = False) -> None:
+    """Every structural guarantee document.py makes, checked at once.
+
+    Pass `pronounced` for a Document built with pronunciations, and only then:
+    its chunk text is no longer a slice of the document and a slot may say a
+    respelling, so those checks give way to the slot guarantees every Document
+    keeps (the twin tests below check what the respelling says).
+    """
     flat = "\n".join(d.plain)
     owner = {widx: c for c in d.chunks for widx in c.words}
 
@@ -104,7 +111,7 @@ def check_invariants(d: Document) -> None:
                 f"cell chunk {c.idx} {c.cell}: row_end {c.row_end}")
             names = [_symbol_name(d.words[widx].text) for widx in c.words]
             symbols = bool(names) and all(names)
-            if symbols:
+            if symbols and not pronounced:
                 # a symbol cell says the symbols' names, a comma apart
                 assert c.word_texts == names
                 assert c.text == ", ".join(names)
@@ -112,7 +119,8 @@ def check_invariants(d: Document) -> None:
                 w = d.words[widx]
                 # a symbol's slot says its name, a word's slot its text; beside
                 # words only a glyph (and its variation selector) has a name
-                assert c.word_texts[slot] == (names[slot] or w.text)
+                if not pronounced:
+                    assert c.word_texts[slot] == (names[slot] or w.text)
                 if names[slot] and not symbols:
                     assert w.text[0] in _GLYPHS and w.text[1:] in (
                         "", "\N{VARIATION SELECTOR-15}",
@@ -120,7 +128,7 @@ def check_invariants(d: Document) -> None:
                 assert any(line == w.line and s <= w.start and w.end <= e
                            for line, s, e in c.regions), (
                     f"cell chunk {c.idx}: {w.text!r} outside its regions")
-        else:
+        elif not pronounced:
             # chunk.text must be a VERBATIM slice of the flattened document,
             # positioned on the lines the chunk claims.
             assert not c.regions and c.cell is None
@@ -139,6 +147,9 @@ def check_invariants(d: Document) -> None:
                 f"chunk {c.idx} runs past the line it claims")
             for slot, widx in enumerate(c.words):
                 assert c.word_texts[slot] == d.words[widx].text
+        else:
+            # respelled: the twin tests check what it says
+            assert not c.regions and c.cell is None
         if c.kind == "rule":
             assert not c.words and c.line_end == c.line_start + 1
         for slot, widx in enumerate(c.words):
@@ -150,10 +161,16 @@ def check_invariants(d: Document) -> None:
             assert d.chunk_of_word(widx) == c.idx
             assert d.slot_of_word(widx) == slot
             assert d.word_span_in_chunk(widx) == (off, off + len(wt))
-        # contiguous and ascending
+        # contiguous and ascending; every slot says something, and no slot
+        # runs into the next
         if c.words:
             assert c.words == list(range(c.words[0], c.words[0] + len(c.words)))
             assert c.offsets == sorted(c.offsets)
+        assert all(c.word_texts), f"chunk {c.idx} has an empty slot"
+        for slot in range(1, len(c.words)):
+            assert (c.offsets[slot - 1] + len(c.word_texts[slot - 1])
+                    <= c.offsets[slot]), (
+                f"chunk {c.idx} slots {slot - 1} and {slot} overlap")
         seen.extend(c.words)
 
     # -- coverage ----------------------------------------------------------
@@ -1745,6 +1762,288 @@ def test_a_cell_that_looks_like_a_fence_leaves_the_text_after_the_table_alone():
     after = [c for c in d.chunks if c.line_start >= t.line_end and c.speakable]
     assert [c.kind for c in after] == ["para", "para"]
     check_invariants(d)
+
+
+# ---------------------------------------------------------------------------
+# pronunciations (the config file's [pronunciations], see readaloud.pronounce)
+# ---------------------------------------------------------------------------
+
+
+def structure(d: Document) -> tuple:
+    """Everything a Document holds except what its chunks say."""
+    return (
+        d.lines, d.plain, d.tables,
+        [(w.text, w.line, w.start, w.end, w.idx) for w in d.words],
+        [(c.idx, c.words, c.line_start, c.line_end, c.speakable, c.kind,
+          c.cell, c.regions, c.row_end) for c in d.chunks],
+        d._chunk_of, d._slot_of, d._line_words, d._line_starts,
+        d._line_chunk, d._cell_regions,
+    )
+
+
+def said(d: Document) -> list[tuple[str, list[int], list[str]]]:
+    return [(c.text, c.offsets, c.word_texts) for c in d.chunks]
+
+
+def twins(lines, pairs, **kw) -> tuple[Document, Document]:
+    """The Document of `lines` (text, or styled lines) without and with
+    `pairs`, checked to differ only in what their chunks say."""
+    lexicon = Lexicon(pairs)
+    if isinstance(lines, str):
+        plain = Document.from_text(lines, **kw)
+        pronounced = Document.from_text(lines, pronunciations=lexicon, **kw)
+    else:
+        plain = Document(lines, **kw)
+        pronounced = Document(lines, pronunciations=lexicon, **kw)
+    assert structure(pronounced) == structure(plain)
+    assert plain.respell_failures == pronounced.respell_failures == 0
+    for a, b in zip(plain.chunks, pronounced.chunks):
+        # each chunk says what respell makes of the chunk as written, with
+        # the symbols a cell says by name handed over as symbols
+        symbols = [(s, e, plain.words[w].text) for (s, e), w, t
+                   in zip(a.spans(), a.words, a.word_texts)
+                   if t != plain.words[w].text]
+        matches = lexicon.find(a.text, symbols) if a.words else []
+        assert (b.text, b.offsets, b.word_texts) == respell(
+            a.text, a.spans(), matches), f"chunk {a.idx} {a.text!r}"
+    check_invariants(plain)
+    check_invariants(pronounced, pronounced=True)
+    return plain, pronounced
+
+
+def test_pronunciations_respell_what_is_said_and_nothing_else():
+    text = ("Look up foo.id with kubectl.\nNew York\nCity has a userId.\n\n"
+            "    kubectl get id\n\n• the id\n• idle grid")
+    plain, d = twins(text, [("id", "ID"), ("kubectl", "cube control"),
+                            ("New York City", "NYC")])
+    para, code, items = [c for c in d.chunks if c.speakable]
+    assert para.text == "Look up foo.ID with cube control.\nNYC has a user ID."
+    # a slot keeps what is outside the match, several slots share one
+    assert para.word_texts == ["Look", "up", "foo.ID", "with", "cube control",
+                               "N", "Y", "C", "has", "a", "user ID"]
+    assert para.offsets == [0, 5, 8, 15, 20, 34, 35, 36, 38, 42, 44]
+    # code blocks and lists too; idle and grid are other words
+    assert code.text == "    cube control get ID"
+    assert items.text == "• the ID\n• idle grid"
+    # the words and the screen stay as written
+    assert texts(d) == texts(plain)
+    assert [d.words[w].text for w in para.words][4:8] == [
+        "kubectl", "New", "York", "City"]
+    kubectl = para.words[4]
+    assert d.word_span_in_chunk(kubectl) == (20, 32)
+
+
+def test_no_pronunciations_change_nothing():
+    text = "foo.id\n\n" + "\n".join(FEAT)
+    plain = Document.from_text(text, tables=[feat_table()], references=False)
+    for lexicon in (None, Lexicon(), Lexicon([("absent", "not here")])):
+        d = Document.from_text(text, tables=[feat_table()], references=False,
+                               pronunciations=lexicon)
+        assert structure(d) == structure(plain) and said(d) == said(plain)
+        assert d.respell_failures == 0
+    assert plain.respell_failures == 0
+
+
+def test_a_pronunciation_of_a_table_symbol_says_it_instead_of_its_name():
+    """Keys are what is on screen: a tick is ✓, never the "yes" it says."""
+    _plain, d = twins("\n".join(FEAT), [("✓", "check")],
+                      tables=[feat_table()], references=False)
+    cell = cells_of(d)
+    assert (cell[(1, 1)].text, cell[(1, 1)].word_texts) == ("check", ["check"])
+    assert cell[(2, 1)].text == "no" and cell[(3, 1)].text == "yes"   # ✗, ✅
+
+    _plain, d = twins("\n".join(GLYPH_MIX), [("✓", "check")],
+                      tables=[glyph_mix_table()], references=False)
+    mark = [c for c in d.chunks if c.kind == "cell" and c.cell[2] == 1]
+    assert mark[1].text == "check (partial)"
+    assert mark[1].word_texts == ["check", "partial"]
+    assert mark[3].text == "check ³"
+    # on screen inside a word, a tick is text like any other
+    assert mark[11].text == "https://x.io/check ok"
+
+    # a key with or without the variation selector a glyph is shown with
+    for key in ("✔", "✔" + VS16):
+        _plain, d = twins("\n".join(GLYPHS), [(key, "check")],
+                          tables=[glyphs_table()])
+        assert [c.text for c in d.chunks if c.kind == "cell"] == [
+            "a", "b", "check", "no", "yes", "no", "yes, yes", "✗."]
+
+
+def test_the_name_a_cell_says_for_a_symbol_is_never_matched_as_text():
+    text = "\n".join(FEAT) + "\nYes, cached."
+    _plain, d = twins(text, [("yes", "yep"), ("no", "nope")],
+                      tables=[feat_table()], references=False)
+    cell = cells_of(d)
+    assert [cell[(r, 1)].text for r in (1, 2, 3)] == ["yes", "no", "yes"]
+    assert d.chunks[-1].text == "yep, cached."          # written, so said
+
+    table = grid(KEYS, 1, [(2, 3), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9)],
+                 [1, 8], [5, 15])
+    _plain, d = twins("\n".join(KEYS), [("right arrow", "next"),
+                                        ("dot", "period"), ("arrow", "x")],
+                      tables=[table], references=False)
+    assert cells_of(d)[(2, 0)].text == "dot, right arrow"
+    _plain, d = twins("\n".join(KEYS), [("→", "to"), (".", "full stop")],
+                      tables=[table], references=False)
+    dot = cells_of(d)[(2, 0)]
+    assert (dot.text, dot.word_texts, dot.offsets) == (
+        "full stop, to", ["full stop", "to"], [0, 11])
+    assert [d.words[w].text for w in dot.words] == [".", "→"]
+
+
+# Markdown for mdcat (when it is installed): prose, code, a list and a table of
+# symbols, ticks and words
+PRONOUNCED_MD = """\
+# Setup of the id
+
+Run `kubectl get pods` and read foo.id, user_id and userId.
+New York
+City is where the id lives.  Yes, it is well-known.
+
+    kubectl apply -f x.yaml   # an id here too
+
+- a list item with an id
+- ✓ done, e.g. the id
+
+| Key | Done | Notes |
+|-----|:----:|-------|
+| `.` · `→` | ✓ | the id of the thing |
+| ⌘K | ✗ | ✓ (partial) yes |
+| `-` | ✅ | New York City, alpha beta gamma delta epsilon |
+"""
+
+PRONUNCIATION_PAIRS = [
+    ("id", "ID"), ("kubectl", "cube control"), ("New York City", "NYC"),
+    ("alpha", "Alpha Male"), ("beta", "b"), ("x", "ex"),
+    ("e.g.", "for example"), ("well-known", "famous"), ("Dr.", "doctor"),
+    ("✓", "check"), ("yes", "yep"), ("--", "dash dash"), ("dash", "hyphen"),
+    ("words", "words"), ("more", "mo"), ("A B C D", "Q"), ("(see)", "look"),
+    ("12.5%", "twelve and a half percent"), ("code", "c o d e"), ("→", "to"),
+    (".", "full stop"), ("right arrow", "next"), ("it's", "it is"),
+    ("Supercalifragilistic", "super"), ("✗", "cross"),
+    ("indented code", "indent"), ("gamma delta", "g d"), ("dot", "period"),
+]
+
+
+def test_fuzz_pronunciations_change_only_what_is_said():
+    import random
+    rng = random.Random(20260912)
+    vocab = ["alpha", "beta", "x", "12.5%", "well-known", "it's", "(see)",
+             "Supercalifragilistic", "https://example.com/a/b", "--", "e.g.",
+             "Dr.", "✓", "✗", "id", "foo.id", "userId", "kubectl", "A B C D"]
+    prose = ["Some prose here, foo.id.", "", "More words. And more.",
+             "    indented code with an id", "│ quoted line", "• bullet id",
+             "New York", "City and kubectl -- yes.", "A B", "C D x",
+             "```", "code block"]
+    for _ in range(120):
+        lines: list[str] = []
+        tables: list[Table] = []
+        for _block in range(rng.randrange(0, 3)):
+            lines.extend(rng.choice(prose) for _ in range(rng.randrange(0, 4)))
+            ncols = rng.randrange(1, 4)
+            rows_text = [
+                [" ".join(rng.choice(vocab)
+                          for _ in range(rng.choice([0, 1, 1, 2, 5])))
+                 for _ in range(ncols)]
+                for _ in range(rng.randrange(1, 4))]
+            widths = [rng.randrange(2, 13) for _ in range(ncols)]
+            block, table = lay_out(rows_text, widths, len(lines),
+                                   rng.choice(["", "  ", "│ "]))
+            lines.extend(block)
+            tables.append(table)
+        lines.extend(rng.choice(prose) for _ in range(rng.randrange(1, 6)))
+        pairs = rng.sample(PRONUNCIATION_PAIRS, rng.randrange(1, 12))
+        twins("\n".join(lines), pairs, tables=tables,
+              max_sentences=rng.choice([1, 4]),
+              max_chars=rng.choice([20, 380]))
+
+
+def test_pronunciations_of_an_mdcat_render_change_only_what_is_said():
+    import shutil
+    import tempfile
+
+    from readaloud import markdown
+
+    mdcat = shutil.which("mdcat")
+    if mdcat is None:
+        return                          # the fuzz above covers laid out tables
+    saved = os.environ.get("XDG_CONFIG_HOME")
+    with tempfile.TemporaryDirectory() as empty:
+        os.environ["XDG_CONFIG_HOME"] = empty   # no user config moves a byte
+        try:
+            renders = [markdown.render_markdown(PRONOUNCED_MD, mdcat=mdcat,
+                                                columns=columns)
+                       for columns in (30, 44, 80)]
+            quotes = [markdown.render_markdown(
+                "> Moving to New York City is expensive.\n", mdcat=mdcat,
+                columns=columns) for columns in (20, 80)]
+        finally:
+            if saved is None:
+                del os.environ["XDG_CONFIG_HOME"]
+            else:
+                os.environ["XDG_CONFIG_HOME"] = saved
+    for rendered in renders:
+        for pairs in (PRONUNCIATION_PAIRS, PRONUNCIATION_PAIRS[:3]):
+            twins(rendered.lines, pairs, tables=rendered.tables,
+                  references=False)
+        _plain, d = twins(rendered.lines, [("✓", "check"), ("yes", "yep")],
+                          tables=rendered.tables, references=False)
+        assert len(d.tables) == len(rendered.tables) == 1
+        cells = [c.text for c in d.chunks if c.kind == "cell"]
+        assert "check" in cells and "check (partial) yep" in cells
+    # a phrase says the same however the quote wraps: at 20 columns mdcat
+    # breaks it as "New York" and "│ City"
+    wrapped = []
+    for rendered in quotes:
+        plain, d = twins(rendered.lines, [("New York City", "NYC")],
+                         references=False)
+        spoken = " ".join(c.text for c in d.chunks if c.speakable)
+        assert "NYC" in spoken and "York" not in spoken, spoken
+        wrapped.append("York\n│ City" in "\n".join(plain.plain))
+    assert wrapped == [True, False]
+
+
+def test_respell_failures_count_the_chunks_read_as_written():
+    from readaloud import document as document_module
+
+    class Sabotaged(Lexicon):
+        def find(self, text, symbols=()):
+            raise RuntimeError("sabotaged")
+
+    text = "The id.\n\n" + "\n".join(FEAT)
+    plain = Document.from_text(text, tables=[feat_table()], references=False)
+    d = Document.from_text(text, tables=[feat_table()], references=False,
+                           pronunciations=Sabotaged([("id", "ID")]))
+    assert d.respell_failures == len([c for c in plain.chunks if c.words])
+    assert structure(d) == structure(plain) and said(d) == said(plain)
+    check_invariants(d)
+
+    # a respelling whose slots do not hold is not used either: slots out of
+    # order, a slot missing, a slot empty
+    real = document_module.respell
+
+    def overlapping(text, slots, matches):
+        return text, [0] * len(slots), [text[:1]] * len(slots)
+
+    def dropped(text, slots, matches):
+        new, offsets, texts = real(text, slots, matches)
+        return new, offsets[:-1], texts[:-1]
+
+    def emptied(text, slots, matches):
+        new, offsets, texts = real(text, slots, matches)
+        return new, offsets, texts[:-1] + [""]
+
+    for broken in (overlapping, dropped, emptied):
+        document_module.respell = broken
+        try:
+            d = Document.from_text("foo.id and more.\n\nNothing to say here.",
+                                   pronunciations=Lexicon([("id", "ID")]))
+        finally:
+            document_module.respell = real
+        assert d.respell_failures == 1, broken.__name__   # the one match
+        assert [c.text for c in d.chunks] == [
+            "foo.id and more.", "", "Nothing to say here."]
+        check_invariants(d)
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,8 @@ Invariants other modules rely on (all covered by tests/test_document.py):
 * ``doc.plain[w.line][w.start:w.end] == w.text`` for every word -- ``Word.text``
   is a *verbatim* slice of the line, never normalised.  ``readaloud.speech``
   ends each slot at ``offset + len(chunk.word_texts[i])``, which is the word's
-  own text except for a symbol a table cell reads by name (below).
+  own text except for a symbol a table cell reads by name and a word a
+  pronunciation respells (below).
 * ``doc.words`` is in reading order and ``doc.words[i].idx == i``.  Reading
   order is line order, except inside a table (see below): there it is row by
   row, cell by cell, and line then start within a cell, so a wrapped cell's
@@ -25,8 +26,10 @@ Invariants other modules rely on (all covered by tests/test_document.py):
   cell (nothing but symbols, like ✓ or `.` · `→`), whose slots say the names
   ("yes", "dot", "right arrow") a comma apart, and every glyph (a tick, a
   cross, an arrow or a key like ⌘) of a cell with words, whose slot says its
-  name in place ("✓³" is "yes ³").  The word still covers its symbol on
-  screen.
+  name in place ("✓³" is "yes ³"), and for a word a pronunciation respells
+  (with ``id = ID``, "foo.id" is "foo.ID").  The word still covers its symbol
+  or its own text on screen.  Slots are never empty, in order and never
+  overlap.
 * ``chunk.words`` is contiguous and ascending; concatenating the ``words`` lists
   of all chunks in order reproduces ``range(len(doc.words))`` exactly -- every
   word lives in exactly one chunk.
@@ -35,7 +38,10 @@ Invariants other modules rely on (all covered by tests/test_document.py):
   table cell, whose text is its trimmed per line segments joined by the
   cell's ``joins`` (a wrapped cell's lines interleave with its neighbours'),
   with the names above in place of their symbols and a separator such as
-  "·" between words said as a comma.
+  "·" between words said as a comma -- and except where a pronunciation from
+  the config file applies (see :mod:`readaloud.pronounce`), which says its
+  respelling instead, with a space added where it would run into a letter or
+  digit.
 * Chunks cover every line of the document.  ``chunk.line_start`` is inclusive,
   ``chunk.line_end`` is **exclusive**.  Consecutive chunks may share one line
   (when a long paragraph is split at a sentence boundary in the middle of a
@@ -52,6 +58,14 @@ from mdcat's render) is chunked as one ``kind="rule"`` chunk per rule line and
 one ``kind="cell"`` chunk per cell, header row included, never split into
 sentences.  A Table that does not fit the lines and words is ignored and its
 lines read as ordinary text; ``doc.tables`` holds the ones in use.
+
+Pronunciations: a :class:`~readaloud.pronounce.Lexicon` handed to the Document
+changes what its chunks say and nothing else.  Each chunk's ``text``,
+``offsets`` and ``word_texts`` are respelled once the chunks are built; the
+words, lines, tables and every other field of every chunk are the same as in a
+Document built without one, so the display, the highlight, clicks and search
+never see a respelling.  A chunk the respelling fails on is read as written
+and counted in ``doc.respell_failures``.
 
 Word segmentation keeps as ONE word: contractions (``it's``, ``don't``),
 hyphenated compounds (``well-known``), money and decimals (``$4.50``,
@@ -84,6 +98,7 @@ from dataclasses import dataclass, field
 from typing import Container, Iterable, Iterator, Sequence
 
 from .ansi import Run, Style
+from .pronounce import Lexicon, respell
 from .width import cell_offsets
 
 __all__ = [
@@ -142,7 +157,8 @@ class Chunk:
     line_end: int              # EXCLUSIVE
     # --- additive: defaulted, so the positional order above stays valid ---
     speakable: bool = True     # False => nothing to say; playback skips it
-    #: doc.words[i].text, or the name a table cell says for a symbol
+    #: doc.words[i].text, or the name a table cell says for a symbol, or what
+    #: a pronunciation says for the word
     word_texts: list[str] = field(default_factory=list)
     #: "para" | "code" | "blank" | "cell" | "rule"; "text" is only the
     #: default, for chunks built by hand
@@ -1227,6 +1243,21 @@ def _image_link_references(lines: Iterable[Sequence[Run]],
 # ---------------------------------------------------------------------------
 
 
+def _slots_hold(text: str, offsets: Sequence[int], texts: Sequence[str],
+                count: int) -> bool:
+    """Whether `count` slots sit in `text`: never empty, in order, not
+    overlapping, and each ``texts[i]`` found at ``offsets[i]``."""
+    if len(offsets) != count or len(texts) != count:
+        return False
+    end = 0
+    for offset, slot in zip(offsets, texts):
+        if (not slot or offset < end
+                or text[offset:offset + len(slot)] != slot):
+            return False
+        end = offset + len(slot)
+    return True
+
+
 class Document:
     """A parsed document: styled lines, plain lines, words and chunks.
 
@@ -1235,13 +1266,17 @@ class Document:
     ``references=False`` turns off the handling of mdcat's degraded link
     reference output and handles only the references ``mdcat --ansi`` writes
     for images inside links, see the module docstring.
+    `pronunciations` (the config file's, see :mod:`readaloud.pronounce`)
+    respells what the chunks say and nothing else; ``respell_failures`` counts
+    the chunks read as written because respelling them failed.
     """
 
     def __init__(self, lines: Iterable[Sequence[Run]] | None = None, *,
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
                  max_chars: int = DEFAULT_MAX_CHARS,
                  tables: Sequence[Table] = (),
-                 references: bool = True) -> None:
+                 references: bool = True,
+                 pronunciations: Lexicon | None = None) -> None:
         self.max_sentences = int(max_sentences)
         self.max_chars = int(max_chars)
         self.references = bool(references)
@@ -1262,6 +1297,9 @@ class Document:
         self.chunks: list[Chunk] = build_chunks(
             self.plain, self.words, self.max_sentences, self.max_chars,
             tables=self.tables, cells=cells)
+        self.respell_failures = 0
+        if pronunciations:
+            self.respell_failures = self._respell(pronunciations)
 
         # word index -> (chunk index, slot inside that chunk)
         self._chunk_of: list[int] = [0] * len(self.words)
@@ -1303,6 +1341,41 @@ class Document:
             regions.sort()
 
     # -- construction helpers ------------------------------------------------
+
+    def _respell(self, lexicon: Lexicon) -> int:
+        """Say `lexicon`'s pronunciations in every chunk; returns the failures.
+
+        A slot that says a symbol by name (its text is not its word's) goes to
+        :meth:`Lexicon.find` with the symbol on screen, which is what a key
+        names: ``✓ = check`` respells a tick, ``yes = yep`` does not.  A chunk
+        changes only when the new slots still hold (as many as before, never
+        empty, in order and found at their offsets): a pronunciation must never
+        hand the Engine a chunk it cannot highlight.  Any failure leaves the
+        chunk as written and is counted.
+        """
+        failures = 0
+        for chunk in self.chunks:
+            if not (chunk.speakable and chunk.words and len(chunk.words)
+                    == len(chunk.offsets) == len(chunk.word_texts)):
+                continue
+            try:
+                slots = [(o, o + len(t))
+                         for o, t in zip(chunk.offsets, chunk.word_texts)]
+                symbols = [(a, b, self.words[w].text) for (a, b), w, t
+                           in zip(slots, chunk.words, chunk.word_texts)
+                           if t != self.words[w].text]
+                matches = lexicon.find(chunk.text, symbols)
+                if not matches:
+                    continue
+                text, offsets, texts = respell(chunk.text, slots, matches)
+                held = _slots_hold(text, offsets, texts, len(slots))
+            except Exception:  # noqa: BLE001 - read as written, never stop
+                held = False
+            if not held:
+                failures += 1
+                continue
+            chunk.text, chunk.offsets, chunk.word_texts = text, offsets, texts
+        return failures
 
     @classmethod
     def from_text(cls, text: str, **kwargs) -> "Document":

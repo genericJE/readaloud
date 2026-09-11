@@ -41,6 +41,10 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
   [below](#the-system-playpause-button).
 - **Your defaults live in `~/.readaloud.conf`.** Voice, speed, chunking, colours and the
   follow lead, in a commented INI file that the first run writes for you.
+- **Says words the way you do.** A `[pronunciations]` section in the config file sets how
+  a word or phrase is said. Kokoro reads the `id` in `user.id` to rhyme with "kid";
+  `id = ID` makes it "eye dee", while the highlight stays on the word as written. See
+  [below](#pronunciations).
 - **Survives the awkward cases:** terminal resize, empty input, input with nothing
   speakable, a chunk whose synthesis fails, and `q` during synthesis.
 
@@ -150,7 +154,9 @@ neighbouring cells mixed together. `-md` works from the source, where the cells 
   mark". Arrows and key symbols (← → ↑ ↓ ⏎ ⇥ ⇧ ⌃ ⌥ ⌘ ⌫ ⎋) are read by name too, and a
   cell holding nothing but symbols is read by their names, so the Keys table below says
   "dot, right arrow" for its `.` · `→` row, and `⇧⌘` is "shift, command". A symbol-only
-  cell with a symbol readaloud has no name for is skipped whole.
+  cell with a symbol readaloud has no name for is skipped whole. A
+  [pronunciation](#pronunciations) can change what a named symbol says, but it cannot make
+  a skipped cell speak.
 - Footnote numbers stay on screen and are read where they stand, and the footnotes
   themselves are read; the pipe removes the numbers and skips the footnotes. A badge, or
   any image inside a link, is read by its alt text without the `[1]` mdcat puts after it,
@@ -241,9 +247,11 @@ there is a short pause before the audio resumes.
 ## Configuration
 
 Most flags can also be preferences in `~/.readaloud.conf`; the ones that pick the input or
-the output (`-f`, `-md`, `--start`, `--save`) cannot. The first
-run writes a fully commented template with every key present but commented out, so an
-untouched file means "all defaults", and says so on stderr once:
+the output (`-f`, `-md`, `--start`, `--save`) cannot. A `[pronunciations]` section in the
+same file tells readaloud how to say particular words (see
+[Pronunciations](#pronunciations)). The first run writes a fully commented template with
+every key present but commented out and no pronunciations, so an untouched file means
+"all defaults", and says so on stderr once:
 
 ```
 readaloud: created /Users/you/.readaloud.conf -- your defaults live there now
@@ -299,6 +307,10 @@ follow_margin = 2
 # Take over the system play/pause button.  Needs the optional [mediakeys]
 # extra; without it this setting does nothing at all.
 media_keys = true
+
+[pronunciations]
+# How to say a word or phrase: the text as written on the left of the "=",
+# and how to say it on the right.  Empty to begin with; see below.
 ```
 
 The file is meant to be hand-edited and is read forgivingly. A missing file is not an
@@ -310,6 +322,115 @@ because a `print()` would land on top of the curses screen.
 ```
 PLAY     af_heart  1.00x  chunk 1/12  follow on  |  config: speed: 'maybe' is not a number; using 1.0
 ```
+
+### Pronunciations
+
+Kokoro does not always say a word the way you would. It reads the `id` in `user.id` to
+rhyme with "kid" and runs `ASP.NET` together into "aspnet". The `[pronunciations]` section
+fixes that: each line holds the text as written, an `=`, and how to say it, spelled the
+way it sounds.
+
+```ini
+[pronunciations]
+# text as written = how to say it
+id = ID                    # user.id, user_id, userId, the id; not idle or grid
+ids = IDs                  # other forms of a word are entries of their own
+kubectl = cube control     # the highlight stays on kubectl while it is said
+GIF = jif                  # has a capital: matches GIF only, never gif
+New York City = NYC        # a phrase: any spacing, one line break too
+.NET = dot net             # ASP.NET says "ASP dot net"
+C# = C sharp
+std::vector = standard vector
+!= = not equal             # no quotes needed: the separator has spaces round it
+✓ = check                  # a tick in a -md table says "check", not "yes"
+macOS = macOS              # said as written, which keeps "OS" below off it
+OS = O S
+"#include" = hash include  # quote text that starts with # or ; or a quote
+```
+
+How the text on the left is found:
+
+- **It is text, not a pattern.** `C#`, `std::vector` and `.NET` mean exactly those
+  characters. The two sides are split at the first `=` with a space on each side, so `!=`
+  and `==` need no quotes; a line without one splits at its first `=`, so `id=ID` works
+  too.
+- **A word matches on its own and as part of a name,** never inside a longer word: `id`
+  matches `the id`, `foo.id`, `user_id`, `userId` and `idToken`, but not `idle`, `grid`,
+  `ids` or `id2`. Spaces and punctuation end a word, and so does a lowercase letter
+  followed by a capital. Text that starts or ends with a symbol needs no such break on
+  that side: `.NET` matches in `ASP.NET`.
+- **Smart case,** as in search. Lowercase text matches any case, so `id` covers `Id` and
+  `ID` as well. Text with a capital matches that case only, so `GIF` leaves `gif` alone.
+- **Phrases.** A space matches any run of spaces and tabs with at most one line break in
+  it, so `New York City` still matches where a paragraph wraps between the words, but
+  never across a blank line. Punctuation inside a phrase must be there as written.
+- **The longest match wins.** Reading goes left to right, and where several entries match
+  at the same place the longest one wins: with `New York = the big apple` as well, "New
+  York City" still says "NYC". A tie goes to the text with a capital, then to the later
+  line. Reading carries on after the match, so a respelling is never matched again and
+  `id = id card` is safe.
+
+Put quotes, single or double, round text that starts with `#`, `;` or a quote, or that has
+an `=` with spaces round it: `"#include" = hash include`, `"a = b" = c`. Without the
+quotes, `#include = hash include` is a comment and does nothing. A `#` or `;` after a
+space starts a comment, so a pronunciation holding one needs quotes too
+(`hash = "number # sign"`), while `C# = C sharp` needs none. There are no escapes.
+
+Pronunciations apply wherever readaloud speaks: prose, code blocks, piped output and the
+cells of a `-md` table, in the reader and in a `--save` WAV alike. Only what is said
+changes. The screen shows the text as written, search finds it as written, and the
+highlight stays on the written word while its respelling is said: `kubectl` stays lit
+through "cube control". Control Center and the lock screen show what is said, so
+`kubectl get pods` is titled "cube control get pods" there.
+
+A `-md` table says its ticks and crosses as "yes" and "no", and its arrows and keys by
+name (see [above](#markdown-with--md)). Those names are not text an entry can match, so
+`yes = yep` changes a written "yes" but no tick, and `right arrow = next` leaves every `→`
+alone. An entry for the symbol itself replaces its name: with `✓ = check`, a `✓` cell says
+"check" and `✓ (partial)` says "check (partial)". Each symbol is an entry of its own, so
+that leaves `✅` saying "yes", and an entry reaches a named symbol only when its text is
+that one symbol: `⌘C = copy` leaves a `⌘C` cell saying "command C", while `⌘ = cmd` makes
+it "cmd C". Outside a table Kokoro says nothing at all for a `✓` beside other words, and
+`✓ = check` makes it say "check" there too. A line or cell holding nothing but symbols
+readaloud has no name for is still skipped, so `★ = star` does nothing for a `★★★★`
+rating.
+
+Some tips:
+
+- Capitals usually get a word spelled out, which is why `id = ID` works; `API` and `URL`
+  come out as letters too. A few are still said as words (`SQL` is "sequel"), and spaces
+  between the letters spell those out: `SQL = S Q L`.
+- Other forms of a word are entries of their own. `id` does not match `ids`, so add
+  `ids = IDs`.
+- An entry that says its text as written guards it: `macOS = macOS` keeps `OS = O S` off
+  the "OS" in "macOS". A guard changes nothing in any case it matches, so a lowercase
+  `macos = macos` works too.
+- Try an entry before relying on it. `readaloud 'user.id'` reads just that with your
+  pronunciations, and `readaloud --no-config 'user.id'` reads it without them.
+
+A pronunciation is text for Kokoro to read, never phonemes: `id = /aɪdiː/` and misaki's
+`[id](/ˈaɪdi/)` links are refused with a warning, so write the word the way it sounds. Nor
+can a pronunciation make readaloud skip a word, because it needs at least one letter or
+digit.
+
+A line readaloud cannot use is reported with its line number, like any other problem in
+the file, and skipped. It costs only itself: every other pronunciation and every setting
+still applies.
+
+```
+readaloud: /Users/you/.readaloud.conf: [pronunciations] line 99: 'kubectl' has no "="; write it as: text = how to say it
+```
+
+The same text on two lines is reported too, and the later line wins; `id`, `Id` and `ID`
+are three different entries. A file written by an older readaloud has no
+`[pronunciations]` line, so add one above your entries: an entry left under `[readaloud]`
+is ignored, with a warning that it belongs under `[pronunciations]`. A fresh template ends
+with `[pronunciations]`, so a setting added at the bottom of it lands there: `speed = 1.5`
+is then reported as a setting to move under `[readaloud]`, not taken for a word (quote it,
+`"speed" = spead`, if you do mean the word). A misspelled heading such as
+`[pronunciation]` is ignored with a warning
+that names the section it probably meant, and past five problems the rest are counted
+rather than listed.
 
 ### How far ahead follow mode scrolls
 
@@ -397,6 +518,7 @@ language packs, which this project does not install by default.
 | `cli.py` | arguments, config precedence, reading the input, `--save`, and handing `-md` input to `markdown.py` |
 | `ansi.py` | escape-sequence parser to styled `Run`s; Markdown cleanup for non-ANSI input |
 | `document.py` | words with character offsets, the sentence/paragraph chunker, and table cells |
+| `pronounce.py` | `[pronunciations]`: finding the text in a chunk and respelling it, so every word keeps its highlight |
 | `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
 | `speech.py` | Kokoro pipeline, the token to word-slot timestamp alignment, and trimming a cell's silence |
@@ -404,7 +526,7 @@ language packs, which this project does not install by default.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
-| `config.py` | `~/.readaloud.conf`: parsing, clamping, and the commented template |
+| `config.py` | `~/.readaloud.conf`: parsing the settings and the `[pronunciations]` lines, clamping, and the commented template |
 | `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## Development

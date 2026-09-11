@@ -9,8 +9,9 @@ Responsibilities, in order:
 3. obtain the input text -- ``-f FILE`` (or ``-md FILE``), positional ``TEXT``,
    or piped stdin -- draining stdin *completely* before anything else touches
    fd 0;
-4. build the `Document`; with ``-md`` the input is Markdown source, rendered by
-   mdcat and read one table cell at a time (see `readaloud.markdown`);
+4. build the `Document`, which says the config file's pronunciations (see
+   `readaloud.pronounce`); with ``-md`` the input is Markdown source, rendered
+   by mdcat and read one table cell at a time (see `readaloud.markdown`);
 5. either render the whole document to a WAV file (``--save``) or hand over to
    `readaloud.app.run`, which owns the curses session.
 
@@ -300,8 +301,12 @@ def read_input(args: argparse.Namespace) -> str:
 
 
 def build_document(data: str, *, max_sentences: int, max_chars: int,
-                   no_color: bool):
-    """Parse `data` (ANSI or raw markdown) into a `Document`."""
+                   no_color: bool, pronunciations=None):
+    """Parse `data` (ANSI or raw markdown) into a `Document`.
+
+    `pronunciations` is the config file's `readaloud.pronounce.Lexicon`, which
+    the Document respells its chunks with.
+    """
     from . import ansi
     from .document import Document
 
@@ -310,12 +315,13 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
         lines = ansi.strip_markdown(lines)
     if no_color:
         lines = _monochrome(lines)
-    return Document(lines, max_sentences=max_sentences, max_chars=max_chars)
+    return Document(lines, max_sentences=max_sentences, max_chars=max_chars,
+                    pronunciations=pronunciations)
 
 
 def build_markdown_document(data: str, *, mdcat: str, columns: int,
                             max_sentences: int, max_chars: int,
-                            no_color: bool):
+                            no_color: bool, pronunciations=None):
     """Render Markdown source with mdcat into a `Document` that reads tables by cell.
 
     Returns ``(Document, notices)``: one line per table that could not be
@@ -327,7 +333,8 @@ def build_markdown_document(data: str, *, mdcat: str, columns: int,
     tables were measured on.  ``references=False`` keeps a footnote's ``[1]``
     on screen and reads the footnote.  mdcat still writes link references for
     an image inside a link (a badge's ``[1]`` and its ``[1]: URL`` line); the
-    Document silences those itself, outside the tables.
+    Document silences those itself, outside the tables.  `pronunciations`
+    respells the chunks, cells included, as in `build_document`.
     """
     from . import markdown
     from .document import Document
@@ -335,7 +342,8 @@ def build_markdown_document(data: str, *, mdcat: str, columns: int,
     rendered = markdown.render_markdown(data, mdcat=mdcat, columns=columns)
     lines = _monochrome(rendered.lines) if no_color else rendered.lines
     doc = Document(lines, max_sentences=max_sentences, max_chars=max_chars,
-                   tables=rendered.tables, references=False)
+                   tables=rendered.tables, references=False,
+                   pronunciations=pronunciations)
     return doc, list(rendered.notices)
 
 
@@ -560,6 +568,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
                  "'mdcat --ansi notes.md | readaloud'")
         return EXIT_USAGE
 
+    # Built once whichever way the document is read; --no-config has none.
+    from .pronounce import Lexicon
+
+    pronunciations = Lexicon(cfg.pronunciations)
     no_color = not args.color
     md_notices: list[str] = []
     if mdcat is not None:
@@ -581,6 +593,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 max_sentences=args.sentences,
                 max_chars=args.chars,
                 no_color=no_color,
+                pronunciations=pronunciations,
             )
         except markdown_mod.MdcatError as exc:
             _err(str(exc))
@@ -591,15 +604,26 @@ def _main(argv: Sequence[str] | None = None) -> int:
             max_sentences=args.sentences,
             max_chars=args.chars,
             no_color=no_color,
+            pronunciations=pronunciations,
         )
     if not doc.speakable_chunks:
         _err("the input contains nothing speakable (only rules, symbols or blanks)")
         return EXIT_ERROR
 
+    # What the document has to say about itself, after the config warnings:
+    # the tables -md reads line by line, and the chunks a pronunciation could
+    # not be applied to (only a bug does that, so it is worth a line).
+    notices = list(md_notices)
+    if doc.respell_failures:
+        count = doc.respell_failures
+        chunks = "1 chunk is" if count == 1 else f"{count} chunks are"
+        notices.append(f"pronunciations: {chunks} read as written "
+                       "(a pronunciation could not be applied)")
+
     # ---- --save: no terminal needed -------------------------------------
     if args.save:
         # warnings, not output: stdout stays the one machine-readable line
-        for notice in md_notices:
+        for notice in notices:
             _err(notice)
         return save_wav(doc, args.save, voice=args.voice, speed=args.speed,
                         lang=lang, repo=args.repo)
@@ -642,7 +666,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         media_keys=bool(args.media_keys),
         media_keys_explicit=bool(getattr(args, "media_keys_explicit", False)),
         doc_name=document_name(args),
-        notices=short_notices(warnings, target) + md_notices,
+        notices=short_notices(warnings, target) + notices,
     )
 
 
