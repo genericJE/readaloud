@@ -1,14 +1,14 @@
 # readaloud
 
-A terminal "Read Aloud" for anything you can pipe into it.
+A terminal "Read Aloud" for Markdown files and anything you can pipe into it.
 
 `readaloud` chunks text into sentences, speaks it with [Kokoro-82M][kokoro] running
-locally on the Apple Neural Engine via [mlx-audio][mlx-audio], and highlights the word
+locally on the Apple silicon GPU via [mlx-audio][mlx-audio], and highlights the word
 you are hearing. Move around with `less` keys while it keeps talking, or click any word
 to jump playback there. Nothing leaves the machine.
 
 ```
-mdcat --ansi notes.md | readaloud
+readaloud -md notes.md
 ```
 
 
@@ -17,12 +17,14 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
 
 ## What it does
 
+- **Reads Markdown as mdcat draws it.** `readaloud -md notes.md` shows the file the way
+  [mdcat][mdcat] draws it and reads its tables one cell at a time, row by row, with the
+  highlight on the cell even where it wraps beside its neighbours. In a table, ticks and
+  crosses are read as yes and no, and arrows and key symbols by name. See
+  [below](#markdown-with--md).
 - **Reads styled terminal output.** Piped ANSI (`mdcat --ansi`, `bat`, `glow`) keeps its
   colours, bold, italics and OSC-8 hyperlinks on screen. Raw Markdown gets its syntax
   characters stripped so `##` and `**` are not spoken out loud.
-- **Reads Markdown tables one cell at a time.** `readaloud -md notes.md` shows the file
-  the way `mdcat --ansi` draws it, and the highlight follows each cell even where it
-  wraps. See [below](#markdown-tables-one-cell-at-a-time).
 - **Word-level highlighting.** misaki's per-token timestamps are aligned back onto the
   original characters, so the highlight tracks the audio to within a few milliseconds
   rather than being interpolated.
@@ -50,10 +52,9 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
 brew install genericJE/tools/readaloud
 ```
 
-Apple silicon, macOS 14 or later. That is the whole dependency list: the formula ships a
-self-contained bundle carrying its own Python and every library it needs, so nothing is
-compiled and nothing is fetched from PyPI. The Kokoro model weights (~300 MB) download
-on first use.
+Apple silicon, macOS 14 or later. The formula ships a self-contained bundle carrying its
+own Python and every library it needs, so nothing is compiled and nothing is fetched from
+PyPI. The Kokoro model weights (~300 MB) download on first use.
 
 ### From a checkout
 
@@ -74,17 +75,26 @@ cache; later runs load it in a few seconds. Only the safetensors and voice packs
 fetched. The repo also ships a PyTorch checkpoint of the same weights that an MLX build
 never opens, and skipping it halves the download.
 
+### mdcat
+
+[mdcat][mdcat] is optional, and neither install brings it. `-md` runs it, and the
+`mdcat --ansi notes.md | readaloud` pipe needs it too; everything else works without it.
+
+```bash
+brew install mdcat
+```
+
 ## Usage
 
 ```bash
-# the primary path: rendered markdown, colours and all
+# the primary path for Markdown: drawn by mdcat, tables read one cell at a time
+readaloud -md notes.md
+
+# anything already rendered, colours and all
 mdcat --ansi notes.md | readaloud
 
-# a file directly (raw markdown is cleaned up before it is spoken)
+# a file, no mdcat needed (most Markdown syntax is stripped before it is spoken)
 readaloud -f README.md
-
-# markdown drawn by mdcat, tables read one cell at a time (needs mdcat)
-readaloud -md notes.md
 
 # a string
 readaloud "the quick brown fox jumps over the lazy dog"
@@ -104,42 +114,56 @@ Piping works even when stdout is redirected. `readaloud` reopens `/dev/tty` for 
 keyboard and the screen, so `mdcat --ansi notes.md | readaloud > log` draws the reader on
 the terminal rather than into `log`.
 
-### Markdown tables, one cell at a time
+### Markdown with `-md`
+
+`-md` reads a Markdown file from its source. readaloud runs mdcat itself, shows the file
+as `mdcat --ansi` draws it, headings, colours and tables included, and reads each table
+one cell at a time.
+
+```bash
+readaloud -md notes.md
+readaloud -md notes.md --save notes.wav
+cat notes.md | readaloud -md
+```
+
+`-md` also works after a file that exists (`readaloud notes.md -md`), after `-f FILE`, and
+after TEXT. Put TEXT before the flag, because `-md` takes the word that follows it as its
+file.
 
 mdcat draws a table without pipes, padding its columns with spaces and wrapping a long
 cell onto extra lines beside its neighbours. Once it is rendered nothing says where one
 cell ends and the next begins, so a piped table is read line by line, the words of
-neighbouring cells mixed together. `-md` takes the Markdown *source* instead: readaloud
-runs mdcat itself, shows the file the way `mdcat --ansi` draws it, and reads every table
-one cell at a time. Unlike `mdcat --ansi notes.md | readaloud`, footnote numbers stay on
-screen and footnotes are read.
+neighbouring cells mixed together. `-md` works from the source, where the cells are known:
 
-```bash
-readaloud -md notes.md
-readaloud -f notes.md -md          # -md also works on -f, TEXT and stdin
-cat notes.md | readaloud -md
-```
-
-- Tables are read row by row, left to right, header row included. The highlight stays on
-  the cell being read even where it wraps onto lines shared with the next column.
-- Each cell is a chunk of its own: `.` and `,` step one cell, and `chunk N/M` and
-  `--start` count cells.
+- Tables are read row by row, left to right, header row included, one cell at a time. The
+  highlight stays on the cell being read even where it wraps onto lines shared with the
+  next column, and follow mode keeps the whole row in view. A row too tall to fit between
+  the follow margins is followed word by word instead.
+- Each cell is a chunk of its own: the chunk keys (`.` and `,`) step one cell, a click
+  anywhere in a cell plays it from the word nearest the click, and `chunk N/M` and
+  `--start` count cells. An empty cell is skipped, and so is a click on one.
+- The silence Kokoro puts around each cell is trimmed, so cells follow each other with a
+  short pause and rows with a longer one, in the reader and in a `--save` WAV alike.
+  Prose keeps its usual pauses.
 - A tick or a cross (✓, ✅, ✗, ❌ and friends) is read as "yes" or "no" wherever it
   appears in a cell, where Kokoro would otherwise say nothing, or "white heavy check
   mark". Arrows and key symbols (← → ↑ ↓ ⏎ ⇥ ⇧ ⌃ ⌥ ⌘ ⌫ ⎋) are read by name too, and a
-  cell holding nothing but symbols is read by their names, so a keys table says "dot,
-  right arrow" for `` `.` &middot; `→` ``. A symbol-only cell with a symbol readaloud has
-  no name for is skipped whole.
+  cell holding nothing but symbols is read by their names, so the Keys table below says
+  "dot, right arrow" for its `.` · `→` row, and `⇧⌘` is "shift, command". A symbol-only
+  cell with a symbol readaloud has no name for is skipped whole.
+- Footnote numbers stay on screen and are read where they stand, and the footnotes
+  themselves are read; the pipe removes the numbers and skips the footnotes. A badge, or
+  any image inside a link, is read by its alt text without the `[1]` mdcat puts after it,
+  and the numbered URL line mdcat adds for it is shown but not read.
 - A table readaloud cannot map is read line by line, as it would be when piped, and a
-  notice in the status bar says so (on stderr for `--save`).
-- The layout is fixed at startup: the terminal's width, capped at 80 columns like mdcat's
-  own default when piped (`--save` always uses 80). Narrow the terminal afterwards and the
-  lines soft wrap instead of being redrawn.
+  notice in the status bar says so (in full on stderr for `--save`).
+- The layout is fixed at startup: the terminal's width, capped at 80 columns as mdcat
+  itself does (`--save` always uses 80). Narrow the terminal afterwards and the lines soft
+  wrap instead of being redrawn.
 
-`-md` needs [mdcat][mdcat] on your `PATH` (`brew install mdcat`). It is an optional
-dependency: nothing else uses it, and without it `-md` stops with a one-line hint while
-the rest of readaloud works as before. Input already rendered with `mdcat --ansi` is
-refused, since there is no source left to find the cells in.
+Without mdcat on your `PATH`, `-md` stops with a one-line hint and the rest of readaloud
+works as before. Input already rendered with `mdcat --ansi` is refused, since there is no
+source left to find the cells in.
 
 ## Options
 
@@ -176,8 +200,8 @@ over it, and an explicit flag wins over both.
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
-| `.` &middot; `→` | next chunk |
-| `,` &middot; `←` | previous chunk |
+| `.` &middot; `→` | next chunk (in a table read with `-md`, the next cell) |
+| `,` &middot; `←` | previous chunk (in a table read with `-md`, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
 | `F` | toggle follow mode; switching it on centres the spoken word |
 | `c` | jump to the spoken word and switch follow mode on, placing the view exactly where follow mode would (see `follow_lead`) |
@@ -216,7 +240,8 @@ there is a short pause before the audio resumes.
 
 ## Configuration
 
-Everything that is otherwise a flag can be a preference in `~/.readaloud.conf`. The first
+Most flags can also be preferences in `~/.readaloud.conf`; the ones that pick the input or
+the output (`-f`, `-md`, `--start`, `--save`) cannot. The first
 run writes a fully commented template with every key present but commented out, so an
 untouched file means "all defaults", and says so on stderr once:
 
@@ -317,11 +342,11 @@ when you quit. While it holds it:
 | Button | Does |
 | --- | --- |
 | play / pause | pause or resume, exactly like `Space` |
-| next track | next chunk, like `.` |
-| previous track | previous chunk, like `,` |
+| next track | next chunk, like the `→` key |
+| previous track | previous chunk, like the `←` key |
 
-Control Center and the lock screen show the paragraph being read as the track title and
-the document's name as the artist.
+Control Center and the lock screen show the chunk being read (a paragraph, or a table cell
+with `-md`) as the track title and the document's name as the artist.
 
 This needs [PyObjC][pyobjc]. A Homebrew install already bundles it. In a checkout it is an
 optional extra, so the reader itself stays a small install:
@@ -369,11 +394,12 @@ language packs, which this project does not install by default.
 
 | Module | Job |
 | --- | --- |
+| `cli.py` | arguments, config precedence, reading the input, `--save`, and handing `-md` input to `markdown.py` |
 | `ansi.py` | escape-sequence parser to styled `Run`s; Markdown cleanup for non-ANSI input |
-| `document.py` | words with character offsets, and the sentence/paragraph chunker |
+| `document.py` | words with character offsets, the sentence/paragraph chunker, and table cells |
 | `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
-| `speech.py` | Kokoro pipeline, and the token to word-slot timestamp alignment |
+| `speech.py` | Kokoro pipeline, the token to word-slot timestamp alignment, and trimming a cell's silence |
 | `player.py` | one persistent PortAudio stream with a lock-free callback |
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
@@ -393,7 +419,8 @@ uv run readaloud -f README.md
 stdin, which is the only way to exercise the curses path. `curses` cannot initialise
 without a tty, and skipping the `/dev/tty` reopen fails *silently*: every `getch()` just
 returns -1 forever. Tests marked `slow` need the model weights and an audio device; skip
-them with `-m "not slow"`.
+them with `-m "not slow"`. The tests that render with mdcat are skipped when it is not
+installed.
 
 While the TUI is up, `stderr` is parked on a temp file. The HuggingFace fetch bar and
 phonemizer's "words count mismatch" both arrive after curses owns the screen and would

@@ -76,8 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "examples:\n"
-            "  mdcat --ansi notes.md | readaloud\n"
             "  readaloud -md notes.md\n"
+            "  mdcat --ansi notes.md | readaloud\n"
             "  readaloud -f README.md\n"
             "  readaloud 'the quick brown fox'\n"
             "  readaloud -f notes.md --save notes.wav\n"
