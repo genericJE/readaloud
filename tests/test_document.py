@@ -702,14 +702,14 @@ def test_chunk_spans_helper_matches_offsets():
 
 
 # ---------------------------------------------------------------------------
-# tables: hand-built Table objects over mdcat --ansi output
+# tables (readaloud -md): hand-built Table objects over mdcat --ansi output
 # ---------------------------------------------------------------------------
 
 
 def grid(plain: list[str], top: int, rows: list[tuple[int, int]],
          starts: list[int], widths: list[int],
          joins: dict[tuple[int, int], list[str]] | None = None) -> Table:
-    """A Table over `plain`, mapped from the columns mdcat drew.
+    """A Table over `plain`, mapped the way readaloud.markdown maps one.
 
     `rows` are the (first, end) line ranges, header row first; `starts` and
     `widths` are each column's display columns.  Every cell gets a span on
@@ -1292,7 +1292,7 @@ def badges_table(plain: list[str]) -> Table:
 
 
 def test_references_false_silences_the_references_of_images_in_links():
-    """A README badge is read as its alt text, as through the pipe.
+    """A README badge is read as its alt text under -md, as through the pipe.
 
     ``mdcat --ansi`` writes an image inside a link as ``alt[1]`` and a
     ``[1]: <image URL>`` reference, which used to be read as "one" and a URL

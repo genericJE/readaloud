@@ -898,6 +898,7 @@ source = { editable = "." }
 dependencies = [
     { name = "en-core-web-sm" },
     { name = "espeakng-loader" },
+    { name = "markdown-it-py" },
     { name = "misaki" },
     { name = "mlx-audio" },
     { name = "num2words" },
@@ -922,6 +923,7 @@ dev = [
 requires-dist = [
     { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "espeakng-loader", specifier = ">=0.2.4" },
+    { name = "markdown-it-py", specifier = ">=3.0" },
     { name = "misaki", specifier = ">=0.9.4" },
     { name = "mlx-audio", specifier = ">=0.5.3" },
     { name = "num2words" },

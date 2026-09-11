@@ -104,11 +104,11 @@ CREW = [
 
 
 def crew_doc(before: Sequence[str] = (), after: Sequence[str] = ()) -> Document:
-    """A Document of `before`, the CREW table and `after`, the table mapped.
+    """A Document of `before`, the CREW table and `after`, as ``-md`` maps it.
 
-    The Table is built by hand from the render: rows as line ranges, and every
-    cell's column on every line of its row.  CREW is all single width, so its
-    display columns are char offsets.
+    The Table is built by hand the way readaloud.markdown builds one: rows as
+    line ranges, and every cell's column on every line of its row.  CREW is all
+    single width, so its display columns are char offsets.
     """
     top = len(before)
     rows = [(1, 2), (3, 4), (4, 7), (7, 9)]
@@ -1962,7 +1962,7 @@ def test_an_app_without_media_keys_never_touches_them():
 
 
 # --------------------------------------------------------------------------- #
-# 3c. a table read one cell at a time
+# 3c. a table read one cell at a time (readaloud -md)
 #
 # The App knows nothing about Markdown: it plays whatever chunks the Document
 # hands it.  What it does own is follow mode, which has to cope with a table

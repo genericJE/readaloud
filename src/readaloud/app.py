@@ -46,8 +46,8 @@ SPEED_STEP = 0.1
 #: how long a transient status message stays up
 MESSAGE_TTL = 4.0
 
-#: startup notices sit around longer, one after another: the user has to read
-#: what went wrong
+#: startup notices (config warnings, a table -md reads line by line) sit around
+#: longer, one after another: the user has to read what went wrong
 NOTICE_TTL = 12.0
 
 #: rows of context follow-mode keeps above/below the spoken word
@@ -396,7 +396,7 @@ class App:
         """Show `msgs` in the status bar one after another, each for `NOTICE_TTL`.
 
         Startup can have more to say than one status line holds: media keys
-        that could not be had, and a warning per problem in the config file.
+        that could not be had, config warnings, tables -md reads line by line.
         The first waits for the message already up to expire, and each of the
         rest for the one before it.
         """

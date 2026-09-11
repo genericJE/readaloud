@@ -47,8 +47,8 @@ Invariants other modules rely on (all covered by tests/test_document.py):
   empty cells) is *kept* -- so the line coverage above holds -- but is flagged
   ``speakable=False`` and must be skipped by playback.
 
-Tables: a :class:`Table` handed to the Document (the caller maps them from
-mdcat's render) is chunked as one ``kind="rule"`` chunk per rule line and
+Tables: a :class:`Table` handed to the Document (``readaloud -md`` maps them
+from mdcat's render) is chunked as one ``kind="rule"`` chunk per rule line and
 one ``kind="cell"`` chunk per cell, header row included, never split into
 sentences.  A Table that does not fit the lines and words is ignored and its
 lines read as ordinary text; ``doc.tables`` holds the ones in use.
@@ -64,8 +64,8 @@ still hears them.
 ``mdcat``'s degraded (non-tty) output writes links as ``homepage[1]`` plus a
 trailing ``[1]: https://...`` block.  Both halves are silenced: the reference
 block yields no words, and the inline markers are removed by
-:func:`strip_reference_markers` before ``plain`` is derived.  For output
-of ``mdcat --ansi``, pass ``references=False``: there ``[1]`` is mostly
+:func:`strip_reference_markers` before ``plain`` is derived.  ``-md`` renders
+with ``mdcat --ansi`` and passes ``references=False``: there ``[1]`` is mostly
 a footnote number (removing it would shift the table columns measured on the
 render) and ``[1]: ...`` a footnote, and both are read.  ``--ansi`` still
 writes that block for an image inside a link (a README badge), because
@@ -1205,7 +1205,7 @@ def _image_link_references(lines: Iterable[Sequence[Run]],
 class Document:
     """A parsed document: styled lines, plain lines, words and chunks.
 
-    `tables` maps rendered tables onto `lines` (the caller builds them);
+    `tables` maps rendered tables onto `lines` (``readaloud -md`` builds them);
     each one that fits is read one cell at a time, see :class:`Table`.
     ``references=False`` turns off the handling of mdcat's degraded link
     reference output and handles only the references ``mdcat --ansi`` writes

@@ -20,6 +20,9 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
 - **Reads styled terminal output.** Piped ANSI (`mdcat --ansi`, `bat`, `glow`) keeps its
   colours, bold, italics and OSC-8 hyperlinks on screen. Raw Markdown gets its syntax
   characters stripped so `##` and `**` are not spoken out loud.
+- **Reads Markdown tables one cell at a time.** `readaloud -md notes.md` shows the file
+  the way `mdcat --ansi` draws it, and the highlight follows each cell even where it
+  wraps. See [below](#markdown-tables-one-cell-at-a-time).
 - **Word-level highlighting.** misaki's per-token timestamps are aligned back onto the
   original characters, so the highlight tracks the audio to within a few milliseconds
   rather than being interpolated.
@@ -80,6 +83,9 @@ mdcat --ansi notes.md | readaloud
 # a file directly (raw markdown is cleaned up before it is spoken)
 readaloud -f README.md
 
+# markdown drawn by mdcat, tables read one cell at a time (needs mdcat)
+readaloud -md notes.md
+
 # a string
 readaloud "the quick brown fox jumps over the lazy dog"
 
@@ -98,12 +104,50 @@ Piping works even when stdout is redirected. `readaloud` reopens `/dev/tty` for 
 keyboard and the screen, so `mdcat --ansi notes.md | readaloud > log` draws the reader on
 the terminal rather than into `log`.
 
+### Markdown tables, one cell at a time
+
+mdcat draws a table without pipes, padding its columns with spaces and wrapping a long
+cell onto extra lines beside its neighbours. Once it is rendered nothing says where one
+cell ends and the next begins, so a piped table is read line by line, the words of
+neighbouring cells mixed together. `-md` takes the Markdown *source* instead: readaloud
+runs mdcat itself, shows the file the way `mdcat --ansi` draws it, and reads every table
+one cell at a time. Unlike `mdcat --ansi notes.md | readaloud`, footnote numbers stay on
+screen and footnotes are read.
+
+```bash
+readaloud -md notes.md
+readaloud -f notes.md -md          # -md also works on -f, TEXT and stdin
+cat notes.md | readaloud -md
+```
+
+- Tables are read row by row, left to right, header row included. The highlight stays on
+  the cell being read even where it wraps onto lines shared with the next column.
+- Each cell is a chunk of its own: `.` and `,` step one cell, and `chunk N/M` and
+  `--start` count cells.
+- A tick or a cross (✓, ✅, ✗, ❌ and friends) is read as "yes" or "no" wherever it
+  appears in a cell, where Kokoro would otherwise say nothing, or "white heavy check
+  mark". Arrows and key symbols (← → ↑ ↓ ⏎ ⇥ ⇧ ⌃ ⌥ ⌘ ⌫ ⎋) are read by name too, and a
+  cell holding nothing but symbols is read by their names, so a keys table says "dot,
+  right arrow" for `` `.` &middot; `→` ``. A symbol-only cell with a symbol readaloud has
+  no name for is skipped whole.
+- A table readaloud cannot map is read line by line, as it would be when piped, and a
+  notice in the status bar says so (on stderr for `--save`).
+- The layout is fixed at startup: the terminal's width, capped at 80 columns like mdcat's
+  own default when piped (`--save` always uses 80). Narrow the terminal afterwards and the
+  lines soft wrap instead of being redrawn.
+
+`-md` needs [mdcat][mdcat] on your `PATH` (`brew install mdcat`). It is an optional
+dependency: nothing else uses it, and without it `-md` stops with a one-line hint while
+the rest of readaloud works as before. Input already rendered with `mdcat --ansi` is
+refused, since there is no source left to find the cells in.
+
 ## Options
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `TEXT...` | | text to read, joined with spaces |
 | `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin) |
+| `-md`, `--markdown [FILE]` | | read `FILE` (or the `-f` file, `TEXT` or stdin) as Markdown: drawn by mdcat, tables read one cell at a time (needs mdcat) |
 | `-v`, `--voice NAME` | `af_heart` | Kokoro voice (see below) |
 | `-s`, `--speed X` | `1.0` | speech rate multiplier, 0.5 to 3.0 in the TUI |
 | `--sentences N` | `4` | max sentences per chunk |
@@ -327,6 +371,7 @@ language packs, which this project does not install by default.
 | --- | --- |
 | `ansi.py` | escape-sequence parser to styled `Run`s; Markdown cleanup for non-ANSI input |
 | `document.py` | words with character offsets, and the sentence/paragraph chunker |
+| `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
 | `speech.py` | Kokoro pipeline, and the token to word-slot timestamp alignment |
 | `player.py` | one persistent PortAudio stream with a lock-free callback |
@@ -374,6 +419,7 @@ MIT.
 If anything here ends up being useful to you and you feel like saying thanks, my PayPal is https://paypal.me/genericJE. Truly no expectation either way, just leaving the option here in case.
 
 [kokoro]: https://huggingface.co/hexgrad/Kokoro-82M
+[mdcat]: https://github.com/BIRSAx2/mdcat
 [mlx-audio]: https://github.com/Blaizzy/mlx-audio
 [pyobjc]: https://pyobjc.readthedocs.io/
 [uv]: https://docs.astral.sh/uv/

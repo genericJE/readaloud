@@ -6,9 +6,11 @@ Responsibilities, in order:
    ``~/.readaloud.conf`` (see `readaloud.config`);
 2. answer the "just tell me something" flags (``--list-voices``,
    ``--list-devices``) and exit;
-3. obtain the input text -- ``-f FILE``, positional ``TEXT``, or piped stdin --
-   draining stdin *completely* before anything else touches fd 0;
-4. build the `Document`;
+3. obtain the input text -- ``-f FILE`` (or ``-md FILE``), positional ``TEXT``,
+   or piped stdin -- draining stdin *completely* before anything else touches
+   fd 0;
+4. build the `Document`; with ``-md`` the input is Markdown source, rendered by
+   mdcat and read one table cell at a time (see `readaloud.markdown`);
 5. either render the whole document to a WAV file (``--save``) or hand over to
    `readaloud.app.run`, which owns the curses session.
 
@@ -75,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "examples:\n"
             "  mdcat --ansi notes.md | readaloud\n"
+            "  readaloud -md notes.md\n"
             "  readaloud -f README.md\n"
             "  readaloud 'the quick brown fox'\n"
             "  readaloud -f notes.md --save notes.wav\n"
@@ -85,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="text to read (joined with spaces)")
     p.add_argument("-f", "--file", metavar="FILE",
                    help="read from FILE instead of stdin/TEXT ('-' means stdin)")
+    # Takes the file like -f, or modifies -f, TEXT and stdin when given alone,
+    # so the value is True, a path, or None when the flag is absent.  Test it
+    # with `is not None`: `-md ''` is a (falsy) path.
+    p.add_argument("-md", "--markdown", nargs="?", const=True, default=None,
+                   metavar="FILE",
+                   help="read FILE (or the -f file, TEXT or stdin) as Markdown: "
+                        "show it with mdcat --ansi and read tables one cell at "
+                        "a time (needs mdcat)")
     # Everything with a `~/.readaloud.conf` counterpart defaults to None and is
     # filled in by `_apply_config`; the help text shows the built-in default.
     p.add_argument("-v", "--voice", default=None, metavar="NAME",
@@ -206,14 +217,26 @@ def _apply_config(args: argparse.Namespace, cfg) -> None:
         args.media_keys = bool(cfg.media_keys)
 
 
+def input_file(args: argparse.Namespace) -> str | None:
+    """The file named for the input: ``-md FILE``, else ``-f FILE`` ('-' is stdin).
+
+    A bare ``-md`` names no file; it only says how to read the others.
+    """
+    markdown = getattr(args, "markdown", None)
+    if isinstance(markdown, str):
+        return markdown
+    return getattr(args, "file", None)
+
+
 def document_name(args: argparse.Namespace) -> str:
     """What to call this document -- Control Center shows it as the "artist".
 
     A file gets its basename; anything piped or typed has no name, so it gets
     the one thing that is true of it.
     """
-    if getattr(args, "file", None) and args.file != "-":
-        return Path(args.file).name
+    path = input_file(args)
+    if path and path != "-":
+        return Path(path).name
     return "readaloud"
 
 
@@ -260,14 +283,15 @@ def check_voice(voice: str, repo: str, lang: str) -> str | None:
 def read_input(args: argparse.Namespace) -> str:
     """Return the raw text to read, draining stdin when that is the source.
 
-    Raises `OSError` for an unreadable ``--file``.
+    Raises `OSError` for an unreadable ``--file`` (or ``-md FILE``).
     """
     from .ui import read_stdin_text
 
-    if args.file and args.file != "-":
-        with open(args.file, "r", encoding="utf-8", errors="replace") as fh:
+    path = input_file(args)
+    if path and path != "-":
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read()
-    if args.file == "-":
+    if path == "-":
         return read_stdin_text()
     if args.text:
         return " ".join(args.text)
@@ -285,11 +309,42 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
     if not ansi.has_ansi(data):
         lines = ansi.strip_markdown(lines)
     if no_color:
-        lines = [
-            [replace(r, style=replace(r.style, fg=None, bg=None)) for r in line]
-            for line in lines
-        ]
+        lines = _monochrome(lines)
     return Document(lines, max_sentences=max_sentences, max_chars=max_chars)
+
+
+def build_markdown_document(data: str, *, mdcat: str, columns: int,
+                            max_sentences: int, max_chars: int,
+                            no_color: bool):
+    """Render Markdown source with mdcat into a `Document` that reads tables by cell.
+
+    Returns ``(Document, notices)``: one line per table that could not be
+    mapped and is read line by line instead.  Raises
+    `readaloud.markdown.MdcatError` when mdcat cannot render the document.
+
+    mdcat's lines go in exactly as rendered: `ansi.strip_markdown` would take
+    an unstyled render for raw Markdown and move characters of the lines the
+    tables were measured on.  ``references=False`` keeps a footnote's ``[1]``
+    on screen and reads the footnote.  mdcat still writes link references for
+    an image inside a link (a badge's ``[1]`` and its ``[1]: URL`` line); the
+    Document silences those itself, outside the tables.
+    """
+    from . import markdown
+    from .document import Document
+
+    rendered = markdown.render_markdown(data, mdcat=mdcat, columns=columns)
+    lines = _monochrome(rendered.lines) if no_color else rendered.lines
+    doc = Document(lines, max_sentences=max_sentences, max_chars=max_chars,
+                   tables=rendered.tables, references=False)
+    return doc, list(rendered.notices)
+
+
+def _monochrome(lines):
+    """`lines` without colours; bold, italics and links stay (``--no-color``)."""
+    return [
+        [replace(r, style=replace(r.style, fg=None, bg=None)) for r in line]
+        for line in lines
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -359,8 +414,10 @@ def save_wav(doc, path: str, *, voice: str, speed: float, lang: str,
                 failures += 1
                 continue
             parts.append(spoken.audio)
-            # a short breath between chunks, as the TUI hears it
-            parts.append(np.zeros(int(SAMPLE_RATE * 0.20), dtype=np.float32))
+            # a short breath between chunks -- except after a table cell, whose
+            # audio already ends in the pause the TUI plays between cells
+            if getattr(doc.chunks[cidx], "kind", "") != "cell":
+                parts.append(np.zeros(int(SAMPLE_RATE * 0.20), dtype=np.float32))
         if not quiet:
             print("\r" + " " * 40 + "\r", end="", file=sys.stderr, flush=True)
     finally:
@@ -451,6 +508,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
             print(f"  {name}")
         return EXIT_OK
 
+    if isinstance(args.markdown, str) and args.file is not None:
+        _err("use either -md FILE or -f FILE -md")
+        return EXIT_USAGE
+    if (args.markdown is True and args.file is None and len(args.text) == 1
+            and os.path.isfile(args.text[0])):
+        # `readaloud notes.md -md` and `-md --save x.wav notes.md` leave the
+        # file in TEXT, since a bare -md takes no value there.  Nobody wants a
+        # file's name rendered as Markdown, so read the file it names.
+        args.markdown, args.text = args.text[0], []
     if args.speed <= 0:
         _err("--speed must be greater than 0")
         return EXIT_USAGE
@@ -466,34 +532,75 @@ def _main(argv: Sequence[str] | None = None) -> int:
         _err(bad_voice)
         return EXIT_USAGE
 
+    # ---- -md needs mdcat ------------------------------------------------
+    # Looked up before the input is read, so a pipe is not drained for nothing.
+    mdcat = None
+    if args.markdown is not None:
+        from . import markdown as markdown_mod
+
+        mdcat = markdown_mod.find_mdcat()
+        if mdcat is None:
+            _err("-md needs mdcat to render Markdown (brew install mdcat); "
+                 "without it, readaloud -f FILE reads the file as plain Markdown")
+            return EXIT_ERROR
+
     # ---- input ----------------------------------------------------------
     try:
         data = read_input(args)
     except OSError as exc:
-        _err(f"could not read {args.file}: {exc}")
+        _err(f"could not read {input_file(args)}: {exc}")
         return EXIT_ERROR
 
     if not data.strip():
-        if args.file or args.text:
+        if input_file(args) or args.text:
             _err("the input is empty")
         else:
             _err("no input: pipe something in, pass TEXT, or use -f FILE")
-            _err("try 'readaloud --help', or 'mdcat --ansi notes.md | readaloud'")
+            _err("try 'readaloud --help', 'readaloud -md notes.md', or "
+                 "'mdcat --ansi notes.md | readaloud'")
         return EXIT_USAGE
 
     no_color = not args.color
-    doc = build_document(
-        data,
-        max_sentences=args.sentences,
-        max_chars=args.chars,
-        no_color=no_color,
-    )
+    md_notices: list[str] = []
+    if mdcat is not None:
+        from .ansi import has_ansi
+
+        if has_ansi(data):
+            # a pipe or a saved render alike: nothing here assumes a pipe
+            _err("-md wants Markdown source, not mdcat's output: "
+                 "readaloud -md notes.md")
+            return EXIT_USAGE
+        # A WAV has no screen to fit, so it renders at mdcat's own width
+        # rather than at whatever terminal --save happened to run in.
+        columns = 80 if args.save else markdown_mod.render_width()
+        try:
+            doc, md_notices = build_markdown_document(
+                data,
+                mdcat=mdcat,
+                columns=columns,
+                max_sentences=args.sentences,
+                max_chars=args.chars,
+                no_color=no_color,
+            )
+        except markdown_mod.MdcatError as exc:
+            _err(str(exc))
+            return EXIT_ERROR
+    else:
+        doc = build_document(
+            data,
+            max_sentences=args.sentences,
+            max_chars=args.chars,
+            no_color=no_color,
+        )
     if not doc.speakable_chunks:
         _err("the input contains nothing speakable (only rules, symbols or blanks)")
         return EXIT_ERROR
 
     # ---- --save: no terminal needed -------------------------------------
     if args.save:
+        # warnings, not output: stdout stays the one machine-readable line
+        for notice in md_notices:
+            _err(notice)
         return save_wav(doc, args.save, voice=args.voice, speed=args.speed,
                         lang=lang, repo=args.repo)
 
@@ -535,7 +642,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         media_keys=bool(args.media_keys),
         media_keys_explicit=bool(getattr(args, "media_keys_explicit", False)),
         doc_name=document_name(args),
-        notices=short_notices(warnings, target),
+        notices=short_notices(warnings, target) + md_notices,
     )
 
 

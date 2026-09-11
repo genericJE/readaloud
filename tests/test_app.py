@@ -460,7 +460,7 @@ def test_c_on_a_table_row_parks_the_view_where_follow_mode_leaves_it():
 NOTICES = [
     "config: follow_lead: 'abc' is not a whole number; using 20",
     "config: speed: 9.0 is out of range; clamped to 3.0",
-    "config: unknown key 'volum' (ignored)",
+    "-md: table 1 is read line by line (a cell does not match its source text)",
 ]
 
 
