@@ -31,6 +31,7 @@ import bisect
 import curses
 import os
 import sys
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
@@ -1230,11 +1231,43 @@ def _clip(span: tuple[int, int] | None, lo: int, hi: int) -> tuple[int, int] | N
     return (a, b) if b > a else None
 
 
+#: Format characters that curses (measured on this ncurses) and `char_width`
+#: both give no cell, and that do nothing on screen but join or separate.
+_ZERO_WIDTH_KEEP = frozenset("\N{ZERO WIDTH SPACE}\N{ZERO WIDTH NON-JOINER}"
+                             "\N{WORD JOINER}")
+_STAND_IN = "\N{ZERO WIDTH SPACE}"
+
+
+def _sanitise_char(c: str) -> str:
+    if c.isprintable() or c == " ":
+        return c
+    cat = unicodedata.category(c)
+    if cat in ("Zs", "Co"):
+        # NBSP, U+3000 and private-use icons are ordinary glyphs of the width
+        # char_width gives them; Python merely calls them unprintable.
+        return c
+    if cat == "Cf":
+        if c in _ZERO_WIDTH_KEEP or "\U000e0020" <= c <= "\U000e007f":  # flag tags
+            return c
+        # Still no cell, but not sent as is: a ZWJ lets the terminal fuse an
+        # emoji sequence into one glyph narrower than curses counts, a bidi
+        # control reorders the line, and curses draws BOM and soft hyphen a
+        # cell wide.
+        return _STAND_IN
+    return " "
+
+
 def _sanitise(text: str) -> str:
-    """Replace control characters with spaces, 1:1 so char offsets survive."""
+    """Make a line safe to paint, 1:1 so char offsets survive.
+
+    Controls and line separators become spaces.  Everything else keeps its
+    display width: swapping a zero-width or wide character for a space shifted
+    the rest of the row by a cell, which put a padded table row out of step
+    with the rules mdcat measured it against.
+    """
     if text.isprintable():
         return text
-    return "".join(c if (c.isprintable() or c == " ") else " " for c in text)
+    return "".join(_sanitise_char(c) for c in text)
 
 
 def _wrap_line(

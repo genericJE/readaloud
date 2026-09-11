@@ -27,6 +27,7 @@ from readaloud.ui import (  # noqa: E402
     cell_offsets,
     char_width,
     text_width,
+    _sanitise,
     _wrap_line,
 )
 
@@ -322,6 +323,49 @@ def test_wide_line_wider_than_the_terminal_is_not_overrun(nodraw):
     screen.draw(doc, 0, current_word=0, current_chunk=0, status="")
     for y in range(screen.body_height):
         assert text_width(win.row_text(y)) <= 30
+
+
+# --------------------------------------------------------------------------- #
+# sanitising: characters Python calls unprintable keep their width
+# --------------------------------------------------------------------------- #
+
+ZWJ = "\N{ZERO WIDTH JOINER}"
+ZWSP = "\N{ZERO WIDTH SPACE}"
+SHY = "\N{SOFT HYPHEN}"
+IDSP = "\N{IDEOGRAPHIC SPACE}"
+
+
+@pytest.mark.parametrize("raw, painted", [
+    ("a\x07b", "a b"),                                      # a control
+    ("a\N{LINE SEPARATOR}b", "a b"),                        # a line separator
+    ("a\N{NO-BREAK SPACE}b" + IDSP + "c", None),            # spaces are glyphs
+    ("icon \U0000e0a0 here", None),                         # private use
+    ("a" + ZWSP + "b\N{ZERO WIDTH NON-JOINER}c\N{WORD JOINER}d", None),
+    ("\U0001f3f4\U000e0067\U000e0062\U000e007f", None),     # a tag-sequence flag
+    ("\U0001f469" + ZWJ + "\U0001f4bb", "\U0001f469" + ZWSP + "\U0001f4bb"),
+    ("co" + SHY + "op", "co" + ZWSP + "op"),
+    ("\N{ZERO WIDTH NO-BREAK SPACE}bom", ZWSP + "bom"),
+    ("a\N{RIGHT-TO-LEFT OVERRIDE}b", "a" + ZWSP + "b"),
+])
+def test_sanitise_keeps_every_width_except_controls(raw, painted):
+    out = _sanitise(raw)
+    assert out == (raw if painted is None else painted)
+    assert len(out) == len(raw)                  # char offsets survive
+    if "\x07" not in raw and "\N{LINE SEPARATOR}" not in raw:
+        assert text_width(out) == text_width(raw)
+
+
+def test_a_padded_table_row_with_zero_width_and_wide_spaces_keeps_its_columns(nodraw):
+    # mdcat pads by display width, so "x" sits in the same column on both rows;
+    # painting a soft hyphen, a ZWJ or U+3000 as a one-cell space used to push
+    # it right.
+    plain = " a" + SHY + "b c" + ZWJ + "d  e" + IDSP + "f  x "
+    ascii_ = " ab cd  e  f  x "
+    assert text_width(plain) == text_width(ascii_)
+    screen, doc, win = make(plain + "\n" + ascii_, h=6, w=40)
+    screen.draw(doc, 0, current_word=None, current_chunk=None, status="")
+    assert rendered_cell_of(win, 0, "x") == rendered_cell_of(win, 1, "x") == 14
+    assert len(screen.rows) == 2                 # and nothing soft wrapped
 
 
 # --------------------------------------------------------------------------- #
