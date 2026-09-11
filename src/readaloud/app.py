@@ -25,8 +25,9 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 from .keys import Action, Command, Keymap, SCROLL_ACTIONS
 from .ui import Screen, Status, Theme, screen_session
@@ -45,7 +46,8 @@ SPEED_STEP = 0.1
 #: how long a transient status message stays up
 MESSAGE_TTL = 4.0
 
-#: config-file warnings sit around longer: the user has to read a path
+#: startup notices sit around longer, one after another: the user has to read
+#: what went wrong
 NOTICE_TTL = 12.0
 
 #: rows of context follow-mode keeps above/below the spoken word
@@ -345,6 +347,9 @@ class App:
 
         self._message = ""
         self._message_until = 0.0
+        #: notices waiting their turn in the status bar (`queue_notices`)
+        self._notices: deque[str] = deque()
+        self._notice_up = False                    # `_message` is one of them
         self._force = 0                            # bumped to force a repaint
 
         #: `less` remembers the last count given to d/u as the new default
@@ -375,13 +380,37 @@ class App:
         return after[0] if after else self._speakable[-1]
 
     def notify(self, msg: str, ttl: float = MESSAGE_TTL) -> None:
+        """Put `msg` in the status bar now, for `ttl` seconds.
+
+        A queued notice it interrupts is not lost: it goes back to the head of
+        the queue and shows again, in full, once `msg` has expired.
+        """
+        now = time.monotonic()
+        if self._notice_up and self._message and now <= self._message_until:
+            self._notices.appendleft(self._message)
+        self._notice_up = False
         self._message = msg
-        self._message_until = time.monotonic() + ttl
+        self._message_until = now + ttl
+
+    def queue_notices(self, msgs: Iterable[str]) -> None:
+        """Show `msgs` in the status bar one after another, each for `NOTICE_TTL`.
+
+        Startup can have more to say than one status line holds: media keys
+        that could not be had, and a warning per problem in the config file.
+        The first waits for the message already up to expire, and each of the
+        rest for the one before it.
+        """
+        self._notices.extend(m for m in msgs if m)
 
     @property
     def message(self) -> str:
-        if self._message and time.monotonic() > self._message_until:
-            self._message = ""
+        now = time.monotonic()
+        if self._message and now > self._message_until:
+            self._message, self._notice_up = "", False
+        if not self._message and self._notices:
+            self._message = self._notices.popleft()
+            self._message_until = now + NOTICE_TTL
+            self._notice_up = True
         return self._message
 
     def _current_chunk(self) -> int | None:
@@ -906,9 +935,10 @@ class App:
 
         if a is Action.CANCEL:
             # Escape dismisses the highlighting, but the pattern and the match
-            # list survive so `n`/`N` keep working (as in `less`).
+            # list survive so `n`/`N` keep working (as in `less`).  It
+            # dismisses the message too; a notice still queued comes next.
             self._show_matches = False
-            self._message = ""
+            self._message, self._notice_up = "", False
             self._force += 1
             return
 
@@ -1211,15 +1241,12 @@ def run(doc: Any, *, voice: str = "af_heart", speed: float = 1.0,
                           follow_lead=follow_lead, follow_margin=follow_margin,
                           media_keys=keys, doc_name=doc_name)
                 app.start()
+                # The status bar, one at a time, never a print(): stdout
+                # belongs to curses from here on.
                 if media_keys_error:
-                    app.notify(f"media keys unavailable: {media_keys_error}",
-                               ttl=NOTICE_TTL)
-                if notices:
-                    # config-file complaints: the status bar, never a print()
-                    # -- stdout belongs to curses from here on.
-                    first, extra = notices[0], len(notices) - 1
-                    app.notify(first + (f"  (+{extra} more)" if extra else ""),
-                               ttl=NOTICE_TTL)
+                    app.queue_notices(
+                        [f"media keys unavailable: {media_keys_error}"])
+                app.queue_notices(notices)
                 try:
                     app.run()
                 except KeyboardInterrupt:

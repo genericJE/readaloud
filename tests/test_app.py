@@ -1,5 +1,5 @@
 """Regression tests for `readaloud.app`: less-style counts, search, quit,
-clicks, and table follow keys.
+clicks, table follow keys, and startup notices.
 
 These drive the real `App` through its real `Keymap`, with the fake
 screen/player/engine from `test_integration` — the same fakes the rest of the
@@ -25,7 +25,7 @@ from test_integration import (  # noqa: E402
 )
 
 from readaloud import cli  # noqa: E402
-from readaloud.app import App  # noqa: E402
+from readaloud.app import MESSAGE_TTL, NOTICE_TTL, App  # noqa: E402
 
 
 ESC = 27
@@ -447,3 +447,130 @@ def test_c_on_a_table_row_parks_the_view_where_follow_mode_leaves_it():
     before = app.top
     app.tick()
     assert app.top == before, "c left the view where follow mode moves it again"
+
+
+# --------------------------------------------------------------------------- #
+# 7. startup notices take turns in the status bar
+#
+# There used to be room for one: the rest became "(+N more)", so the first
+# config warning hid every other notice.
+# --------------------------------------------------------------------------- #
+
+
+NOTICES = [
+    "config: follow_lead: 'abc' is not a whole number; using 20",
+    "config: speed: 9.0 is out of range; clamped to 3.0",
+    "config: unknown key 'volum' (ignored)",
+]
+
+
+class Clock:
+    """`time.monotonic`, standing still until a test moves it."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    c = Clock()
+    monkeypatch.setattr(time, "monotonic", c)
+    return c
+
+
+def test_notices_take_turns_each_for_the_notice_ttl(clock):
+    app, _doc, _screen = build()
+    app.queue_notices(NOTICES)
+    for notice in NOTICES:
+        assert app.message == notice
+        clock.advance(NOTICE_TTL - 0.01)
+        assert app.message == notice
+        clock.advance(0.02)
+    assert app.message == ""
+
+
+def test_notices_wait_for_the_message_already_up(clock):
+    app, _doc, _screen = build()
+    app.notify("media keys on", ttl=2.0)
+    app.queue_notices(NOTICES[:1])
+    assert app.message == "media keys on"
+    clock.advance(2.01)
+    assert app.message == NOTICES[0]
+
+
+def test_a_keystroke_message_shows_in_between_and_the_notices_resume(clock):
+    app, _doc, _screen = build(SEARCHDOC)
+    app.queue_notices(NOTICES[:2])
+    assert app.message == NOTICES[0]
+    clock.advance(5.0)
+    press(app, "/")
+    press(app, [CR])                     # nothing to search for, and it says so
+    assert app.message == "no previous search"
+    press(app, "/")
+    press(app, [CR])                     # said again: still one notice to resume
+    clock.advance(MESSAGE_TTL + 0.01)
+    # the notice it interrupted comes back, in full, before the next one
+    assert app.message == NOTICES[0]
+    clock.advance(NOTICE_TTL - 0.01)
+    assert app.message == NOTICES[0]
+    clock.advance(0.02)
+    assert app.message == NOTICES[1]
+    clock.advance(NOTICE_TTL + 0.01)
+    assert app.message == ""
+
+
+def test_escape_dismisses_the_notice_on_screen_and_the_next_one_follows(clock):
+    app, _doc, _screen = build()
+    app.queue_notices(NOTICES[:2])
+    assert app.message == NOTICES[0]
+    press(app, [ESC])
+    assert app.message == NOTICES[1]
+    press(app, [ESC])
+    assert app.message == ""
+    app.notify("speed 1.10x")            # nothing left over to come back
+    clock.advance(MESSAGE_TTL + 0.01)
+    assert app.message == ""
+
+
+def test_run_shows_the_media_keys_error_then_every_notice_in_turn(
+        monkeypatch, clock):
+    from readaloud import app as app_mod
+    from readaloud import mediakeys as mediakeys_mod
+    from readaloud import player as player_mod
+    from readaloud import speech as speech_mod
+
+    doc = make_doc()
+    screen = FakeScreen(doc)
+    screen.events = [ord("q")]
+    apps = []
+
+    class Recorded(App):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            apps.append(self)
+
+    @contextmanager
+    def fake_session(theme=None):
+        yield screen
+
+    monkeypatch.setattr(speech_mod, "Engine", FakeEngine)
+    monkeypatch.setattr(player_mod, "Player", lambda **kw: FakePlayer())
+    monkeypatch.setattr(mediakeys_mod, "available", lambda: False)
+    monkeypatch.setattr(app_mod, "App", Recorded)
+    monkeypatch.setattr(app_mod, "screen_session", fake_session)
+
+    assert app_mod.run(doc, media_keys=True, media_keys_explicit=True,
+                       notices=NOTICES) == 0
+    (app,) = apps
+    shown = []
+    while app.message:
+        shown.append(app.message)
+        clock.advance(NOTICE_TTL + 0.01)
+    assert shown == ["media keys unavailable: install the [mediakeys] extra",
+                     *NOTICES]
