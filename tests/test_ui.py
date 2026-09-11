@@ -694,9 +694,46 @@ def test_document_exactly_filling_the_viewport_never_scrolls():
 # --------------------------------------------------------------------------- #
 # the current chunk's wash
 #
-# No colours in a test, so the wash shows up as the theme's low colour
-# attribute.
+# A table cell's lines interleave with its neighbours', so washing the stream
+# from its first word to its last would wash every cell in between.  A chunk
+# that lists `regions` is washed on exactly those.  No colours in a test, so
+# the wash shows up as the theme's low colour attribute.
 # --------------------------------------------------------------------------- #
+
+
+# mdcat --ansi --columns 40 of
+#   | Name | Role | Notes |
+#   |------|:----:|------:|
+#   | Alice | Engineer | short |
+#   | Bob | Designer with a very long title that wraps around the column | code here |
+TABLE = "\n".join([
+    "─" * 40,
+    " Name             Role            Notes ",
+    "─" * 40,
+    " Alice          Engineer          short ",
+    " Bob      Designer with a very     code ",
+    "         long title that wraps     here ",
+    "           around the column            ",
+    "─" * 40,
+])
+# Bob's row is lines 4-6, and his cells' columns are chars [1, 6), [8, 32) and
+# [34, 39) on each of them
+BOB = [(line, 1, 6) for line in (4, 5, 6)]
+ROLE = [(line, 8, 32) for line in (4, 5, 6)]
+NOTES = [(line, 34, 39) for line in (4, 5, 6)]
+
+
+class CellChunk(Chunk):
+    """A table cell chunk: its words, and its column on every line of its row."""
+
+    def __init__(self, doc, regions, idx=1):
+        super().__init__(idx, [w.idx for w in doc.words
+                               if any(w.line == line and s <= w.start < e
+                                      for line, s, e in regions)])
+        self.regions = list(regions)
+        self.line_start = regions[0][0]
+        self.line_end = regions[-1][0] + 1
+        self.kind = "cell"
 
 
 def washed(screen, win):
@@ -711,6 +748,96 @@ def washed(screen, win):
                 assert loc is not None, f"washed past the text of row {y}"
                 out.add(loc)
     return out
+
+
+def chars(regions):
+    return {(line, c) for line, s, e in regions for c in range(s, e)}
+
+
+def test_a_cell_chunk_washes_its_regions_and_nothing_of_its_neighbours(nodraw):
+    screen, doc, win = make(TABLE, h=10, w=40)
+    role = CellChunk(doc, ROLE)
+    assert [doc.words[i].text for i in role.words] == (
+        "Designer with a very long title that wraps around the column".split())
+    screen.draw(doc, 0, current_word=None, current_chunk=role, status="")
+    assert washed(screen, win) == chars(ROLE)
+    # the neighbours' words stay unwashed: Bob on the left, "code here" on
+    # the right of the very lines the cell wraps over
+    for w in doc.words:
+        if w.text in ("Bob", "code", "here"):
+            assert not {(w.line, c) for c in range(w.start, w.end)} & washed(
+                screen, win), w.text
+
+    # the stream from the first word to the last is what it replaces
+    stream = Chunk(1, role.words)
+    screen.invalidate()
+    screen.draw(doc, 0, current_word=None, current_chunk=stream, status="")
+    assert (4, 34) in washed(screen, win), "the stream washes the neighbour"
+
+
+def test_a_chunk_index_with_regions_washes_them_too(nodraw):
+    screen, doc, win = make(TABLE, h=10, w=40)
+    doc.chunks = [Chunk(0, []), CellChunk(doc, NOTES)]
+    screen.draw(doc, 0, current_word=None, current_chunk=1, status="")
+    assert washed(screen, win) == chars(NOTES)
+
+
+def test_an_empty_cell_still_washes_its_column(nodraw):
+    screen, doc, win = make(TABLE.replace("short", "     "), h=10, w=40)
+    empty = CellChunk(doc, [(3, 34, 39)])
+    assert empty.words == []
+    screen.draw(doc, 0, current_word=None, current_chunk=empty, status="")
+    assert washed(screen, win) == chars(empty.regions)
+
+
+def test_moving_to_the_next_cell_repaints_only_that_rows_lines(nodraw):
+    screen, doc, win = make(TABLE, h=10, w=40)
+    screen.draw(doc, 0, current_word=None, current_chunk=CellChunk(doc, BOB),
+                status="")
+    screen.draw(doc, 0, current_word=None, current_chunk=CellChunk(doc, ROLE),
+                status="")
+    assert screen.rows_painted_last == 3
+    assert washed(screen, win) == chars(ROLE)
+
+
+def test_the_word_highlight_sits_inside_a_washed_cell(nodraw):
+    screen, doc, win = make(TABLE, h=10, w=40)
+    role = CellChunk(doc, ROLE)
+    that = next(i for i in role.words if doc.words[i].text == "that")
+    screen.draw(doc, 0, current_word=that, current_chunk=role, status="")
+    x = doc.words[that].start
+    assert win.reverse_runs(5) == [(x, "that")]
+    assert all(win.attrs[5][c] & screen.theme.chunk_attr_lowcolor
+               for c in range(x, x + 4))
+    assert washed(screen, win) == chars(ROLE)
+
+
+def test_a_cell_wash_is_clipped_to_each_row_when_its_lines_soft_wrap(nodraw):
+    """A terminal narrower than the render wraps the table's lines: each row
+    washes only its own piece of the region."""
+    screen, doc, win = make(TABLE, h=30, w=24)
+    assert 8 < screen.nrows <= screen.body_height, "wrapped, and all on screen"
+    role = CellChunk(doc, ROLE)
+    screen.draw(doc, 0, current_word=None, current_chunk=role, status="")
+    shown = {(r.line, c) for r in screen.rows for c in range(r.col_start, r.col_end)}
+    got = washed(screen, win)
+    assert got == chars(ROLE) & shown
+    # the column really was cut: its three lines wash more than three rows
+    assert len({screen.row_for(line, c) for line, c in got}) > 3
+
+
+def test_prose_is_still_washed_as_one_stream(nodraw):
+    text = "Intro words here.\nA paragraph that starts\nand ends here. Tail"
+    screen, doc, win = make(text, h=6, w=40)
+    first = next(w for w in doc.words if w.text == "paragraph")
+    last = next(w for w in doc.words if w.text == "here." and w.line == 2)
+    chunk = Chunk(0, range(first.idx, last.idx + 1))
+    chunk.regions = []                   # empty means "no regions"
+    screen.draw(doc, 0, current_word=None, current_chunk=chunk, status="")
+    lines = doc.plain
+    assert washed(screen, win) == (
+        {(1, c) for c in range(first.start, len(lines[1]))}
+        | {(2, c) for c in range(0, last.end)})
 
 
 def test_a_chunk_without_words_washes_exactly_its_lines(nodraw):

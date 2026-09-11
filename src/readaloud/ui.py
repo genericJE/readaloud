@@ -20,9 +20,9 @@ Its only intra-package imports are `readaloud.keys` (for the SGR mouse strings
 and `read_event`) and `readaloud.width` (display widths).  It deliberately does
 *not* import `readaloud.ansi` or `readaloud.document`: it reads the documented
 attributes off whatever objects it is handed (`Run.text`, `Run.style`,
-`Style.fg`, `Word.line/start/end`, `Chunk.words` …), so the view can be
-exercised on its own and cannot be broken by a change in how those modules
-construct their objects.
+`Style.fg`, `Word.line/start/end`, `Chunk.words`, `Chunk.regions` …), so the
+view can be exercised on its own and cannot be broken by a change in how those
+modules construct their objects.
 """
 
 from __future__ import annotations
@@ -1142,7 +1142,19 @@ class Screen:
 
     def _chunk_region(
         self, doc: Any, chunk: Any
-    ) -> tuple[int, int, int, int] | None:
+    ) -> tuple[int, int, int, int] | dict[int, tuple[int, int]] | None:
+        """Where the current chunk's wash goes.
+
+        Prose is washed as one reading-order stream, ``(line0, col0, line1,
+        col1)``: from the first word to the last, whole rows in between, so
+        the punctuation and indentation inside a paragraph are washed too.
+
+        A chunk that lists its own `regions` gets ``{line: (start, end)}``
+        instead.  That is a table cell: its lines interleave with its
+        neighbours', and the stream would wash every cell between its first
+        word and its last.  A cell's regions never share a line; should a
+        chunk ever list two on one line, the wash spans both.
+        """
         if chunk is None or doc is None:
             return None
         if isinstance(chunk, int):
@@ -1150,6 +1162,18 @@ class Screen:
             if not (0 <= chunk < len(chunks)):
                 return None
             chunk = chunks[chunk]
+        spans: dict[int, tuple[int, int]] = {}
+        for region in getattr(chunk, "regions", None) or ():
+            try:
+                line, start, end = (int(v) for v in region)
+            except (TypeError, ValueError):
+                continue
+            if line in spans:
+                start = min(start, spans[line][0])
+                end = max(end, spans[line][1])
+            spans[line] = (start, end)
+        if spans:
+            return spans
         words = getattr(doc, "words", None) or ()
         cw = getattr(chunk, "words", None)
         if cw:
@@ -1168,10 +1192,15 @@ class Screen:
         return (ls, 0, last, len(self._plain[last]))
 
     def _chunk_seg(
-        self, row: Row, region: tuple[int, int, int, int] | None
+        self,
+        row: Row,
+        region: tuple[int, int, int, int] | dict[int, tuple[int, int]] | None,
     ) -> tuple[int, int] | None:
         if region is None:
             return None
+        if isinstance(region, dict):
+            span = region.get(row.line)
+            return None if span is None else _clip(span, row.col_start, row.col_end)
         l0, c0, l1, c1 = region
         if row.line < l0 or row.line > l1:
             return None
