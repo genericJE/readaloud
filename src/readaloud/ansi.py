@@ -400,15 +400,18 @@ def parse(data: str) -> list[list[Run]]:
             i += 1
             continue
 
-        if ch < "\x20" or ch == "\x7f":
-            # \r (and every other C0 control) has no printable width.
+        if ch < "\x20" or "\x7f" <= ch <= "\x9f":
+            # \r, every other C0 control, DEL and the C1 controls have no
+            # printable width.  mdcat pads a table cell holding a NEL as if it
+            # were not there, and a terminal may act on an 8-bit CSI.
             i += 1
             continue
 
         j = i + 1
         while j < n:
             c = data[j]
-            if c == "\x1b" or c == "\n" or c == "\t" or c < "\x20" or c == "\x7f":
+            if (c == "\x1b" or c == "\n" or c == "\t" or c < "\x20"
+                    or "\x7f" <= c <= "\x9f"):
                 break
             j += 1
         add(data[i:j])

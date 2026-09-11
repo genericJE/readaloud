@@ -141,6 +141,13 @@ def test_parse_drops_other_c0_controls():
     assert plain_lines(parse("a\x00b\x07c\x08d\x7fe")) == ["abcde"]
 
 
+def test_parse_drops_c1_controls_but_keeps_latin1_text():
+    # NEL and the 8-bit CSI are controls with no width (mdcat pads a table as
+    # if they were absent); NBSP and accented letters are text.
+    assert plain_lines(parse("a\x85b\x9bc\x80d\x9fe")) == ["abcde"]
+    assert plain_lines(parse("caf\xe9\xa0ok")) == ["caf\xe9\xa0ok"]
+
+
 # ---------------------------------------------------------------------------
 # parse: SGR
 # ---------------------------------------------------------------------------
