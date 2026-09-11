@@ -1133,6 +1133,45 @@ def test_a_cell_of_symbols_reads_their_names():
     check_invariants(d)
 
 
+# mdcat --ansi --columns 40 of shortcuts written without spaces:
+#   | Keys | Action |
+#   | --- | --- |
+#   | ⇧⌘ | palette |
+#   | ←→ | move |
+#   | ✓✔ | twice |          (the ✔ in emoji presentation, with VS16)
+#   | ⌘... | not read |
+GLUED = [
+    "",
+    "─" * 16,
+    " Keys  Action   ",
+    "─" * 16,
+    " ⇧⌘    palette  ",
+    " ←→    move     ",
+    " ✓✔\N{VARIATION SELECTOR-16}    twice    ",
+    " ⌘...  not read ",
+    "─" * 16,
+    "",
+]
+
+
+def test_a_run_of_glyphs_in_a_cell_of_symbols_is_read_glyph_by_glyph():
+    table = grid(GLUED, 1, [(2, 3), (4, 5), (5, 6), (6, 7), (7, 8)],
+                 [1, 7], [4, 8])
+    d = Document.from_text("\n".join(GLUED), tables=[table], references=False)
+    cell = cells_of(d)
+    assert cell[(1, 0)].text == "shift, command"
+    assert [d.words[w].text for w in cell[(1, 0)].words] == ["⇧", "⌘"]
+    assert cell[(2, 0)].text == "left arrow, right arrow"
+    # the variation selector stays with its tick, on screen and in the name
+    assert cell[(3, 0)].text == "yes, yes"
+    assert [d.words[w].text for w in cell[(3, 0)].words] == [
+        "✓", "✔\N{VARIATION SELECTOR-16}"]
+    # ASCII glued to a glyph is still not guessed at: the cell stays silent
+    assert not cell[(4, 0)].speakable
+    assert cell[(4, 1)].text == "not read"
+    check_invariants(d)
+
+
 # mdcat --ansi --columns 40 of glyphs beside words: ticks and crosses before
 # a note, a footnote number and a word, command glued to a letter or not, the
 # README's keys, a dash and ASCII punctuation, a tick inside a URL, and

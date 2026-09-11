@@ -745,7 +745,9 @@ def _symbol_words(plain: Sequence[str], cell: TableCell) -> list[Word]:
     """A Word over each symbol of a word-free cell, so the cell can be spoken.
 
     Empty unless every piece of the cell is a symbol with a name (or a
-    separator such as "·"): half a cell read aloud is worse than none.
+    separator such as "·"): half a cell read aloud is worse than none.  A run
+    of glyphs written together, the usual way to write a shortcut ("⇧⌘"), is
+    read glyph by glyph; a run of ASCII ("...", "->") is still left unread.
     """
     found: list[Word] = []
     for line, s, e in cell.spans:
@@ -753,11 +755,34 @@ def _symbol_words(plain: Sequence[str], cell: TableCell) -> list[Word]:
             token = m.group()
             if token.translate(_VARIATION_SELECTORS) in _SILENT_SYMBOLS:
                 continue
-            if _symbol_name(token) is None:
+            if _symbol_name(token) is not None:
+                found.append(Word(text=token, line=line, start=m.start(),
+                                  end=m.end(), idx=-1))
+                continue
+            glyphs = _glyph_run(token)
+            if glyphs is None:
                 return []
-            found.append(Word(text=token, line=line, start=m.start(),
-                              end=m.end(), idx=-1))
+            for a, b in glyphs:
+                found.append(Word(text=token[a:b], line=line,
+                                  start=m.start() + a, end=m.start() + b,
+                                  idx=-1))
     return found
+
+
+def _glyph_run(token: str) -> list[tuple[int, int]] | None:
+    """(start, end) of each glyph in `token`, or None unless it is all glyphs.
+
+    A variation selector stays with the glyph before it.
+    """
+    out: list[tuple[int, int]] = []
+    for i, ch in enumerate(token):
+        if ch in _GLYPHS:
+            out.append((i, i + 1))
+        elif out and not ch.translate(_VARIATION_SELECTORS):
+            out[-1] = (out[-1][0], i + 1)
+        else:
+            return None
+    return out or None
 
 
 def _glyph_words(plain: Sequence[str], cell: TableCell,
