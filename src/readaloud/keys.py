@@ -253,7 +253,7 @@ class Action(Enum):
     PREV_CHUNK = auto()
     SPEED_UP = auto()
     SPEED_DOWN = auto()
-    TOGGLE_FOLLOW = auto()
+    FOLLOW = auto()
     CENTER = auto()
     CLICK_WORD = auto()       # `y`/`x` are screen cells; feed them to hit_test
 
@@ -337,7 +337,7 @@ KEYMAP: dict[int, Action] = {
     curses.KEY_LEFT: Action.PREV_CHUNK,
     ord("]"): Action.SPEED_UP,
     ord("["): Action.SPEED_DOWN,
-    ord("F"): Action.TOGGLE_FOLLOW,
+    ord("F"): Action.FOLLOW,
     ord("c"): Action.CENTER,
     # --- housekeeping ---
     curses.KEY_RESIZE: Action.RESIZE,
@@ -361,8 +361,8 @@ _HELP: tuple[tuple[str, str], ...] = (
     (". / Right", "next chunk"),
     (", / Left", "previous chunk"),
     ("[  ]", "speed down / up"),
-    ("F", "toggle follow-the-word"),
-    ("c", "jump to the spoken line, follow mode placement"),
+    ("F", "follow the spoken word, centred"),
+    ("c", "jump to the spoken word, follow mode unchanged"),
     ("wheel", "scroll"),
     ("click", "jump playback to that word"),
     ("q", "quit"),

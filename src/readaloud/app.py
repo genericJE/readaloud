@@ -332,9 +332,10 @@ class App:
 
         self.top = 0
         self.follow = True
-        #: how far follow mode scrolls past the minimum, and how much context it
-        #: keeps at the edges.  `c` deliberately ignores the lead: it is a
-        #: "put the word in the middle right now", not a scroll-ahead.
+        #: how far follow mode scrolls past the minimum, and how much context
+        #: it keeps at the edges.  `c` places the view by the same lead, so
+        #: looking at the spoken word shows the text about to be read; `F`
+        #: centres it instead.
         self.follow_lead = max(0, int(follow_lead))
         self.follow_margin = max(0, int(follow_margin))
         self.want_play = bool(autoplay)
@@ -881,20 +882,24 @@ class App:
                 self._set_target(cur, slot)
             return
 
-        if a is Action.TOGGLE_FOLLOW:
-            self.follow = not self.follow
-            if self.follow and self.cur_word is not None:
+        if a is Action.FOLLOW:
+            # `F` is "come along with the reading": it centres the spoken word
+            # and follows from there, however the view got where it was.  It
+            # never switches following off; scrolling away is what does that,
+            # and `c` is the look without the following.
+            self.follow = True
+            if self.cur_word is not None:
                 self.top = self.screen.center_on_word(self.cur_word)
-            self.notify("follow " + ("on" if self.follow else "off"), ttl=1.5)
+            self.notify("follow on", ttl=1.5)
             return
 
         if a is Action.CENTER:
-            # `c` is "put me back where the reading is".  It parks the view
+            # `c` is "show me where the reading is", once.  It parks the view
             # exactly where follow mode would -- the spoken line `follow_lead`
-            # rows down with the upcoming text below it -- so the view does not
-            # jump a second time on the very next auto-scroll.  `F` still
-            # centres, which is what makes the two keys usefully different.
-            self.follow = True
+            # rows down with the upcoming text below it -- and leaves follow
+            # mode as it found it, so a reader who scrolled off to read ahead
+            # can look at the spoken word without being dragged along after
+            # it.  `F` is the one that follows.
             cur = (self.doc.chunk_of_word(self.cur_word)
                    if self.cur_word is not None else self._current_chunk())
             span = self._row_span(cur)

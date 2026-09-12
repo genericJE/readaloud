@@ -108,7 +108,8 @@ the terminal rather than into `log`.
 | `.` &middot; `→` | next chunk (in a table read with `-md`, the next cell) |
 | `,` &middot; `←` | previous chunk (in a table read with `-md`, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
-| `F` &middot; `c` | follow the spoken word again after scrolling away |
+| `F` | jump to the spoken word and follow it from there |
+| `c` | jump to the spoken word and stay put, following or not as before |
 | click a word | jump playback to that word |
 | `q` | quit |
 

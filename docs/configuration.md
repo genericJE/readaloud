@@ -99,7 +99,7 @@ creep-one-row-at-a-time behaviour. The lead never scrolls so far that the spoken
 would leave the screen, and it applies only when scrolling *down*: moving back up to a
 word behind the viewport is unchanged.
 
-`c` uses this same placement, which is what distinguishes it from `F`. Both keys are
-listed in [Reading](reading.md).
+`c` uses this same placement without switching follow mode on, where `F` centres the word
+and follows it. Both keys are listed in [Reading](reading.md).
 
 [Back to the README](../README.md)

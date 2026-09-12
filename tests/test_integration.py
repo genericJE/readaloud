@@ -1157,11 +1157,13 @@ def test_scrolling_turns_follow_off_and_f_turns_it_back_on():
         app.handle(Command(Action.LINE_DOWN, count=3))
         assert app.follow is False
         assert app.top == 3
-        app.handle(Command(Action.TOGGLE_FOLLOW))
+        app.handle(Command(Action.FOLLOW))
         assert app.follow is True
         app.handle(Command(Action.PAGE_DOWN))
         assert app.follow is False
         app.handle(Command(Action.CENTER))
+        assert app.follow is False, "c looked at the word, it did not follow it"
+        app.handle(Command(Action.FOLLOW))
         assert app.follow is True
     finally:
         app.close()
@@ -1302,8 +1304,9 @@ def test_c_parks_the_view_where_follow_mode_would():
         assert settle(app)
         play_and_watch(app, player)
         assert app.top >= 120
+        was_following = app.follow
         app.handle(Command(Action.CENTER))
-        assert app.follow is True
+        assert app.follow is was_following, "c changed follow mode"
         assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
         # the spoken word sits near the top with the upcoming text below it,
         # NOT in the middle -- that is what distinguishes `c` from `F` now
@@ -1318,8 +1321,9 @@ def test_c_parks_the_view_where_follow_mode_would():
         app.close()
 
 
-def test_F_still_centres_and_differs_from_c():
-    """`F` keeps its old behaviour, so the two keys are usefully different."""
+def test_c_looks_at_the_spoken_word_without_following_it():
+    """The reader scrolled off to read ahead: `c` shows where the reading is
+    and leaves the view there, so playback does not drag it along."""
     from readaloud.keys import Command
 
     app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
@@ -1328,9 +1332,58 @@ def test_F_still_centres_and_differs_from_c():
     try:
         assert settle(app)
         play_and_watch(app, player)
-        app.handle(Command(Action.TOGGLE_FOLLOW))   # off
+        app.handle(Command(Action.PAGE_DOWN))          # read ahead
         assert app.follow is False
-        app.handle(Command(Action.TOGGLE_FOLLOW))   # on -> centres
+        away = app.top
+        app.handle(Command(Action.CENTER))
+        assert app.follow is False, "c switched follow mode on"
+        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        assert app.top != away, "c did not move the view to the spoken word"
+        # and it stays put: the word scrolls away under playback, the view does not
+        parked = app.top
+        for _ in range(200):
+            app.tick()
+        assert app.top == parked, "the view followed the word after c"
+    finally:
+        app.close()
+
+
+def test_F_is_not_a_toggle():
+    """Pressing F while following keeps following: scrolling away is what
+    stops it, and `c` is the look that does not start it."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        play_and_watch(app, player)
+        assert app.follow is True
+        app.handle(Command(Action.FOLLOW))
+        assert app.follow is True, "F switched following off"
+        app.handle(Command(Action.FOLLOW))
+        assert app.follow is True
+        assert app.top == screen.center_on_word(app.cur_word)
+        app.handle(Command(Action.LINE_DOWN))          # this is what stops it
+        assert app.follow is False
+    finally:
+        app.close()
+
+
+def test_F_centres_and_follows_and_differs_from_c():
+    """`F` centres the word and follows it; `c` parks the view and does not."""
+    from readaloud.keys import Command
+
+    app, doc, engine, player, screen = make_app(doc=make_doc(LONG), height=30,
+                                                follow_lead=20)
+    app.start()
+    try:
+        assert settle(app)
+        play_and_watch(app, player)
+        app.handle(Command(Action.PAGE_DOWN))       # scrolling stops following
+        assert app.follow is False
+        app.handle(Command(Action.FOLLOW))          # F: centres and follows
         assert app.follow is True
         centred = app.top
         assert centred == screen.center_on_word(app.cur_word)

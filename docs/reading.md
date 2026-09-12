@@ -13,14 +13,16 @@ system play/pause button.
 | `.` &middot; `→` | next chunk (in a table read with `-md`, the next cell) |
 | `,` &middot; `←` | previous chunk (in a table read with `-md`, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
-| `F` | toggle follow mode; switching it on centres the spoken word |
-| `c` | jump to the spoken word and switch follow mode on, placing the view exactly where follow mode would (see [`follow_lead`](configuration.md)) |
+| `F` | jump to the spoken word, centred, and follow it from there |
+| `c` | jump to the spoken word and leave the view there, placed exactly where follow mode would (see [`follow_lead`](configuration.md)), with follow mode as it was |
 | click a word | jump playback to that word |
 | `q` | quit |
 
-`F` and `c` both end up following. They differ in where they leave the view: `F` centres
-the spoken word, `c` places it as the next auto-scroll would, so the view does not jump
-again a moment later.
+The two differ in what happens after the jump. `F` centres the spoken word and follows it
+from there, so the view keeps up with the reading; pressing it again changes nothing,
+since it is not a toggle. `c` only looks: it places the word as the next auto-scroll
+would, so the view does not jump again a moment later, and it leaves follow mode exactly
+as it was. Scrolling away is what stops the view following.
 
 ### Moving around
 
@@ -43,7 +45,8 @@ again a moment later.
 | `^L` &middot; `^R` | force a full redraw |
 
 Any manual scroll, key or wheel, switches follow mode **off** so you can read ahead while
-it talks. `F` and `c` switch it back on.
+it talks. `F` switches it back on; `c` shows you where the reading is without switching
+anything on.
 
 Changing the speed re-synthesizes from the word you are on, so the cache is dropped and
 there is a short pause before the audio resumes.

@@ -442,7 +442,7 @@ def test_c_on_a_table_row_parks_the_view_where_follow_mode_leaves_it():
     app.cur_word = next(w.idx for w in doc.words if w.text == "title")
     app.follow = False
     press(app, "c")
-    assert app.follow
+    assert not app.follow, "c looked at the row, it did not follow it"
     assert app.top + margin <= first and last <= app.top + body - 1 - margin
     before = app.top
     app.tick()
