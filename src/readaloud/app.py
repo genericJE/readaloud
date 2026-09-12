@@ -893,7 +893,7 @@ class App:
             self.notify("follow on", ttl=1.5)
             return
 
-        if a is Action.CENTER:
+        if a is Action.CURRENT:
             # `c` is "show me where the reading is", once.  It parks the view
             # exactly where follow mode would -- the spoken line `follow_lead`
             # rows down with the upcoming text below it -- and leaves follow

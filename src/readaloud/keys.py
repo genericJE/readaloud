@@ -254,7 +254,7 @@ class Action(Enum):
     SPEED_UP = auto()
     SPEED_DOWN = auto()
     FOLLOW = auto()
-    CENTER = auto()
+    CURRENT = auto()
     CLICK_WORD = auto()       # `y`/`x` are screen cells; feed them to hit_test
 
     # housekeeping
@@ -338,7 +338,7 @@ KEYMAP: dict[int, Action] = {
     ord("]"): Action.SPEED_UP,
     ord("["): Action.SPEED_DOWN,
     ord("F"): Action.FOLLOW,
-    ord("c"): Action.CENTER,
+    ord("c"): Action.CURRENT,
     # --- housekeeping ---
     curses.KEY_RESIZE: Action.RESIZE,
     0x0C: Action.REDRAW,  # Ctrl-L

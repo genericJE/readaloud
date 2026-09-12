@@ -1161,7 +1161,7 @@ def test_scrolling_turns_follow_off_and_f_turns_it_back_on():
         assert app.follow is True
         app.handle(Command(Action.PAGE_DOWN))
         assert app.follow is False
-        app.handle(Command(Action.CENTER))
+        app.handle(Command(Action.CURRENT))
         assert app.follow is False, "c looked at the word, it did not follow it"
         app.handle(Command(Action.FOLLOW))
         assert app.follow is True
@@ -1305,7 +1305,7 @@ def test_c_parks_the_view_where_follow_mode_would():
         play_and_watch(app, player)
         assert app.top >= 120
         was_following = app.follow
-        app.handle(Command(Action.CENTER))
+        app.handle(Command(Action.CURRENT))
         assert app.follow is was_following, "c changed follow mode"
         assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
         # the spoken word sits near the top with the upcoming text below it,
@@ -1335,7 +1335,7 @@ def test_c_looks_at_the_spoken_word_without_following_it():
         app.handle(Command(Action.PAGE_DOWN))          # read ahead
         assert app.follow is False
         away = app.top
-        app.handle(Command(Action.CENTER))
+        app.handle(Command(Action.CURRENT))
         assert app.follow is False, "c switched follow mode on"
         assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
         assert app.top != away, "c did not move the view to the spoken word"
@@ -1387,7 +1387,7 @@ def test_F_centres_and_follows_and_differs_from_c():
         assert app.follow is True
         centred = app.top
         assert centred == screen.center_on_word(app.cur_word)
-        app.handle(Command(Action.CENTER))
+        app.handle(Command(Action.CURRENT))
         assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
         assert app.top != centred, "c and F ended up identical"
     finally:
