@@ -389,7 +389,7 @@ def test_a_slot_keeps_what_lies_outside_the_match():
     assert said([("id", "ID")], "foo.id", "foo.id") == ("foo.ID", ["foo.ID"])
     assert said([("id", "ID")], "(id)", "id") == ("(ID)", ["ID"])
     assert said([("id", "ID")], "user_id_list", "user_id_list") == (
-        "user_ID_list", ["user_ID_list"])
+        "user_ ID _list", ["user_ ID _list"])
 
 
 def test_one_slot_says_the_whole_respelling():
@@ -439,10 +439,30 @@ def test_a_space_keeps_a_respelling_off_a_letter_or_digit():
     assert said([("->", "=>")], "a->b", "a", "b") == ("a=>b", ["a", "b"])
 
 
+def test_a_space_keeps_a_respelling_off_an_underscore():
+    """misaki keeps `unique_provider_subscription_ID` as one token and reads
+    its tail as Freud's id; with the space it says "eye dee"."""
+    said_id = lambda text: said([("id", "ID")], text, text)   # noqa: E731
+    assert said_id("unique_provider_subscription_id") == (
+        "unique_provider_subscription_ ID",
+        ["unique_provider_subscription_ ID"])
+    assert said_id("subscription_id") == ("subscription_ ID",
+                                          ["subscription_ ID"])
+    assert said_id("id_token") == ("ID _token", ["ID _token"])
+    # a hyphen is left alone: measured, a space after one reads worse
+    assert said_id("subscription-id") == ("subscription-ID",
+                                          ["subscription-ID"])
+    # and a dot still needs none
+    assert said_id("foo.id") == ("foo.ID", ["foo.ID"])
+
+
 def test_adjacent_matches_get_exactly_one_space():
     pairs = [("user", "yoozer"), ("id", "ID")]
     assert said(pairs, "userId", "userId") == ("yoozer ID", ["yoozer ID"])
-    assert said(pairs, "user_id", "user_id") == ("yoozer_ID", ["yoozer_ID"])
+    # an underscore between two matches gets a space from each: harmless,
+    # misaki reads "yoozer _ ID" exactly as it reads "yoozer ID"
+    assert said(pairs, "user_id", "user_id") == ("yoozer _ ID",
+                                                 ["yoozer _ ID"])
     assert said([("a", "x"), ("->", "to"), ("b", "y")], "a->b", "a", "b") == (
         "x to y", ["x", "y"])
     # the space depends on the next respelling, not on the text it replaces

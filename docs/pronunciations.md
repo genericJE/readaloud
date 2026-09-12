@@ -65,6 +65,12 @@ quotes, `#include = hash include` is a comment and does nothing. A `#` or `;` af
 space starts a comment, so a pronunciation holding one needs quotes too
 (`hash = "number # sign"`), while `C# = C sharp` needs none. There are no escapes.
 
+A respelling is kept off the text beside it by a space, wherever running into it would
+change how Kokoro reads it: a letter, a digit or an underscore. So `ASP.NET` says "ASP dot
+net", and `unique_provider_subscription_id` says "unique provider subscription, eye dee"
+rather than one long token whose tail Kokoro reads as Freud's id. A hyphen gets no space,
+measured the same way: one there reads worse.
+
 Pronunciations apply wherever readaloud speaks: prose, code blocks, piped output and the
 cells of a `-md` table, in the reader and in a `--save` WAV alike. Only what is said
 changes. The screen shows the text as written, search finds it as written, and the

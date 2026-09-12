@@ -40,7 +40,8 @@ Matching (:meth:`Lexicon.find`):
 
 Respelling (:func:`respell`) keeps the chunk's word slots usable: each stays
 non-empty and in order, the slots a match covers share its respelling, and a
-space goes in where a respelling would run into a letter or digit.
+space goes in where a respelling would run into a letter, a digit or an
+underscore.
 
 Every key is indexed by its first run of letters and digits, or by its first
 character when that is a symbol, so the text costs a dict probe per word
@@ -88,6 +89,17 @@ class _Entry:
 def _alnum(ch: str) -> bool:
     """Whether `ch`, one character or none, is a letter or digit."""
     return bool(ch) and _IS_ALNUM.match(ch) is not None
+
+
+def _glues(ch: str) -> bool:
+    """Whether `ch` would swallow a respelling written up against it.
+
+    A letter or a digit does, and so does an underscore: misaki keeps
+    ``unique_provider_subscription_ID`` as one token and reads its tail as
+    Freud's id, where ``unique_provider_subscription_ ID`` says "eye dee".
+    A hyphen does not, measured the same way: a space after one is worse.
+    """
+    return _alnum(ch) or ch == "_"
 
 
 def _forms(key: str) -> list[str]:
@@ -314,9 +326,11 @@ def respell(text: str, slots: Sequence[tuple[int, int]],
       more slots than words the last word is cut ("New York City = NYC" says
       N, Y and C); a slot with nothing left says a space.
     * A slot keeps what lies outside the match: "foo.id" says "foo.ID".
-    * A space goes in where a respelling would run into a letter or digit, so
-      "ASP.NET" with ``.NET = dot net`` says "ASP dot net", and "userId" with
-      ``user = yoozer`` and ``id = ID`` says "yoozer ID".
+    * A space goes in where a respelling would run into a letter, a digit or
+      an underscore, so "ASP.NET" with ``.NET = dot net`` says "ASP dot net",
+      "userId" with ``user = yoozer`` and ``id = ID`` says "yoozer ID", and
+      "subscription_id" says "subscription_ ID" rather than one long token
+      misaki reads as Freud's id.
     """
     if not matches:
         return text, [a for a, _b in slots], [text[a:b] for a, b in slots]
@@ -339,14 +353,14 @@ def respell(text: str, slots: Sequence[tuple[int, int]],
         said = say + " " * pad
         # right after another match there is no gap: that match's own look
         # at this respelling already put in the space
-        if _alnum(said[:1]) and _alnum(gap[-1:]):
+        if _alnum(said[:1]) and _glues(gap[-1:]):
             said = " " + said
             spans = [(x + 1, y + 1) for x, y in spans]
         if j + 1 < len(matches) and starts[j + 1] == e:
             follows = matches[j + 1][2][:1]     # the next respelling
         else:
             follows = text[e:e + 1]
-        if _alnum(said[-1:]) and _alnum(follows):
+        if _alnum(said[-1:]) and _glues(follows):
             said += " "
         shares.append((first, [(size + x, size + y) for x, y in spans]))
         parts.append(said)
