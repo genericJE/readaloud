@@ -67,6 +67,9 @@ def check_invariants(d: Document, pronounced: bool = False) -> None:
         assert d.plain[w.line][w.start:w.end] == w.text, (
             f"word {i} {w.text!r} does not round-trip against its line")
         assert w.text.strip() == w.text, f"word {i} {w.text!r} has edge space"
+        # the hit test finds it: _line_words / _line_starts agree with it
+        assert d.word_at(w.line, w.start) == i, f"word {i} is not hit-tested"
+        assert d.word_at(w.line, w.end - 1) == i
         # reading order: line order, but row by row then cell by cell in a table
         c = owner.get(i)
         if c is not None and c.kind == "cell":
@@ -121,7 +124,7 @@ def check_invariants(d: Document, pronounced: bool = False) -> None:
                 # words only a glyph (and its variation selector) has a name
                 if not pronounced:
                     assert c.word_texts[slot] == (names[slot] or w.text)
-                if names[slot] and not symbols:
+                if names[slot] and not symbols and not pronounced:
                     assert w.text[0] in _GLYPHS and w.text[1:] in (
                         "", "\N{VARIATION SELECTOR-15}",
                         "\N{VARIATION SELECTOR-16}"), w.text
@@ -1781,13 +1784,50 @@ def structure(d: Document) -> tuple:
     )
 
 
+def added_words(plain: Document, pronounced: Document) -> list[int]:
+    """The words `pronounced` has and `plain` has not, having checked that
+
+    nothing else about the two documents differs.  A pronunciation adds a word
+    where it matches text no word covered (``''``, ``✓``); the words around it,
+    the lines, the tables and every chunk but its word list stay as they were,
+    so dropping the new words gives `plain` back exactly.
+    """
+    was = {(w.text, w.line, w.start, w.end) for w in plain.words}
+    same = [(w.text, w.line, w.start, w.end) in was for w in pronounced.words]
+    extra = [w.idx for w, keep in zip(pronounced.words, same) if not keep]
+    # word for word, the two agree once the new ones are dropped
+    back: dict[int, int] = {}
+    for w, keep in zip(pronounced.words, same):
+        if keep:
+            back[w.idx] = len(back)
+    assert [(w.text, w.line, w.start, w.end) for w in pronounced.words
+            if w.idx in back] == [(w.text, w.line, w.start, w.end)
+                                  for w in plain.words]
+    assert (pronounced.lines, pronounced.plain, pronounced.tables) == (
+        plain.lines, plain.plain, plain.tables)
+    assert [(c.idx, c.line_start, c.line_end, c.speakable, c.kind, c.cell,
+             c.regions, c.row_end) for c in pronounced.chunks] == [
+        (c.idx, c.line_start, c.line_end, c.speakable, c.kind, c.cell,
+         c.regions, c.row_end) for c in plain.chunks]
+    assert [[back[i] for i in c.words if i in back]
+            for c in pronounced.chunks] == [c.words for c in plain.chunks]
+    assert pronounced._line_chunk == plain._line_chunk
+    assert pronounced._cell_regions == plain._cell_regions
+    # a line whose only word is a new one has no entry in `plain` at all
+    assert {line: kept for line, idxs in pronounced._line_words.items()
+            if (kept := [back[i] for i in idxs if i in back])} == {
+        line: idxs for line, idxs in plain._line_words.items()}
+    return extra
+
+
 def said(d: Document) -> list[tuple[str, list[int], list[str]]]:
     return [(c.text, c.offsets, c.word_texts) for c in d.chunks]
 
 
 def twins(lines, pairs, **kw) -> tuple[Document, Document]:
     """The Document of `lines` (text, or styled lines) without and with
-    `pairs`, checked to differ only in what their chunks say."""
+    `pairs`, checked to differ only in what their chunks say and in the words
+    a match with no word of its own adds."""
     lexicon = Lexicon(pairs)
     if isinstance(lines, str):
         plain = Document.from_text(lines, **kw)
@@ -1795,7 +1835,7 @@ def twins(lines, pairs, **kw) -> tuple[Document, Document]:
     else:
         plain = Document(lines, **kw)
         pronounced = Document(lines, pronunciations=lexicon, **kw)
-    assert structure(pronounced) == structure(plain)
+    extra = set(added_words(plain, pronounced))
     assert plain.respell_failures == pronounced.respell_failures == 0
     for a, b in zip(plain.chunks, pronounced.chunks):
         # each chunk says what respell makes of the chunk as written, with
@@ -1804,8 +1844,24 @@ def twins(lines, pairs, **kw) -> tuple[Document, Document]:
                    in zip(a.spans(), a.words, a.word_texts)
                    if t != plain.words[w].text]
         matches = lexicon.find(a.text, symbols) if a.words else []
-        assert (b.text, b.offsets, b.word_texts) == respell(
-            a.text, a.spans(), matches), f"chunk {a.idx} {a.text!r}"
+        text, offsets, texts = respell(a.text, a.spans(), matches)
+        # NOT ONE CHARACTER of what is said changes: a new word only claims a
+        # respelling already there.  The old slots stay where they were too.
+        new = [i for i, widx in enumerate(b.words) if widx in extra]
+        old = [i for i in range(len(b.words)) if i not in set(new)]
+        assert b.text == text, f"chunk {a.idx} {a.text!r}"
+        assert ([b.offsets[i] for i in old], [b.word_texts[i] for i in old]) \
+            == (offsets, texts), f"chunk {a.idx} {a.text!r}"
+        # every new slot is a match of its own: same text on screen, and it
+        # says what that match says.  In order, one match each.
+        covered = [any(s < e2 and s2 < e for s2, e2 in a.spans())
+                   for s, e, _say in matches]
+        left = iter([(a.text[s:e], say) for (s, e, say), hit
+                     in zip(matches, covered) if not hit])
+        for i in new:
+            want = (pronounced.words[b.words[i]].text, b.word_texts[i])
+            assert want in left, (
+                f"chunk {a.idx} slot {i}: {want!r} is no match of its own")
     check_invariants(plain)
     check_invariants(pronounced, pronounced=True)
     return plain, pronounced
@@ -2001,6 +2057,122 @@ def test_pronunciations_of_an_mdcat_render_change_only_what_is_said():
         assert "NYC" in spoken and "York" not in spoken, spoken
         wrapped.append("York\n│ City" in "\n".join(plain.plain))
     assert wrapped == [True, False]
+
+
+def test_a_pronunciation_of_text_with_no_word_gets_a_word_of_its_own():
+    """``''``, ``✓`` and ``->`` hold no letter or digit, so nothing lit up."""
+    _plain, d = twins("Pass '' to skip the field.", [("''", "empty string")])
+    chunk = d.chunks[0]
+    assert chunk.text == "Pass empty string to skip the field."
+    assert chunk.word_texts == ["Pass", "empty string", "to", "skip", "the",
+                                "field"]
+    assert texts(d) == ["Pass", "''", "to", "skip", "the", "field"]
+    quotes = d.words[1]
+    assert (quotes.line, quotes.start, quotes.end) == (0, 5, 7)
+    # it highlights, it is clicked like a word, and its slot says the respelling
+    assert d.word_at(0, 5) == d.word_at(0, 6) == 1
+    assert d.nearest_word(0, 6) == 1
+    assert d.chunk_of_word(1) == 0 and d.slot_of_word(1) == 1
+    assert d.word_span_in_chunk(1) == (5, 17)
+
+    # a tick in prose, an arrow in code, and three matches on one line
+    _plain, d = twins("A tick ✓ means done.", [("✓", "check")])
+    assert d.chunks[0].text == "A tick check means done."
+    assert texts(d) == ["A", "tick", "✓", "means", "done"]
+    _plain, d = twins("text\n\n    a -> b\n", [("->", "to")])
+    assert [c.text for c in d.chunks if c.speakable] == ["text", "    a to b"]
+    assert texts(d) == ["text", "a", "->", "b"]
+    _plain, d = twins("a . b . c", [(".", "full stop")])
+    assert d.chunks[0].text == "a full stop b full stop c"
+    assert [(w.text, w.start) for w in d.words] == [
+        ("a", 0), (".", 2), ("b", 4), (".", 6), ("c", 8)]
+
+
+def test_a_pronunciation_alone_on_a_line_still_gets_a_word():
+    """Every chunk but a cell is a verbatim slice, so counting the newlines
+    places a match no word shares a line with."""
+    _plain, d = twins("Alpha beta gamma.\n->\nDelta epsilon zeta.",
+                      [("->", "to")])
+    assert d.chunks[0].text == "Alpha beta gamma.\nto\nDelta epsilon zeta."
+    arrow = d.words[3]
+    assert (arrow.text, arrow.line, arrow.start, arrow.end) == ("->", 1, 0, 2)
+    assert d.word_at(1, 0) == 3 and d.chunks[0].word_texts[3] == "to"
+    # a code block keeps its indentation, and the column comes out right
+    _plain, d = twins("text\n\n    a\n    ->\n    b\n", [("->", "to")])
+    assert [w.text for w in d.words] == ["text", "a", "->", "b"]
+    assert (d.words[2].line, d.words[2].start) == (3, 4)
+
+
+def test_a_pronunciation_of_text_holding_a_space_adds_no_word():
+    """A word never holds a space; one that did would be a single unbreakable
+    span, and the reader would wrap the line differently."""
+    _plain, d = twins("aaaa bbbb . . cccc", [(". .", "stop stop")])
+    assert d.chunks[0].text == "aaaa bbbb stop stop cccc"   # still said
+    assert texts(d) == ["aaaa", "bbbb", "cccc"]             # no word for it
+    assert all(w.text == w.text.strip() and " " not in w.text for w in d.words)
+
+
+def test_a_pronunciation_inside_a_word_adds_no_word():
+    """The word is there already: it takes the respelling, as it always did."""
+    _plain, d = twins("don't stop ' alone", [("'", "tick")])
+    assert d.chunks[0].text == "don tick t stop tick alone"
+    # one word added, for the apostrophe standing on its own
+    assert texts(d) == ["don't", "stop", "'", "alone"]
+    assert d.chunks[0].word_texts == ["don tick t", "stop", "tick", "alone"]
+
+    # a guard claims its text and changes nothing, so it adds nothing either
+    _plain, d = twins("(c) 2026", [("(c)", "copyright"), ("(", "open")])
+    assert d.chunks[0].text == "copyright 2026"
+    assert texts(d) == ["c", "2026"]        # the c of (c) was a word already
+
+
+def test_a_pronunciation_of_a_cell_symbol_with_no_word_gets_one():
+    table = grid(KEYS, 1, [(2, 3), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9)],
+                 [1, 8], [5, 15])
+    _plain, d = twins("\n".join(KEYS), [("''", "empty string")],
+                      tables=[table], references=False)
+    assert not [w for w in d.words if w.text == "''"]      # none in this table
+
+    lines = ["┌────────┬──────────────┐",
+             "│ Key    │ Notes        │",
+             "├────────┼──────────────┤",
+             "│ ''     │ '' or a -> b │",
+             "└────────┴──────────────┘"]
+    table = Table(line_start=0, line_end=5, ncols=2, rows=[(1, 2), (3, 4)],
+                  cells=[TableCell(0, 0, [(1, 1, 9)]),
+                         TableCell(0, 1, [(1, 10, 24)]),
+                         TableCell(1, 0, [(3, 1, 9)]),
+                         TableCell(1, 1, [(3, 10, 24)])])
+    _plain, d = twins("\n".join(lines), [("''", "empty string"), ("->", "to")],
+                      tables=[table], references=False)
+    assert len(d.tables) == 1               # the table still fits
+    cell = {c.cell: c for c in d.chunks if c.kind == "cell"}
+    # a cell of nothing but '' had no word, so it is skipped as it always was
+    assert (cell[(0, 1, 0)].text, cell[(0, 1, 0)].speakable) == ("''", False)
+    # the cell beside it has words, so its '' and its -> get one each
+    assert (cell[(0, 1, 1)].text, cell[(0, 1, 1)].word_texts) == (
+        "empty string or a to b", ["empty string", "or", "a", "to", "b"])
+    # each new word is inside its own cell, and clicking it plays that cell
+    quotes = d.word_at(3, 11)
+    assert d.words[quotes].text == "''"
+    assert d.cell_at(3, 11) == d.chunk_of_word(quotes) == cell[(0, 1, 1)].idx
+    arrow = d.word_at(3, 19)
+    assert d.words[arrow].text == "->"
+    assert d.cell_at(3, 19) == d.chunk_of_word(arrow) == cell[(0, 1, 1)].idx
+
+
+def test_a_pronunciation_that_has_nothing_to_hold_it_is_still_said():
+    """A chunk with nothing to say stays silent, and a match that cannot be
+    placed on a line is spoken without a word, as it was before."""
+    plain, d = twins("hello\n\n''\n\nbye", [("''", "empty string")])
+    assert [c.text for c in d.chunks] == ["hello", "", "''", "", "bye"]
+    assert [c.speakable for c in d.chunks] == [c.speakable for c in plain.chunks]
+    assert len(d.speakable_chunks) == 2 and texts(d) == ["hello", "bye"]
+
+    # a phrase that wraps has no single line to sit on: said, never lit
+    _plain, d = twins("a ->\n-> b", [("-> ->", "to to")])
+    assert d.chunks[0].text == "a to to b"
+    assert texts(d) == ["a", "b"] and d.respell_failures == 0
 
 
 def test_respell_failures_count_the_chunks_read_as_written():

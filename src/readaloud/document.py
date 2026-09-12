@@ -5,7 +5,9 @@ into the two things the rest of the reader needs:
 
 * :class:`Word` -- one highlightable span per spoken word, addressed by
   ``(line, start, end)`` in the *plain* (Run-flattened) coordinate space that
-  :mod:`readaloud.ui` hit-tests mouse clicks against.
+  :mod:`readaloud.ui` hit-tests mouse clicks against.  A word normally holds a
+  letter or a digit; a pronunciation adds one over the text it says that has
+  neither (``''``, ``✓``, ``->``), see below.
 * :class:`Chunk` -- one unit of synthesis, holding the exact text handed to the
   TTS plus the offset of every one of its words inside that text.
 
@@ -60,12 +62,22 @@ sentences.  A Table that does not fit the lines and words is ignored and its
 lines read as ordinary text; ``doc.tables`` holds the ones in use.
 
 Pronunciations: a :class:`~readaloud.pronounce.Lexicon` handed to the Document
-changes what its chunks say and nothing else.  Each chunk's ``text``,
-``offsets`` and ``word_texts`` are respelled once the chunks are built; the
-words, lines, tables and every other field of every chunk are the same as in a
-Document built without one, so the display, the highlight, clicks and search
-never see a respelling.  A chunk the respelling fails on is read as written
-and counted in ``doc.respell_failures``.
+changes what its chunks say, and adds a word where it says text that had none.
+Each chunk's ``text``, ``offsets`` and ``word_texts`` are respelled once the
+chunks are built.  A match that covers no word slot gets a :class:`Word` of its
+own -- ``''``, ``✓`` and ``->`` hold no letter or digit, so word segmentation
+made none of them -- placed where the match is on screen, so the respelling
+highlights, is clickable and takes the slot's text; ``doc.words`` stays in
+reading order with ``idx`` its position and every ``chunk.words`` stays
+contiguous.  Not one character of what is said changes with it: the new word
+claims a respelling that was there without it.  A chunk with nothing to say is
+never looked at, so a line or a cell holding nothing but ``''`` stays silent,
+and no chunk's ``speakable``, ``kind``, lines or regions move, so the chunk
+count, the count of speakable chunks and ``--start N`` are what they would be
+without pronunciations.  The lines, the tables and ``plain`` are untouched, so
+the display, the render and search never see a respelling.  A chunk the
+respelling fails on is read as written, gains no word, and is counted in
+``doc.respell_failures``.
 
 Word segmentation keeps as ONE word: contractions (``it's``, ``don't``),
 hyphenated compounds (``well-known``), money and decimals (``$4.50``,
@@ -73,7 +85,8 @@ hyphenated compounds (``well-known``), money and decimals (``$4.50``,
 (``mlx_audio``), initialisms and abbreviations (``e.g.``, ``U.S.``, ``Dr.``),
 URLs and e-mail addresses.  Surrounding quotes, brackets and punctuation are
 excluded from the highlighted span but remain in ``chunk.text``, so the TTS
-still hears them.
+still hears them.  Text with no letter or digit is no word at all, unless a
+pronunciation says it (above).
 
 ``mdcat``'s degraded (non-tty) output writes links as ``homepage[1]`` plus a
 trailing ``[1]: https://...`` block.  Both halves are silenced: the reference
@@ -93,7 +106,7 @@ words, so the prose sounds as it does through the pipe.
 from __future__ import annotations
 
 import re
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left, bisect_right, insort
 from dataclasses import dataclass, field
 from typing import Container, Iterable, Iterator, Sequence
 
@@ -1243,6 +1256,74 @@ def _image_link_references(lines: Iterable[Sequence[Run]],
 # ---------------------------------------------------------------------------
 
 
+def _sits_on(spans: Sequence[tuple[int, int]], start: int, end: int) -> bool:
+    """Whether ``[start, end)`` meets one of `spans`, which are sorted."""
+    i = bisect_right(spans, (start, end))
+    if i < len(spans) and spans[i][0] < end:
+        return True
+    return i > 0 and start < spans[i - 1][1]
+
+
+def _word_of_match(plain: Sequence[str], words: Sequence[Word], chunk: Chunk,
+                   s: int, e: int) -> Word | None:
+    """A Word over ``chunk.text[s:e]``, or None when it cannot be placed.
+
+    A pronunciation may match text no word covers -- ``''``, ``✓`` or ``->``
+    have no letter or digit, so :func:`line_word_spans` never made a word of
+    them -- and such a match needs a word of its own to highlight.
+
+    Every chunk but a cell is a verbatim slice of the document, so a match
+    with a newline before it in the chunk is placed by counting them: the
+    lines after the first are whole, and the column is the distance from the
+    last newline.
+
+    Otherwise the chunk's own slots are the anchors: slot `i` sits at
+    ``chunk.offsets[i]`` and its word starts at ``(line, start)``, so on that
+    line the chunk's offsets and the line's columns differ by a fixed amount.
+    The nearest anchor before the match is tried, then the one after, and the
+    answer is kept only where the text from the anchor to the match is that
+    line character for character -- which is what a chunk that is a verbatim
+    slice always is, and what tells a cell chunk (segments joined by its
+    ``joins``, a glyph said by name, a separator turned into a comma) that its
+    text does not map back here.  In a cell the word must also land inside one
+    of the chunk's regions, never in the gutter beside it.
+
+    So a match no word shares a line with is placed everywhere but in a cell,
+    where a wrapped line of its own leaves it nothing to anchor on: there it
+    is said without being highlighted, as it was before pronunciations could
+    add a word at all.
+    """
+    if chunk.kind != "cell":
+        nl = chunk.text.rfind("\n", 0, s)
+        if nl >= 0:
+            line = chunk.line_start + chunk.text.count("\n", 0, nl + 1)
+            a, b = s - nl - 1, e - nl - 1
+            if line < len(plain) and b <= len(plain[line]):
+                return Word(text=plain[line][a:b], line=line, start=a, end=b,
+                            idx=-1)
+            return None
+    j = bisect_right(chunk.offsets, s) - 1
+    for k, before in ((j, True), (j + 1, False)):
+        if not 0 <= k < len(chunk.words):
+            continue
+        w = words[chunk.words[k]]
+        off, line = chunk.offsets[k], w.line
+        a, b = s - off + w.start, e - off + w.start
+        if not 0 <= a < b <= len(plain[line]):
+            continue
+        if before:
+            if chunk.text[off:e] != plain[line][w.start:b]:
+                continue
+        elif chunk.text[s:off] != plain[line][a:w.start]:
+            continue
+        if chunk.kind == "cell" and not any(
+                li == line and rs <= a and b <= re
+                for li, rs, re in chunk.regions):
+            continue
+        return Word(text=plain[line][a:b], line=line, start=a, end=b, idx=-1)
+    return None
+
+
 def _slots_hold(text: str, offsets: Sequence[int], texts: Sequence[str],
                 count: int) -> bool:
     """Whether `count` slots sit in `text`: never empty, in order, not
@@ -1267,8 +1348,10 @@ class Document:
     reference output and handles only the references ``mdcat --ansi`` writes
     for images inside links, see the module docstring.
     `pronunciations` (the config file's, see :mod:`readaloud.pronounce`)
-    respells what the chunks say and nothing else; ``respell_failures`` counts
-    the chunks read as written because respelling them failed.
+    respells what the chunks say, and adds a word for a respelling of text no
+    word covered (``''``, ``✓``), see the module docstring;
+    ``respell_failures`` counts the chunks read as written because respelling
+    them failed.
     """
 
     def __init__(self, lines: Iterable[Sequence[Run]] | None = None, *,
@@ -1347,17 +1430,32 @@ class Document:
 
         A slot that says a symbol by name (its text is not its word's) goes to
         :meth:`Lexicon.find` with the symbol on screen, which is what a key
-        names: ``✓ = check`` respells a tick, ``yes = yep`` does not.  A chunk
-        changes only when the new slots still hold (as many as before, never
-        empty, in order and found at their offsets): a pronunciation must never
-        hand the Engine a chunk it cannot highlight.  Any failure leaves the
-        chunk as written and is counted.
+        names: ``✓ = check`` respells a tick, ``yes = yep`` does not.  A
+        match no slot covers (the ``''`` of "Pass '' to skip", a ``✓`` in
+        prose: :func:`line_word_spans` makes a word only of text holding a
+        letter or a digit) gets a Word of its own, see :func:`_word_of_match`,
+        so the respelling highlights and can be clicked like any other word.
+        A chunk changes only when the new slots still hold (as many as there
+        are words once those are added, never empty, in order and found at
+        their offsets): a pronunciation must never hand the Engine a chunk it
+        cannot highlight.  Any failure leaves the chunk as written, adds no
+        word and is counted.
         """
         failures = 0
+        # where a word already sits on each line, so a new one never lands on
+        # one: sorted and bisected rather than scanned, because one line of a
+        # minified JSON file holds tens of thousands of them
+        taken: dict[int, list[tuple[int, int]]] = {}
+        for w in self.words:
+            taken.setdefault(w.line, []).append((w.start, w.end))
+        for spans in taken.values():
+            spans.sort()
+        added: dict[int, list[tuple[int, Word]]] = {}
         for chunk in self.chunks:
             if not (chunk.speakable and chunk.words and len(chunk.words)
                     == len(chunk.offsets) == len(chunk.word_texts)):
                 continue
+            extra: list[tuple[int, int, int, Word]] = []
             try:
                 slots = [(o, o + len(t))
                          for o, t in zip(chunk.offsets, chunk.word_texts)]
@@ -1367,15 +1465,89 @@ class Document:
                 matches = lexicon.find(chunk.text, symbols)
                 if not matches:
                     continue
-                text, offsets, texts = respell(chunk.text, slots, matches)
-                held = _slots_hold(text, offsets, texts, len(slots))
+                extra = self._unslotted(chunk, slots, matches, taken)
+                full = sorted(slots + [(s, e) for _p, s, e, _w in extra])
+                text, offsets, texts = respell(chunk.text, full, matches)
+                held = _slots_hold(text, offsets, texts, len(full))
             except Exception:  # noqa: BLE001 - read as written, never stop
                 held = False
             if not held:
                 failures += 1
                 continue
             chunk.text, chunk.offsets, chunk.word_texts = text, offsets, texts
+            if extra:
+                added[chunk.idx] = [(p, w) for p, _s, _e, w in extra]
+                for _p, _s, _e, w in extra:
+                    insort(taken.setdefault(w.line, []), (w.start, w.end))
+        if added:
+            self._insert_words(added)
         return failures
+
+    def _unslotted(self, chunk: Chunk, slots: Sequence[tuple[int, int]],
+                   matches: Sequence[tuple[int, int, str]],
+                   taken: dict[int, list[tuple[int, int]]]
+                   ) -> list[tuple[int, int, int, Word]]:
+        """``(slot position, start, end, Word)`` per match no slot covers.
+
+        The position is where the new slot belongs among `slots`; the start and
+        end are the match's, which is what the new Word covers.  A match is
+        left alone when it holds a space (a word never does, and one that did
+        would be a single unbreakable span on screen), when it already has a
+        slot (an ``'`` inside "don't"), when it cannot be placed on a line
+        (:func:`_word_of_match`) or when it would land on a word that is
+        already there.
+        """
+        ends = [b for _a, b in slots]
+        out: list[tuple[int, int, int, Word]] = []
+        fresh: dict[int, list[tuple[int, int]]] = {}   # this chunk's own new
+        for s, e, _say in matches:
+            if any(ch.isspace() for ch in chunk.text[s:e]):
+                continue      # a word never holds a space: the reader wraps
+            i = bisect_right(ends, s)
+            if i < len(slots) and slots[i][0] < e:
+                continue                      # a slot covers it already
+            w = _word_of_match(self.plain, self.words, chunk, s, e)
+            if w is None:
+                continue
+            here = fresh.setdefault(w.line, [])
+            if (_sits_on(taken.get(w.line, ()), w.start, w.end)
+                    or _sits_on(here, w.start, w.end)):
+                continue
+            insort(here, (w.start, w.end))
+            out.append((i, s, e, w))
+        return out
+
+    def _insert_words(self, added: dict[int, list[tuple[int, Word]]]) -> None:
+        """Put the Words a respelling needed into ``self.words``.
+
+        `added` is ``{chunk index: [(slot position, word)]}``, the positions
+        ascending.  A new word goes where its slot does, which inside a table
+        is that cell's place in reading order, so ``self.words`` stays in
+        reading order with ``idx`` its position and every ``chunk.words`` stays
+        contiguous and ascending.
+        """
+        inserts: dict[int, list[Word]] = {}
+        for cidx, items in added.items():
+            widxs = self.chunks[cidx].words
+            for p, w in items:
+                at = widxs[p] if p < len(widxs) else widxs[-1] + 1
+                inserts.setdefault(at, []).append(w)
+        old = self.words
+        remap = [0] * len(old)
+        out: list[Word] = []
+        for i in range(len(old) + 1):
+            out.extend(inserts.get(i, ()))
+            if i < len(old):
+                remap[i] = len(out)
+                out.append(old[i])
+        for i, w in enumerate(out):
+            w.idx = i
+        self.words = out
+        for chunk in self.chunks:
+            widxs = [remap[i] for i in chunk.words]
+            for p, w in reversed(added.get(chunk.idx, ())):
+                widxs.insert(p, w.idx)
+            chunk.words = widxs
 
     @classmethod
     def from_text(cls, text: str, **kwargs) -> "Document":

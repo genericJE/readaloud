@@ -7,8 +7,9 @@ Two properties matter more than any individual key:
    should be or a file nobody may read must all degrade to "defaults plus a
    warning" rather than to a traceback in front of the reader.
 2. The generated template round-trips.  Parsing `template` -- as written, and
-   with every key uncommented -- must yield exactly `Config()`, otherwise the
-   documented defaults and the real defaults have drifted apart.
+   with every key uncommented -- must yield `Config()` for every setting, plus
+   exactly the pronunciations it ships (`config.TEMPLATE_PRONUNCIATIONS`),
+   otherwise the documented defaults and the real defaults have drifted.
 
 The ``[pronunciations]`` section adds a third: a line there that makes no
 sense costs that line and nothing else, never the settings.
@@ -681,7 +682,7 @@ def test_a_setting_appended_to_the_template_is_not_a_pronunciation(tmp_path,
                                                                    line):
     path = write(tmp_path / "c.conf", config.template() + line + "\n")
     cfg, warnings = config.load(path)
-    assert cfg == DEFAULTS
+    assert cfg == SHIPPED
     assert len(warnings) == 1
     assert "is a setting: move it under [readaloud]" in warnings[0]
 
@@ -841,7 +842,7 @@ def test_template_has_a_comment_above_every_key():
 def test_template_round_trips_to_the_defaults(tmp_path):
     path = write(tmp_path / "c.conf", config.template())
     cfg, warnings = config.load(path)
-    assert cfg == DEFAULTS
+    assert cfg == SHIPPED
     assert warnings == []
 
 
@@ -849,17 +850,18 @@ def test_uncommented_template_round_trips_to_the_defaults(tmp_path):
     live = re.sub(r"(?m)^#(\w+ =.*)$", r"\1", config.template())
     assert "\nvoice = af_heart" in live  # the un-commenting really happened
     cfg, warnings = config.load(write(tmp_path / "c.conf", live))
-    assert cfg == DEFAULTS
+    assert cfg == SHIPPED
     assert warnings == []
 
 
 TEMPLATE_EXAMPLES = (
-    ("id", "ID"),
-    ("kubectl", "cube control"),
     ("GIF", "jif"),
     ("New York City", "NYC"),
     ("#include", "hash include"),
 )
+
+#: What a fresh file says out of the box, settings at their defaults.
+SHIPPED = Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS)
 
 
 def test_template_ends_with_a_live_pronunciations_section():
@@ -867,8 +869,11 @@ def test_template_ends_with_a_live_pronunciations_section():
     head, _, block = text.partition(f"\n[{config.PRONUNCIATIONS}]\n")
     assert block, "no live [pronunciations] header"
     assert f"[{config.SECTION}]" in head
-    assert all(line.startswith("# ") or line == "#"
-               for line in block.splitlines())
+    shipped = {config._pronunciation_line(text, say)
+               for text, say in config.TEMPLATE_PRONUNCIATIONS}
+    assert shipped <= set(block.splitlines())
+    assert all(line.startswith("# ") or line == "#" or line in shipped
+               for line in block.splitlines() if line)
 
 
 def test_template_lines_fit_in_79_columns():
@@ -881,12 +886,14 @@ def test_uncommented_pronunciation_examples_are_exactly_the_pairs(tmp_path):
     head, header, block = config.template().partition(
         f"\n[{config.PRONUNCIATIONS}]\n")
     live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", block)
-    comments = [line for line in live.splitlines() if line.startswith("#")]
-    assert len(comments) == len(block.splitlines()) - len(TEMPLATE_EXAMPLES)
+    # exactly the examples came alive: no help line holds " = "
+    assert set(live.splitlines()) - set(block.splitlines()) == {
+        config._pronunciation_line(text, say)
+        for text, say in TEMPLATE_EXAMPLES}
     path = write(tmp_path / "c.conf", head + header + live)
     cfg, warnings = config.load(path)
-    assert (cfg.pronunciations, warnings) == (TEMPLATE_EXAMPLES, [])
-    assert cfg == Config(pronunciations=TEMPLATE_EXAMPLES)
+    every = config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES
+    assert (cfg.pronunciations, warnings) == (every, [])
 
 
 def test_everything_uncommented_in_the_template(tmp_path):
@@ -894,7 +901,25 @@ def test_everything_uncommented_in_the_template(tmp_path):
     live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", live)
     cfg, warnings = config.load(write(tmp_path / "c.conf", live))
     assert warnings == []
-    assert cfg == Config(pronunciations=TEMPLATE_EXAMPLES)
+    assert cfg == Config(
+        pronunciations=config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES)
+
+
+def test_every_shipped_pronunciation_is_usable(tmp_path):
+    """Each one on its own: parsed, no warning, and not a settings name (the
+    parser refuses those), so a new entry cannot be quietly dropped."""
+    for text, say in config.TEMPLATE_PRONUNCIATIONS:
+        line = config._pronunciation_line(text, say)
+        cfg, warnings = config.load(
+            write(tmp_path / "c.conf", f"[pronunciations]\n{line}\n"))
+        assert (cfg.pronunciations, warnings) == (((text, say),), []), line
+
+
+def test_the_shipped_pronunciations_do_not_repeat_themselves(tmp_path):
+    texts = [text for text, _say in config.TEMPLATE_PRONUNCIATIONS]
+    assert len(texts) == len(set(texts))
+    examples = {text for text, _say in TEMPLATE_EXAMPLES}
+    assert not examples & set(texts)   # a repeat would warn on uncommenting
 
 
 def test_write_template_returns_the_path_and_writes_the_text(tmp_path):
@@ -917,7 +942,7 @@ def test_ensure_creates_the_template(tmp_path):
     path = tmp_path / "c.conf"
     assert config.ensure(path) is True
     assert path.read_text(encoding="utf-8") == config.template()
-    assert config.load(path) == (DEFAULTS, [])
+    assert config.load(path) == (SHIPPED, [])
 
 
 def test_ensure_is_idempotent_and_does_not_clobber(tmp_path):

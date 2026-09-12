@@ -881,7 +881,8 @@ def test_write_config_writes_a_template_that_parses_back_to_defaults(
     assert str(conf) in capsys.readouterr().out
     cfg, warnings = config.load(conf)
     assert warnings == []
-    assert cfg == config.Config()
+    assert cfg == config.Config(
+        pronunciations=config.TEMPLATE_PRONUNCIATIONS)
     # and every key is present, commented out, with its default spelled out
     text = conf.read_text(encoding="utf-8")
     for field in ("voice", "speed", "follow_lead", "follow_margin", "color"):
@@ -2661,7 +2662,9 @@ def test_pty_first_run_leaves_a_config_behind(stub_child, tmp_path):
     assert st is not None and os.WEXITSTATUS(st) == 0
     assert conf.exists(), "the first run did not write ~/.readaloud.conf"
     cfg, warnings = config.load(conf)
-    assert (cfg, warnings) == (config.Config(), [])
+    # the settings at their defaults, and the pronunciations it ships
+    assert (cfg, warnings) == (
+        config.Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS), [])
 
 
 def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):

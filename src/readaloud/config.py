@@ -13,9 +13,12 @@ pass this flag?" unanswerable.
 The file is INI (stdlib `configparser`), and it is meant to be hand-edited.
 The settings live in a ``[readaloud]`` section: `template` emits a comment
 above every key explaining it and showing its default, with every key
-commented out, so an untouched file means "all defaults".
+commented out, so an untouched file leaves every setting at its default.
 
-A ``[pronunciations]`` section holds ``text = how to say it`` lines, which
+A ``[pronunciations]`` section holds ``text = how to say it`` lines.  Unlike
+the settings, it is not empty to begin with: `template` writes the entries in
+`TEMPLATE_PRONUNCIATIONS`, the words Kokoro is measurably wrong about, as
+ordinary lines the reader can edit or delete.  Those lines are what
 configparser cannot read: it lowercases keys, splits "std::vector" at the
 colon, takes "[1] = x" for a section header, and one line without a delimiter
 makes it reject the whole file.  So `load` lifts that section out before
@@ -44,6 +47,7 @@ __all__ = [
     "Config",
     "DEFAULT_PATH",
     "PRONUNCIATIONS",
+    "TEMPLATE_PRONUNCIATIONS",
     "SECTION",
     "ensure",
     "load",
@@ -637,7 +641,8 @@ _PREAMBLE = f"""\
 # this file, and this file always wins over the built-in default.
 #
 # [{PRONUNCIATIONS}] at the end tells readaloud how to say particular words.
-# It starts out empty.
+# It comes with entries for the ones Kokoro gets wrong; delete any you do not
+# want.
 #
 # Delete this file and readaloud will write a fresh copy on its next run.
 
@@ -646,7 +651,7 @@ _PREAMBLE = f"""\
 
 # Live header, commented body.  No help line may hold " = " with spaces round
 # it: only the examples do, so uncommenting them is all it takes to use them.
-_PRONUNCIATIONS_BLOCK = f"""\
+_PRONUNCIATIONS_HELP = f"""\
 [{PRONUNCIATIONS}]
 # How to say a word or phrase: the text as written on the left of the "=",
 # and how to say it on the right, spelled the way it sounds.  Capitals are
@@ -658,25 +663,163 @@ _PRONUNCIATIONS_BLOCK = f"""\
 # spacing, one line break too.  Put quotes round text that starts with # or ;
 # or a quote, or that has an "=" with spaces round it.
 #
-# To use an example, delete the "# " in front of it.
-# id = ID
-# kubectl = cube control
-# GIF = jif
-# New York City = NYC
-# "#include" = hash include
+# Try one before you rely on it: `readaloud 'user.id'` reads just that with
+# your pronunciations, and `readaloud --no-config 'user.id'` reads it without.
+#
+# These come with readaloud, and they are only lines in a file: delete one to
+# stop readaloud saying it that way, or edit it to say it your way.
 """
+
+#: What the generated file says out of the box, in the groups it keeps.  Each
+#: one is text Kokoro reads wrongly without it, measured with misaki: it says
+#: "id" as Freud's id, spells JSON out letter by letter, swallows the dot of a
+#: file name, and runs "systemd" into a single cluster.
+_TEMPLATE_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+    ("names, and the quotes that stand for nothing", (
+        ("id", "ID"),
+        ("ids", "IDs"),
+        ("''", "empty string"),
+        ('""', "empty string"),
+        ("'''", "triple quote"),
+        ('"""', "triple quote"),
+    )),
+    ("file types.  The three names come first: with the bare .md entry alone,\n"
+     "# README.md would be spelled out letter by letter", (
+        ("README.md", "readme dot M D"),
+        ("CHANGELOG.md", "changelog dot M D"),
+        ("TODO.md", "todo dot M D"),
+        (".md", "dot M D"),
+        (".txt", "dot text"),
+        (".rst", "dot R S T"),
+        (".json", "dot jason"),
+        (".yaml", "dot yaml"),
+        (".yml", "dot yaml"),
+        (".toml", "dot toml"),
+        (".ini", "dot I N I"),
+        (".cfg", "dot config"),
+        (".conf", "dot conf"),
+        (".env", "dot env"),
+        (".csv", "dot C S V"),
+        (".tsv", "dot T S V"),
+        (".xml", "dot X M L"),
+        (".html", "dot H T M L"),
+        (".css", "dot C S S"),
+        (".scss", "dot S C S S"),
+        (".js", "dot J S"),
+        (".jsx", "dot J S X"),
+        (".ts", "dot T S"),
+        (".tsx", "dot T S X"),
+        (".py", "dot pie"),
+        (".rb", "dot R B"),
+        (".go", "dot go"),
+        (".rs", "dot R S"),
+        (".java", "dot java"),
+        (".kt", "dot K T"),
+        (".swift", "dot swift"),
+        (".php", "dot P H P"),
+        (".lua", "dot lua"),
+        (".cpp", "dot C P P"),
+        (".hpp", "dot H P P"),
+        (".sh", "dot S H"),
+        (".bash", "dot bash"),
+        (".zsh", "dot Z S H"),
+        (".sql", "dot S Q L"),
+        (".sqlite", "dot sequel lite"),
+        (".db", "dot D B"),
+        (".log", "dot log"),
+        (".lock", "dot lock"),
+        (".pem", "dot pem"),
+        (".crt", "dot C R T"),
+        (".zip", "dot zip"),
+        (".tar", "dot tar"),
+        (".gz", "dot G Z"),
+        (".png", "dot P N G"),
+        (".jpg", "dot J peg"),
+        (".jpeg", "dot J peg"),
+        (".gif", "dot gif"),
+        (".svg", "dot S V G"),
+        (".webp", "dot web P"),
+        (".pdf", "dot P D F"),
+        (".mp3", "dot M P three"),
+        (".mp4", "dot M P four"),
+        (".wav", "dot wave"),
+        (".exe", "dot E X E"),
+        (".dll", "dot D L L"),
+        (".dylib", "dot dylib"),
+        (".app", "dot app"),
+    )),
+    ("languages, tools and formats", (
+        ("C#", "C sharp"),
+        ("F#", "F sharp"),
+        (".NET", "dot net"),
+        ("json", "jason"),
+        ("YAML", "yammle"),
+        ("TOML", "tommle"),
+        ("cli", "C L I"),
+        ("aws", "A. W. S."),
+        ("redis", "red iss"),
+        ("postgresql", "Postgres Q L"),
+        ("sqlite", "sequel lite"),
+        ("systemd", "system dee"),
+        ("journalctl", "journal control"),
+        ("kubectl", "cube control"),
+        ("k8s", "kubernetes"),
+        ("PyPI", "pie pea eye"),
+        ("enum", "ee num"),
+    )),
+    ("what the punctuation of code is called", (
+        ("!=", "not equals"),
+        ("-->", "arrow"),
+        ("->", "arrow"),
+        ("=>", "fat arrow"),
+        ("::", "colon colon"),
+        ("&&", "and and"),
+        ("||", "or or"),
+    )),
+)
+
+#: Every shipped pair, flat and in the file's order.
+TEMPLATE_PRONUNCIATIONS: tuple[tuple[str, str], ...] = tuple(
+    pair for _title, pairs in _TEMPLATE_GROUPS for pair in pairs)
+
+#: Left commented under the shipped ones, to show what else an entry can do.
+_TEMPLATE_EXAMPLES: tuple[tuple[str, str], ...] = (
+    ("GIF", "jif"),
+    ("New York City", "NYC"),
+    ("#include", "hash include"),
+)
+
+
+def _pronunciation_line(text: str, say: str) -> str:
+    """One ``text = how to say it`` line, the text quoted where it must be."""
+    if text[:1] in _QUOTES or text[:1] in "#;" or " = " in text:
+        quote = "'" if '"' in text else '"'
+        text = f"{quote}{text}{quote}"
+    return f"{text} = {say}"
 
 
 def template() -> str:
-    """The fully commented INI text: every key present, every key disabled,
-    then an empty ``[pronunciations]`` section with commented examples."""
+    """The fully commented INI text: every setting present and disabled, then
+    the ``[pronunciations]`` section with its shipped entries and examples."""
     out = [_PREAMBLE]
     for field in _FIELDS:
         block = [f"# {line}" for line in field.help]
         block.append(f"# default: {_format_default(field) or '(empty)'}")
         block.append(f"#{field.name} = {_format_default(field)}".rstrip())
         out.append("\n".join(block) + "\n")
-    out.append(_PRONUNCIATIONS_BLOCK)
+    out.append(_pronunciations_block())
+    return "\n".join(out)
+
+
+def _pronunciations_block() -> str:
+    """The ``[pronunciations]`` section: help, the shipped lines, examples."""
+    out = [_PRONUNCIATIONS_HELP]
+    for title, pairs in _TEMPLATE_GROUPS:
+        out.append(f"# {title}\n" + "\n".join(
+            _pronunciation_line(text, say) for text, say in pairs) + "\n")
+    out.append('# More to try.  To use one, delete the "# " in front of it.\n'
+               + "\n".join("# " + _pronunciation_line(text, say)
+                            for text, say in _TEMPLATE_EXAMPLES) + "\n")
     return "\n".join(out)
 
 

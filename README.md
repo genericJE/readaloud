@@ -42,9 +42,11 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
 - **Your defaults live in `~/.readaloud.conf`.** Voice, speed, chunking, colours and the
   follow lead, in a commented INI file that the first run writes for you.
 - **Says words the way you do.** A `[pronunciations]` section in the config file sets how
-  a word or phrase is said. Kokoro reads the `id` in `user.id` to rhyme with "kid";
-  `id = ID` makes it "eye dee", while the highlight stays on the word as written. See
-  [below](#pronunciations).
+  a word or phrase is said, and comes filled in with the words Kokoro gets wrong: file
+  types (`main.py` is "main dot pie"), `id` as "eye dee" rather than Freud's id, `C#`,
+  `systemd`, `kubectl`, and what the punctuation of code is called. The highlight stays on
+  the word as written, even on text that is no word without it, like the `''` of
+  `"''" = empty string`. Delete a line to be rid of it. See [below](#pronunciations).
 - **Survives the awkward cases:** terminal resize, empty input, input with nothing
   speakable, a chunk whose synthesis fails, and `q` during synthesis.
 
@@ -249,9 +251,9 @@ there is a short pause before the audio resumes.
 Most flags can also be preferences in `~/.readaloud.conf`; the ones that pick the input or
 the output (`-f`, `-md`, `--start`, `--save`) cannot. A `[pronunciations]` section in the
 same file tells readaloud how to say particular words (see
-[Pronunciations](#pronunciations)). The first run writes a fully commented template with
-every key present but commented out and no pronunciations, so an untouched file means
-"all defaults", and says so on stderr once:
+[Pronunciations](#pronunciations)). The first run writes a template with every setting
+present but commented out, so an untouched file leaves every setting at its default, and
+with the pronunciations below already in it. It says so on stderr once:
 
 ```
 readaloud: created /Users/you/.readaloud.conf -- your defaults live there now
@@ -310,7 +312,10 @@ media_keys = true
 
 [pronunciations]
 # How to say a word or phrase: the text as written on the left of the "=",
-# and how to say it on the right.  Empty to begin with; see below.
+# and how to say it on the right.  These come with readaloud; see below.
+id = ID
+.py = dot pie
+C# = C sharp
 ```
 
 The file is meant to be hand-edited and is read forgivingly. A missing file is not an
@@ -348,6 +353,17 @@ OS = O S
 "#include" = hash include  # quote text that starts with # or ; or a quote
 ```
 
+A fresh `~/.readaloud.conf` already holds about ninety of these, each one a word Kokoro
+was measured saying wrongly: the common file types (`main.py` is "main dot pie",
+`config.yml` is "config dot yaml", `README.md` keeps its name instead of being spelled
+out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string", `"""` is
+"triple quote"), languages and tools (`C#`, `.NET`, `json`, `YAML`, `systemd`,
+`journalctl`, `kubectl`, `k8s`, `redis`, `postgresql`, `PyPI`), and what the punctuation
+of code is called (`!=`, `->`, `=>`, `::`, `&&`, `||`). They are ordinary lines in your
+file: delete one to be rid of it, or edit it to say it your way. Anything readaloud
+already says correctly is deliberately absent, so `SQL` stays "sequel", `nginx` stays
+"engine x" and `C++` stays "C plus plus".
+
 How the text on the left is found:
 
 - **It is text, not a pattern.** `C#`, `std::vector` and `.NET` mean exactly those
@@ -383,6 +399,17 @@ highlight stays on the written word while its respelling is said: `kubectl` stay
 through "cube control". Control Center and the lock screen show what is said, so
 `kubectl get pods` is titled "cube control get pods" there.
 
+Text with no letter or digit in it is not a word readaloud would ever light on its own,
+but a pronunciation of it gets one: with `"''" = empty string`, the `''` of "Pass '' to
+skip the field." lights while "empty string" is said, and clicking it starts there, just
+like a word. The same goes for `✓ = check` in a sentence and `-> = to` in a code block.
+Nothing else moves: the same text is spoken either way, the chunk count in the status bar
+and what `--start` counts stay as they are, and a line or cell that holds nothing but such
+text (a `''` on a line of its own) is still skipped, as a line with no words always is.
+Two kinds stay unlit while still being said: an entry whose text holds a space
+(`. . = stop stop`), since a word never spans one, and, in a table cell, text the render
+wrapped onto a line of its own.
+
 A `-md` table says its ticks and crosses as "yes" and "no", and its arrows and keys by
 name (see [above](#markdown-with--md)). Those names are not text an entry can match, so
 `yes = yep` changes a written "yes" but no tick, and `right arrow = next` leaves every `→`
@@ -391,9 +418,9 @@ alone. An entry for the symbol itself replaces its name: with `✓ = check`, a `
 that leaves `✅` saying "yes", and an entry reaches a named symbol only when its text is
 that one symbol: `⌘C = copy` leaves a `⌘C` cell saying "command C", while `⌘ = cmd` makes
 it "cmd C". Outside a table Kokoro says nothing at all for a `✓` beside other words, and
-`✓ = check` makes it say "check" there too. A line or cell holding nothing but symbols
-readaloud has no name for is still skipped, so `★ = star` does nothing for a `★★★★`
-rating.
+`✓ = check` makes it say "check" there too, lighting the tick while it does. A line or
+cell holding nothing but symbols readaloud has no name for is still skipped, so
+`★ = star` does nothing for a `★★★★` rating.
 
 Some tips:
 
@@ -422,9 +449,12 @@ readaloud: /Users/you/.readaloud.conf: [pronunciations] line 99: 'kubectl' has n
 ```
 
 The same text on two lines is reported too, and the later line wins; `id`, `Id` and `ID`
-are three different entries. A file written by an older readaloud has no
-`[pronunciations]` line, so add one above your entries: an entry left under `[readaloud]`
-is ignored, with a warning that it belongs under `[pronunciations]`. A fresh template ends
+are three different entries. An existing `~/.readaloud.conf` is never touched, so a file
+written by an older readaloud has neither the shipped entries nor the `[pronunciations]`
+line: add the line above your own entries, since an entry left under `[readaloud]` is
+ignored with a warning that it belongs under `[pronunciations]`. To take the shipped ones,
+copy them from a fresh template (`readaloud --write-config` writes one, discarding your
+edits, so save the file first if you have any). A fresh template ends
 with `[pronunciations]`, so a setting added at the bottom of it lands there: `speed = 1.5`
 is then reported as a setting to move under `[readaloud]`, not taken for a word (quote it,
 `"speed" = spead`, if you do mean the word). A misspelled heading such as
@@ -526,7 +556,7 @@ language packs, which this project does not install by default.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
-| `config.py` | `~/.readaloud.conf`: parsing the settings and the `[pronunciations]` lines, clamping, and the commented template |
+| `config.py` | `~/.readaloud.conf`: parsing the settings and the `[pronunciations]` lines, clamping, and the generated template |
 | `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## Development
