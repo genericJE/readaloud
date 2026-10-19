@@ -13,7 +13,7 @@ a release.
 | `pronounce.py` | `[pronunciations]`: finding the text in a chunk and respelling it, so every word keeps its highlight |
 | `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
-| `_core` | the compiled half, built from `rust/`: the computation behind `width.py` and `pronounce.py` |
+| `_core` | the compiled half, built from `rust/`: the computation behind `width.py`, `pronounce.py`, and the words, sentences and chunks of `document.py` |
 | `speech.py` | Kokoro pipeline, the token to word-slot timestamp alignment, and trimming a cell's silence |
 | `player.py` | one persistent PortAudio stream with a lock-free callback |
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |

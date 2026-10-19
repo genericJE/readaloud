@@ -5,7 +5,7 @@
 //! Python's own Unicode database, so "a letter or digit" means exactly what
 //! `str.isalnum()` means and not what Rust's newer Unicode says.
 
-use crate::tables::{ALNUM, LOWER, SPACE, UPPER};
+use crate::tables::{ALNUM, DECIMAL, DIGIT, LOWER, LOWERCASE, SPACE, UPPER};
 
 fn in_ranges(table: &[(u32, u32)], c: char) -> bool {
     let c = c as u32;
@@ -42,6 +42,40 @@ pub fn is_upper(c: char) -> bool {
         return c.is_ascii_uppercase();
     }
     in_ranges(&UPPER, c)
+}
+
+/// `str.islower()` of one character.
+pub fn is_lower(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_lowercase();
+    }
+    in_ranges(&LOWERCASE, c)
+}
+
+/// `str.isdecimal()`: what `\d` matches in Python's `re`.
+pub fn is_decimal(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_digit();
+    }
+    in_ranges(&DECIMAL, c)
+}
+
+/// `str.isdigit()` of one character.
+pub fn is_digit(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_digit();
+    }
+    in_ranges(&DIGIT, c)
+}
+
+/// A letter: `[^\W\d_]` in Python's `re`.
+pub fn is_letter(c: char) -> bool {
+    is_alnum(c) && !is_decimal(c)
+}
+
+/// `\w` in Python's `re`: a letter, a digit or an underscore.
+pub fn is_w(c: char) -> bool {
+    c == '_' || is_alnum(c)
 }
 
 /// `str.isspace()` of one character.
