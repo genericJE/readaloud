@@ -8,6 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
+mod ansi;
 mod pronounce;
 mod tables;
 mod text;
@@ -205,6 +206,58 @@ fn prose_spans(
         .collect())
 }
 
+/// A style as Python sees it: (fg, bg, bold, dim, italic, underline,
+/// reverse, href), the fields of `readaloud.ansi.Style` in order.
+type PyStyle = (Option<i64>, Option<i64>, bool, bool, bool, bool, bool, Option<String>);
+/// Lines of (text, style index) runs, and the styles they index.
+type PyLines = (Vec<PyStyle>, Vec<ansi::Line>);
+
+fn style_of(t: PyStyle) -> ansi::Style {
+    let (fg, bg, bold, dim, italic, underline, reverse, href) = t;
+    ansi::Style { fg, bg, bold, dim, italic, underline, reverse, href }
+}
+
+fn tuple_of(s: ansi::Style) -> PyStyle {
+    (s.fg, s.bg, s.bold, s.dim, s.italic, s.underline, s.reverse, s.href)
+}
+
+/// `data` as lines of runs: `(styles, lines)`, each run `(text, style
+/// index)`.  Style 0 is the default.
+#[pyfunction]
+fn parse(py: Python<'_>, data: &Bound<'_, PyString>) -> PyLines {
+    let data = text_of(data);
+    let (styles, lines) = py.detach(|| ansi::parse(&data));
+    (styles.into_iter().map(tuple_of).collect(), lines)
+}
+
+#[pyfunction]
+fn has_ansi(data: &Bound<'_, PyString>) -> bool {
+    ansi::has_ansi(&text_of(data))
+}
+
+/// `style` with one SGR parameter body applied.
+#[pyfunction]
+fn apply_sgr(style: PyStyle, body: &Bound<'_, PyString>) -> PyStyle {
+    tuple_of(ansi::apply_sgr(&style_of(style), &text_of(body)))
+}
+
+#[pyfunction]
+fn rgb_to_x256(r: i64, g: i64, b: i64) -> i64 {
+    ansi::rgb_to_x256(r, g, b)
+}
+
+/// Raw Markdown lines lightly de-syntaxed: `(styles, lines)` as `parse`
+/// returns them, the given styles first and in order.
+#[pyfunction]
+fn strip_markdown(py: Python<'_>, styles: Vec<PyStyle>, lines: Vec<ansi::Line>) -> PyResult<PyLines> {
+    let styles: Vec<ansi::Style> = styles.into_iter().map(style_of).collect();
+    if lines.iter().flatten().any(|&(_, k)| k >= styles.len()) {
+        return Err(PyValueError::new_err("strip_markdown: a run's style is not among the styles"));
+    }
+    let (styles, lines) = py.detach(|| ansi::strip_markdown(styles, lines));
+    Ok((styles.into_iter().map(tuple_of).collect(), lines))
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(char_width, m)?)?;
@@ -213,6 +266,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLexicon>()?;
     m.add_function(wrap_pyfunction!(respell, m)?)?;
     m.add_function(wrap_pyfunction!(check_pattern, m)?)?;
+    m.add_function(wrap_pyfunction!(parse, m)?)?;
+    m.add_function(wrap_pyfunction!(has_ansi, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_sgr, m)?)?;
+    m.add_function(wrap_pyfunction!(rgb_to_x256, m)?)?;
+    m.add_function(wrap_pyfunction!(strip_markdown, m)?)?;
     m.add("ABBREVIATIONS", words::ABBREVIATIONS.to_vec())?;
     m.add_function(wrap_pyfunction!(line_word_spans, m)?)?;
     m.add_function(wrap_pyfunction!(lines_word_spans, m)?)?;
