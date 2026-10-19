@@ -8,6 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
+mod align;
 mod ansi;
 mod pronounce;
 mod tables;
@@ -258,6 +259,63 @@ fn strip_markdown(py: Python<'_>, styles: Vec<PyStyle>, lines: Vec<ansi::Line>) 
     Ok((styles.into_iter().map(tuple_of).collect(), lines))
 }
 
+/// A misaki token as the glue hands it over: (text, start_ts, end_ts).
+type PyToken<'py> = (Bound<'py, PyString>, Option<f64>, Option<f64>);
+
+/// `needle`'s char span in `text` at or after `cursor`, or None.
+#[pyfunction]
+fn locate(text: &Bound<'_, PyString>, needle: &Bound<'_, PyString>, cursor: usize) -> Option<(usize, usize)> {
+    align::locate(&chars_of(text), &chars_of(needle), cursor)
+}
+
+/// `(slot, start, end)` for every word slot, from one `(tokens, seconds)`
+/// pair per pipeline Result.
+#[pyfunction]
+fn align_words(
+    py: Python<'_>,
+    text: &Bound<'_, PyString>,
+    spans: Vec<(i64, i64)>,
+    results: Vec<(Vec<PyToken<'_>>, f64)>,
+) -> Vec<align::Timing> {
+    let text = chars_of(text);
+    let results: Vec<(Vec<align::Token>, f64)> = results
+        .iter()
+        .map(|(tokens, duration)| {
+            let tokens = tokens
+                .iter()
+                .map(|(t, start, end)| align::Token { text: chars_of(t), start: *start, end: *end })
+                .collect();
+            (tokens, *duration)
+        })
+        .collect();
+    py.detach(|| align::align_words(&text, &spans, &results))
+}
+
+/// One `(start, end)` char span per word slot inside `text`.
+#[pyfunction]
+#[pyo3(signature = (text, offsets, word_texts = None))]
+fn word_spans(
+    text: &Bound<'_, PyString>,
+    offsets: Vec<Option<usize>>,
+    word_texts: Option<Vec<Bound<'_, PyString>>>,
+) -> Vec<(usize, usize)> {
+    let word_texts: Option<Vec<Vec<char>>> = word_texts.map(|w| lines_of(&w));
+    align::word_spans(&chars_of(text), &offsets, word_texts.as_deref())
+}
+
+/// `duration` spread over `nslots` slots by span width.
+#[pyfunction]
+fn even_timings(spans: Vec<(i64, i64)>, duration: f64, nslots: i64) -> Vec<align::Timing> {
+    align::even_timings(&spans, duration, nslots)
+}
+
+/// `(slot, start, end)` timings clamped and made monotonic; ValueError when
+/// they do not fit the slots.
+#[pyfunction]
+fn sanitize(timings: Vec<(i64, f64, f64)>, nslots: i64, duration: f64) -> PyResult<Vec<align::Timing>> {
+    align::sanitize(&timings, nslots, duration).map_err(PyValueError::new_err)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(char_width, m)?)?;
@@ -279,5 +337,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_long, m)?)?;
     m.add_function(wrap_pyfunction!(paragraph_spans, m)?)?;
     m.add_function(wrap_pyfunction!(prose_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(locate, m)?)?;
+    m.add_function(wrap_pyfunction!(align_words, m)?)?;
+    m.add_function(wrap_pyfunction!(word_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(even_timings, m)?)?;
+    m.add_function(wrap_pyfunction!(sanitize, m)?)?;
     Ok(())
 }
