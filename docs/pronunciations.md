@@ -39,7 +39,8 @@ already says correctly is deliberately absent, so `SQL` stays "sequel", `nginx` 
 
 How the text on the left is found:
 
-- **It is text, not a pattern.** `C#`, `std::vector` and `.NET` mean exactly those
+- **It is text, not a pattern,** unless it is between slashes (see
+  [Patterns](#patterns) below). `C#`, `std::vector` and `.NET` mean exactly those
   characters. The two sides are split at the first `=` with a space on each side, so `!=`
   and `==` need no quotes; a line without one splits at its first `=`, so `id=ID` works
   too.
@@ -101,6 +102,53 @@ other words, and `✓ = check` makes it say "check" there too, lighting the tick
 does. A line or cell holding nothing but symbols readaloud has no name for is still
 skipped, so `★ = star` does nothing for a `★★★★` rating.
 
+## Patterns
+
+Some text is a shape rather than a word: a file name with a line number after it, a
+version, an issue number. Put a [regular expression][regex] between slashes on the left,
+and on the right say how to read what it matched, naming its groups:
+
+```ini
+/:(\d+)-(\d+)/ = lines $1 to $2   # settings.py:281-283 says "settings dot pie lines 281 to 283"
+/:(\d+)/ = line $1                 # settings.py:498 says "settings dot pie line 498"
+```
+
+The `.py` comes from the entry `.py = dot pie`, and the line numbers from the patterns:
+the two take turns, left to right, like any other entries. The whole `settings.py:281-283`
+stays lit while all of it is said. A fresh `~/.readaloud.conf` has these two lines
+commented out at the end: delete the `# ` in front of them to use them. They are not on
+by default because `/:(\d+)/` also reads a time, so `3:45` becomes "3 line 45".
+
+- **Groups.** `$1`, `$2` and so on are what the pattern's parentheses captured, and `$0`
+  is the whole match. Write `${1}` when a letter or digit follows (`${1}st`, since `$1st`
+  would look for a group called `1st`), `${name}` for a group written `(?<name>...)`, and
+  `$$` for a dollar sign. A group that does not exist, or did not take part in the match,
+  says nothing.
+- **A pattern matches as written.** None of the rules for text above apply to it: no
+  word breaks, no smart case, no accent forms. Say what you mean with the pattern itself:
+  `\b` for a word break, `(?i)` to ignore case, `\d` for a digit in any script.
+- **It takes turns with the rest.** Reading goes left to right, and where a pattern and
+  other entries match at the same place, the longest match wins. A tie counts the pattern
+  as text with a capital, and then the later line wins.
+- **A match must say something.** One whose groups leave no letter or digit to say is
+  passed over, and one that says exactly what it matched is a guard, like `macOS = macOS`.
+- **What a pattern can hold.** It is a regular expression for Rust's [`regex`][regex]
+  crate, which never backtracks, so no pattern can slow readaloud down however much text
+  it reads. That leaves out lookahead and lookbehind (`(?=...)`, `(?<=...)`) and
+  backreferences (`\1`). Everything else you would expect is there: classes, `|`,
+  `*`, `+`, `?`, `{2,4}`, `^` and `$` at the ends of a chunk.
+
+A pattern that will not compile, or that could match empty text (`/\d*/`), is reported
+with its line number and skipped, like any other line readaloud cannot use:
+
+```
+readaloud: /Users/you/.readaloud.conf: [pronunciations] line 101: the pattern /:(\d+/ cannot be used: unclosed group
+```
+
+Text that only looks like a pattern is literal when quoted: `"/usr/" = slash user slash`.
+A pattern is matched against the text as it is spoken, which is why it cannot see the
+name a `-md` table gives a tick, and it cannot reach into one either.
+
 Some tips:
 
 - Capitals usually get a word spelled out, which is why `id = ID` works; `API` and `URL`
@@ -140,5 +188,7 @@ is then reported as a setting to move under `[readaloud]`, not taken for a word 
 `[pronunciation]` is ignored with a warning
 that names the section it probably meant, and past five problems the rest are counted
 rather than listed.
+
+[regex]: https://docs.rs/regex/latest/regex/#syntax
 
 [Back to the README](../README.md)

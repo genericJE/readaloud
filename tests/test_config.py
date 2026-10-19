@@ -858,6 +858,8 @@ TEMPLATE_EXAMPLES = (
     ("GIF", "jif"),
     ("New York City", "NYC"),
     ("#include", "hash include"),
+    (r"/:(\d+)-(\d+)/", "lines $1 to $2"),
+    (r"/:(\d+)/", "line $1"),
 )
 
 #: What a fresh file says out of the box, settings at their defaults.

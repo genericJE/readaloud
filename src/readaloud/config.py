@@ -43,6 +43,8 @@ import unicodedata
 from dataclasses import dataclass, fields as _dataclass_fields
 from pathlib import Path
 
+from .pronounce import Literal, check_pattern, is_pattern
+
 __all__ = [
     "Config",
     "DEFAULT_PATH",
@@ -390,6 +392,8 @@ _SETTING_COLON_RE = re.compile(r"([\w-]+)\s*:")
 #: Markdown link syntax, which misaki reads as "say this text with these
 #: phonemes" and so would swallow.
 _LINK_RE = re.compile(r"\[[^\]]+\]\([^)]*\)")
+#: What a pattern captured, named in its pronunciation: $1, ${1}, ${name}.
+_GROUP_REF_RE = re.compile(r"\$(?:\d+|\{\w+\}|[A-Za-z_]\w*)")
 
 #: Problems past this many are counted rather than listed: prose pasted under
 #: [pronunciations] is a problem on every line, and a screenful of those would
@@ -541,6 +545,12 @@ def _parse_pronunciation(n: int, raw: str) -> tuple[str, str] | str | None:
     or a quote, or holds " = " itself; the pronunciation when it holds a # or ;
     after a space.  Whitespace runs collapse to one space and both sides are
     NFC; case is kept, since it decides what the text matches.
+
+    Unquoted text between slashes is a pattern (``/:(\\d+)/ = line $1``, see
+    :mod:`readaloud.pronounce`): its spaces are kept as written, it must
+    compile, and its pronunciation may say nothing but a group.  Quoted, the
+    same text is literal, and comes back as a :class:`~readaloud.pronounce.
+    Literal` so the Lexicon keeps it that way.
     """
     at = f"[{PRONUNCIATIONS}] line {n}: "
     line = raw.strip()
@@ -574,7 +584,12 @@ def _parse_pronunciation(n: int, raw: str) -> tuple[str, str] | str | None:
         comment = _VALUE_COMMENT_RE.search(rest)
         value = rest[:comment.start()] if comment else rest
 
-    key, value = _normalise(key), _normalise(value)
+    pattern = not key_quoted and is_pattern(key.strip())
+    if pattern:
+        key = unicodedata.normalize("NFC", key.strip())
+    else:
+        key = _normalise(key)
+    value = _normalise(value)
     if not key:
         return (f'{at}nothing before the "="; put quotes round text '
                 f'that has an "=" in it')
@@ -598,7 +613,14 @@ def _parse_pronunciation(n: int, raw: str) -> tuple[str, str] | str | None:
         # Quoted or not: misaki would take it for phonemes either way.
         return (f"{at}{_shown(key)}: [text](...) is not supported; "
                 f"write it the way it sounds")
-    if not any(ch.isalnum() for ch in value):
+    if pattern:
+        problem = check_pattern(key[1:-1])
+        if problem:
+            # as written: repr would double every backslash in it
+            shown = key if len(key) <= 40 else key[:40] + "..."
+            return f"{at}the pattern {shown} cannot be used: {problem}"
+    if not any(ch.isalnum() for ch in value) and not (
+            pattern and _GROUP_REF_RE.search(value)):
         return (f"{at}{_shown(key)}: {_shown(value)} has nothing to say "
                 f"(no letters or digits)")
     if not key_quoted and key.lower() in _BY_NAME:
@@ -606,6 +628,8 @@ def _parse_pronunciation(n: int, raw: str) -> tuple[str, str] | str | None:
         # bottom of the file lands here.
         return (f"{at}{_shown(key)} is a setting: move it under [{SECTION}], "
                 f"or put quotes round the word to pronounce it")
+    if key_quoted and is_pattern(key):
+        key = Literal(key)
     return key, value
 
 
@@ -661,7 +685,9 @@ _PRONUNCIATIONS_HELP = f"""\
 # user_id and userId, but not idle or grid.  Lowercase text matches any case;
 # text with a capital matches that case only.  A space in a phrase matches any
 # spacing, one line break too.  Put quotes round text that starts with # or ;
-# or a quote, or that has an "=" with spaces round it.
+# or a quote, or that has an "=" with spaces round it.  Text between slashes
+# is a pattern, and $1 in how to say it is what its first group matched: see
+# the last examples below.
 #
 # Try one before you rely on it: `readaloud 'user.id'` reads just that with
 # your pronunciations, and `readaloud --no-config 'user.id'` reads it without.
@@ -787,6 +813,10 @@ _TEMPLATE_EXAMPLES: tuple[tuple[str, str], ...] = (
     ("GIF", "jif"),
     ("New York City", "NYC"),
     ("#include", "hash include"),
+    # a pattern, between slashes: says settings.py:281-283 as "settings dot
+    # pie lines 281 to 283".  Also turns 3:45 into "3 line 45".
+    (r"/:(\d+)-(\d+)/", "lines $1 to $2"),
+    (r"/:(\d+)/", "line $1"),
 )
 
 
