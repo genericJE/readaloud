@@ -38,11 +38,30 @@ readaloud = "readaloud.cli:main"
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/readaloud"]
+[tool.maturin]
+# Python in src/readaloud, the compiled half (readaloud._core) built from rust/.
+python-source = "src"
+module-name = "readaloud._core"
+manifest-path = "rust/Cargo.toml"
+
+[tool.maturin.sbom]
+# The software bill of materials maturin would put in the wheel names the
+# crate by its absolute source path, which the bundle must not ship.
+rust = false
+
+[tool.uv]
+# uv rebuilds the editable install only when one of these changes.  The Rust
+# sources are part of the build, so a Rust edit rebuilds on the next `uv run`
+# rather than leaving the tests on a stale extension.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "rust/Cargo.toml" },
+    { file = "rust/Cargo.lock" },
+    { file = "rust/src/**/*.rs" },
+]
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

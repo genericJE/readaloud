@@ -24,6 +24,9 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
+      # The runner image ships rustup.  This installs the toolchain that
+      # rust-toolchain.toml pins, which compiles readaloud._core.
+      - run: rustup toolchain install
       # setup-uv stopped publishing floating major tags at v8, so this names
       # an exact (immutable) release rather than @v10.
       - uses: astral-sh/setup-uv@v10.1.0

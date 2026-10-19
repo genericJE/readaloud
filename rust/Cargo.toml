@@ -1,0 +1,27 @@
+[package]
+name = "readaloud-core"
+version = "0.0.0"          # unused: maturin takes the version from pyproject.toml
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[lib]
+name = "readaloud_core"
+# A shared library Python imports; maturin installs it as readaloud/_core*.so.
+crate-type = ["cdylib"]
+
+[dependencies]
+# No `extension-module` feature: maturin sets PYO3_BUILD_EXTENSION_MODULE
+# itself when it builds the wheel, and leaving it off lets `cargo test` link
+# libpython.  No abi3 either: Python is pinned to 3.12 and every install
+# path compiles the extension.
+pyo3 = "0.30"
+regex = "1"
+regex-syntax = "0.8"
+unicode-normalization = "0.1"
+
+[profile.release]
+# On macOS the linker records the absolute path of every object it consumed
+# as a stab symbol; stripping removes them, which keeps the build path out of
+# the shipped bundle (build-bundle.sh refuses a bundle that contains it).
+strip = true

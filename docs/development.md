@@ -13,6 +13,7 @@ a release.
 | `pronounce.py` | `[pronunciations]`: finding the text in a chunk and respelling it, so every word keeps its highlight |
 | `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
+| `_core` | the compiled half, built from `rust/`: the computation behind `width.py` |
 | `speech.py` | Kokoro pipeline, the token to word-slot timestamp alignment, and trimming a cell's silence |
 | `player.py` | one persistent PortAudio stream with a lock-free callback |
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
@@ -23,9 +24,10 @@ a release.
 
 ## From a checkout
 
-`uv tool install --editable '.[mediakeys]'` needs [`uv`][uv] and Apple silicon. `uv`
-supplies everything including the espeak fallback, so there is no `brew install espeak-ng`
-step.
+`uv tool install --editable '.[mediakeys]'` needs [`uv`][uv], [`rustup`][rustup] and
+Apple silicon. `uv` supplies everything Python, including the espeak fallback, so there
+is no `brew install espeak-ng` step. `rustup` supplies the Rust compiler that
+`rust-toolchain.toml` names, which builds `readaloud._core` as part of the install.
 
 The first run downloads `mlx-community/Kokoro-82M-4bit` (~300 MB) into the HuggingFace
 cache; later runs load it in a few seconds. Only the safetensors and voice packs are
@@ -38,6 +40,24 @@ never opens, and skipping it halves the download.
 uv sync --extra mediakeys
 uv run pytest -q
 uv run readaloud -f README.md
+```
+
+The work that is pure computation lives in Rust, in `rust/src/`, and is compiled into
+`readaloud._core` by [maturin][maturin]. Each Python module keeps its name and its
+functions and calls into `_core`, so nothing else imports it directly. `uv run`
+rebuilds the extension whenever a file under `rust/` changed (`tool.uv.cache-keys` in
+`pyproject.toml`), so the tests always run against the current Rust; a bare `pytest`
+does not rebuild. The extension lands in `src/readaloud/` and is not committed. The
+Python each module had before its port stays in `tests/reference/`, and the
+`tests/test_core_*.py` tests check the port against it over random input.
+
+The Rust side reads its character classes (letters and digits, spaces, capitals,
+widths) from `rust/src/tables.rs`, generated from Python's own Unicode database so both
+halves agree on every character. Regenerate it whenever the pinned Python changes:
+
+```bash
+uv run python scripts/gen-unicode-tables.py
+PYO3_PYTHON="$(uv python find 3.12)" cargo test --manifest-path rust/Cargo.toml
 ```
 
 `tests/test_integration.py` drives the real binary under a pseudo-terminal with a pipe on
@@ -57,7 +77,7 @@ a daemon thread).
 
 Bump `version` in `pyproject.toml` and `__version__` in `src/readaloud/__init__.py`, run
 `uv lock`, commit, then push a `vX.Y.Z` tag. The `release` workflow builds the bundle on a
-`macos-14` runner and attaches it. Then update three lines in the tap's
+`macos-14` runner, compiling `readaloud._core` with the pinned Rust, and attaches it. Then update three lines in the tap's
 `Formula/readaloud.rb`: `url`, `version`, `sha256`.
 
 The runner's macOS version is load-bearing. mlx publishes one wheel per macOS generation
@@ -65,5 +85,7 @@ and `uv` picks the newest the build host can run, so the build machine's macOS b
 minimum every user needs. Building on a newer machine silently excludes older ones.
 
 [uv]: https://docs.astral.sh/uv/
+[rustup]: https://rustup.rs/
+[maturin]: https://www.maturin.rs/
 
 [Back to the README](../README.md)

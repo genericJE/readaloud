@@ -211,7 +211,11 @@ def test_ascii_width_skips_the_per_character_walk(monkeypatch):
     def walk(ch):
         raise AssertionError(f"walked {ch!r}")
 
-    monkeypatch.setattr(width, "char_width", walk)
+    class Walker:
+        char_width = text_width = cell_offsets = staticmethod(walk)
+
+    # ASCII is measured in Python; anything else goes to readaloud._core
+    monkeypatch.setattr(width, "_core", Walker)
     assert width.text_width("plain | ascii\x01") == 14
     assert width.cell_offsets("ab\x7f") == [0, 1, 2, 3]
     with pytest.raises(AssertionError):

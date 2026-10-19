@@ -49,8 +49,17 @@ uv export --directory "$REPO" --frozen --no-dev --no-emit-project \
           --extra mediakeys --format requirements-txt -o "$WORK/req.txt"
 uv pip install --python "$STAGE/bin/python$PYVER" --break-system-packages \
                --link-mode=copy -r "$WORK/req.txt"
+# 2b. readaloud itself, as one wheel built against the bundle's own interpreter:
+#     this is where the Rust extension readaloud._core is compiled (cargo must
+#     be on PATH).  Installed by name from a find-links directory, because
+#     installing a path writes that path into the dist-info's direct_url.json.
+#     Panic messages carry the source path of every crate they come from,
+#     which for the dependencies is the builder's home: write it as /cargo.
+export RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+uv build --wheel --python "$STAGE/bin/python$PYVER" --out-dir "$WORK/wheel" "$REPO"
 uv pip install --python "$STAGE/bin/python$PYVER" --break-system-packages \
-               --link-mode=copy --no-deps "$REPO"
+               --link-mode=copy --no-deps --no-index --find-links "$WORK/wheel" \
+               "readaloud==$VERSION"
 
 # 3. Replace the console-script shebangs, which point at $STAGE.  The formula's
 #    own shim makes them irrelevant, but a build path baked into a shipped file
@@ -71,7 +80,17 @@ done
 find "$STAGE" -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # 5. Refuse to ship a build path or an AppleDouble file.
-if grep -rlq "$WORK" "$STAGE"; then echo "build path leaked into bundle" >&2; exit 1; fi
+#    The extension is compiled under $REPO, so that path is checked too.
+if grep -rlq -e "$WORK" -e "$REPO" "$STAGE"; then
+  echo "build path leaked into bundle" >&2; exit 1
+fi
+
+# 6. The extension must not raise the minimum macOS above what mlx already
+#    needs (14.0, see the header): refuse a newer minos.
+SO="$(ls "$STAGE"/lib/python$PYVER/site-packages/readaloud/_core*.so)"
+vtool -show-build "$SO" | grep -Eq 'minos (1[0-4]|[1-9])\.' || {
+  echo "$SO needs a newer macOS than 14:" >&2; vtool -show-build "$SO" >&2; exit 1
+}
 
 mkdir -p "$OUT"
 TARBALL="$OUT/readaloud-$VERSION-arm64.tar.xz"

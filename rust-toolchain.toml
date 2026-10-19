@@ -1,0 +1,5 @@
+# The Rust that builds readaloud._core, for every checkout and the release
+# runner alike: the analogue of uv.lock for the compiler.
+[toolchain]
+channel = "1.98.0"
+profile = "minimal"

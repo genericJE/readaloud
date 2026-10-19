@@ -2,3 +2,7 @@
 __pycache__/
 *.pyc
 dist/
+
+# the compiled extension and cargo output
+*.so
+rust/target/
