@@ -25,6 +25,14 @@ makes it reject the whole file.  So `load` lifts that section out before
 configparser sees the rest, and parses its lines itself.  This module only
 parses them; where a pronunciation applies is `readaloud.pronounce`'s business.
 
+``[shapes]`` and ``[parts]``, lifted out the same way, describe text to say
+a set way.  A shape is ``/pattern/ = wording``, its named groups the parts
+the wording names (``/(?<file>%{file}):(?<line>\\d+)/ = $file line $line``);
+a part is ``name = pattern``, a piece any pattern below it or any shape can
+use as ``%{name}``.  readaloud has no shape and no part of its own: a file
+without the sections has none, and `template` writes `TEMPLATE_PARTS` and
+`TEMPLATE_SHAPES` into a fresh one, like the shipped pronunciations.
+
 Nothing here raises.  A missing file means plain defaults and no warning; an
 unreadable, binary, duplicated or malformed file means the defaults for
 whatever could not be understood, plus warnings the caller may print.  One bad
@@ -43,13 +51,19 @@ import unicodedata
 from dataclasses import dataclass, fields as _dataclass_fields
 from pathlib import Path
 
-from .pronounce import Literal, check_pattern, is_pattern
+from .pronounce import (Literal, check_pattern, check_regex, check_shape,
+                        is_pattern)
 
 __all__ = [
     "Config",
     "DEFAULT_PATH",
     "PRONUNCIATIONS",
+    "PARTS",
+    "SHAPES",
+    "TEMPLATE_PARTS",
     "TEMPLATE_PRONUNCIATIONS",
+    "TEMPLATE_SHAPES",
+    "expand_parts",
     "SECTION",
     "ensure",
     "load",
@@ -65,6 +79,21 @@ SECTION = "readaloud"
 
 #: The section of words and phrases readaloud should say differently.
 PRONUNCIATIONS = "pronunciations"
+
+#: The section of shapes: text described by a pattern (a file and its line, a
+#: host and its port) and what it says.
+SHAPES = "shapes"
+
+#: The section of named pieces of pattern the shapes are built from.
+PARTS = "parts"
+
+#: The sections this module reads itself, rather than configparser.
+_LIFTED = (PRONUNCIATIONS, SHAPES, PARTS)
+
+#: A part used in a pattern: %{name}.
+_PART_RE = re.compile(r"%\{(\w+)\}")
+#: A name a part may have.
+_PART_NAME_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 @dataclass
@@ -85,6 +114,18 @@ class Config:
     media_keys: bool = True        # claim the system play/pause button
     # (written, spoken) pairs from [pronunciations], in file order
     pronunciations: tuple[tuple[str, str], ...] = ()
+    # (pattern as written, wording) of each [shapes] line, in file order
+    shapes: tuple[tuple[str, str], ...] = ()
+    # (name, pattern as written) of each [parts] line, in file order
+    parts: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def shape_patterns(self) -> tuple[tuple[str, str], ...]:
+        """The shapes as `readaloud.pronounce.Lexicon` takes them: each
+        pattern without its slashes and with its parts filled in."""
+        parts = expand_parts(self.parts)
+        return tuple((_fill(pattern[1:-1], parts), say)
+                     for pattern, say in self.shapes)
 
 
 # --------------------------------------------------------------------------- #
@@ -162,9 +203,10 @@ _FIELDS: tuple[_Field, ...] = (
 _BY_NAME = {f.name: f for f in _FIELDS}
 
 # The dataclass and the metadata table are edited by hand; keep them honest.
-# pronunciations is the one field that is not a [readaloud] key.
+# pronunciations, shapes and parts are the fields that are not [readaloud]
+# keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
-                           - {"pronunciations"})
+                           - {"pronunciations", "shapes", "parts"})
 
 
 def _default_of(name: str) -> object:
@@ -318,15 +360,27 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
         if text is None:
             return cfg, warnings
 
+        lifted: dict[str, list[tuple[int, str]]] = {}
         try:
-            ini, lines, notes = _split(text)
-            pairs, problems = _parse_pronunciations(lines)
+            ini, lifted, notes = _split_sections(text)
+            pairs, problems = _parse_pronunciations(lifted[PRONUNCIATIONS])
         except Exception as exc:  # noqa: BLE001 - lose these, keep the settings
             ini, pairs, problems = text, (), []
             notes = [f"[{PRONUNCIATIONS}] could not be used ({exc!r})"]
+        try:
+            parts, part_problems = _parse_parts(lifted.get(PARTS, []))
+            shapes, shape_problems = _parse_shapes(lifted.get(SHAPES, []),
+                                                   parts)
+            problems += part_problems + shape_problems
+        except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
+            parts, shapes = (), ()
+            notes.append(f"[{SHAPES}] and [{PARTS}] could not be used "
+                         f"({exc!r})")
         # Set before configparser gets a say: a [readaloud] section it rejects
         # must not cost the pronunciations as well.
         cfg.pronunciations = pairs
+        cfg.shapes = shapes
+        cfg.parts = parts
         warnings += [f"{target}: {note}" for note in notes]
 
         parser, parse_warnings = _parse(ini, target)
@@ -393,7 +447,7 @@ _SETTING_COLON_RE = re.compile(r"([\w-]+)\s*:")
 #: phonemes" and so would swallow.
 _LINK_RE = re.compile(r"\[[^\]]+\]\([^)]*\)")
 #: What a pattern captured, named in its pronunciation: $1, ${1}, ${name}.
-_GROUP_REF_RE = re.compile(r"\$(?:\d+|\{\w+\}|[A-Za-z_]\w*)")
+_GROUP_REF_RE = re.compile(r"\$(?:\d+|\{[^}]+\}|[A-Za-z_]\w*)")
 
 #: Problems past this many are counted rather than listed: prose pasted under
 #: [pronunciations] is a problem on every line, and a screenful of those would
@@ -402,12 +456,20 @@ _MAX_PROBLEMS = 5
 
 
 def _split(text: str) -> tuple[str, list[tuple[int, str]], list[str]]:
-    """Lift the ``[pronunciations]`` lines out of `text`.
+    """`_split_sections` with the ``[pronunciations]`` lines alone."""
+    ini, lifted, warnings = _split_sections(text)
+    return ini, lifted[PRONUNCIATIONS], warnings
 
-    Returns ``(ini, lines, warnings)``: the text configparser gets, the
-    pronunciation lines as ``(line number, raw line)``, and warnings without
-    the path in front.  Every line taken out of `ini` is left there empty, so
-    configparser's line numbers stay right.
+
+def _split_sections(text: str) -> tuple[
+        str, dict[str, list[tuple[int, str]]], list[str]]:
+    """Lift the ``[pronunciations]``, ``[shapes]`` and ``[parts]`` lines out
+    of `text`.
+
+    Returns ``(ini, lifted, warnings)``: the text configparser gets, each
+    lifted section's lines as ``(line number, raw line)`` by its name, and
+    warnings without the path in front.  Every line taken out of `ini` is
+    left there empty, so configparser's line numbers stay right.
 
     Unknown sections are taken out too, with a warning.  configparser would
     choke on the entries of a misspelled "[pronunciation]" and throw away the
@@ -416,12 +478,12 @@ def _split(text: str) -> tuple[str, list[tuple[int, str]], list[str]]:
     ``[pronunciations]`` sections are read as one, in file order.
     """
     kept: list[str] = []
-    lines: list[tuple[int, str]] = []
+    sections: dict[str, list[tuple[int, str]]] = {name: [] for name in _LIFTED}
     warnings: list[str] = []
     warned: set[str] = set()
     # "ini" is [readaloud] and whatever precedes the first header, where bare
     # keys are allowed; "other" is an unknown section.
-    state = "ini"                  # "ini" | PRONUNCIATIONS | "other"
+    state = "ini"                  # "ini" | one of _LIFTED | "other"
     # configparser's continuation rule, followed on every line it reads or
     # would have read: a line indented deeper than the option line above it
     # is more of that value, even when it looks like a header.  Only a
@@ -430,13 +492,13 @@ def _split(text: str) -> tuple[str, list[tuple[int, str]], list[str]]:
     indent, option = 0, False
     for n, line in enumerate(text.split("\n"), 1):
         header = None
-        if state == PRONUNCIATIONS:
+        if state in _LIFTED:
             header = _SECTION_END_RE.match(line.strip())
         elif value := line[:_comment_start(line)].strip():
             depth = len(line) - len(line.lstrip())
             header = _SECTION_RE.match(value)
             if (option and depth > indent and not (
-                    header and _names_pronunciations(header))):
+                    header and _lifted(header))):
                 header = None
             else:
                 indent = depth
@@ -445,8 +507,8 @@ def _split(text: str) -> tuple[str, list[tuple[int, str]], list[str]]:
         if header:
             lifted, option = state != "ini", False
             name = header.group("name")
-            if _names_pronunciations(header):
-                state = PRONUNCIATIONS
+            if _lifted(header):
+                state = _lifted(header)
             elif name in (SECTION, configparser.DEFAULTSECT):
                 # [DEFAULT] stays configparser's: its keys fill [readaloud]
                 state = "ini"
@@ -460,10 +522,10 @@ def _split(text: str) -> tuple[str, list[tuple[int, str]], list[str]]:
                 if name not in warned:      # configparser merged repeats
                     warned.add(name)
                     warnings.append(_unknown_section(name))
-        elif state == PRONUNCIATIONS:
-            lines.append((n, line))
+        elif state in _LIFTED:
+            sections[state].append((n, line))
         kept.append(line if state == "ini" else "")
-    return "\n".join(kept), lines, warnings
+    return "\n".join(kept), sections, warnings
 
 
 def _comment_start(line: str) -> int:
@@ -492,13 +554,15 @@ def _comment_start(line: str) -> int:
     return len(line)
 
 
-def _names_pronunciations(header: re.Match[str]) -> bool:
-    return header.group("name").strip().lower() == PRONUNCIATIONS
+def _lifted(header: re.Match[str]) -> str | None:
+    """The section `header` names when this module reads it itself."""
+    name = header.group("name").strip().lower()
+    return name if name in _LIFTED else None
 
 
 def _unknown_section(name: str) -> str:
     hint = difflib.get_close_matches(name.strip().lower(),
-                                     [SECTION, PRONUNCIATIONS],
+                                     [SECTION, *_LIFTED],
                                      n=1, cutoff=0.6)
     guess = f" (did you mean [{hint[0]}]?)" if hint else ""
     return f"ignoring unknown section [{name}]{guess}"
@@ -633,6 +697,197 @@ def _parse_pronunciation(n: int, raw: str) -> tuple[str, str] | str | None:
     return key, value
 
 
+
+
+def _value(rest: str) -> str:
+    """The right of a ``[shapes]`` or ``[parts]`` line, as the pronunciation
+    lines read theirs: quoted, or up to a # or ; after a space."""
+    quoted = _quoted(rest.lstrip())
+    after = quoted[1].lstrip() if quoted is not None else ""
+    if quoted is not None and (not after or after[0] in "#;"):
+        return quoted[0].strip()
+    comment = _VALUE_COMMENT_RE.search(rest)
+    return (rest[:comment.start()] if comment else rest).strip()
+
+
+def _sides(line: str) -> tuple[str, str] | None:
+    """A line split at its separator, as the pronunciation lines are."""
+    separator = _SEPARATOR_RE.search(line)
+    eq = separator.start() if separator else line.find("=")
+    if eq < 0:
+        return None
+    return line[:eq].strip(), _value(line[eq + 1:])
+
+
+def _shown_pattern(pattern: str, limit: int = 50) -> str:
+    """A pattern as written in a warning: repr would double its backslashes."""
+    return pattern if len(pattern) <= limit else pattern[:limit] + "..."
+
+
+def _fill(pattern: str, parts: dict[str, str]) -> str:
+    """`pattern` with each %{name} replaced by that part, in a group."""
+    return _PART_RE.sub(lambda m: "(?:" + parts[m.group(1)] + ")", pattern)
+
+
+def _unknown_parts(pattern: str, parts: dict[str, str]) -> list[str]:
+    return [m.group(1) for m in _PART_RE.finditer(pattern)
+            if m.group(1) not in parts]
+
+
+def expand_parts(parts: tuple[tuple[str, str], ...]) -> dict[str, str]:
+    """Each part by name with the parts it uses filled in.  A part only uses
+    those above it, so one pass in file order fills them all."""
+    out: dict[str, str] = {}
+    for name, pattern in parts:
+        out[name] = _fill(pattern, out)
+    return out
+
+
+def _parse_parts(lines: list[tuple[int, str]]
+                 ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
+    """Return ``(parts, problems)`` for the ``[parts]`` lines.
+
+    `parts` is ``(name, pattern as written)`` per usable line, in file order.
+    A part may use the parts on the lines above it as ``%{name}``; one used
+    before it is defined, an unknown one, or a pattern that does not compile
+    costs only its own line.  The same name twice is a problem, and the later
+    line wins.
+    """
+    usable: dict[str, tuple[int, str]] = {}
+    filled: dict[str, str] = {}
+    problems: list[str] = []
+    for n, raw in lines:
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        at = f"[{PARTS}] line {n}: "
+        sides = _sides(line)
+        if sides is None:
+            problems.append(f'{at}{_shown(line)} has no "="; write it as: '
+                            f"name = pattern")
+            continue
+        name, pattern = sides
+        if not _PART_NAME_RE.fullmatch(name):
+            problems.append(f"{at}{_shown(name)} is not a name: use letters, "
+                            f"digits and _, starting with a letter")
+            continue
+        if not pattern:
+            problems.append(f"{at}{name!r} has no pattern")
+            continue
+        unknown = _unknown_parts(pattern, filled)
+        if unknown:
+            problems.append(f"{at}{name!r} uses %{{{unknown[0]}}}, which is "
+                            f"not a part on a line above it")
+            continue
+        problem = check_regex(_fill(pattern, filled))
+        if problem:
+            problems.append(f"{at}{name!r} cannot be used: {problem}")
+            continue
+        if name in usable:
+            problems.append(f"{at}{name!r} is also on line {usable[name][0]}; "
+                            f"line {n} wins")
+            del usable[name]
+        usable[name] = (n, pattern)
+        filled[name] = _fill(pattern, filled)
+    return (tuple((name, pattern) for name, (_n, pattern) in usable.items()),
+            _capped(problems, PARTS))
+
+
+#: A reference in a wording: $$ (a dollar sign), $name, ${name}, or
+#: ${name|from=to|...}, the group with each `from` said as the word `to`.
+_REFERENCE_RE = re.compile(r"\$\$|\$\{([^}|]*)((?:\|[^}|]*)*)\}|\$(\w+)")
+
+
+def _parse_shapes(lines: list[tuple[int, str]],
+                  parts: tuple[tuple[str, str], ...] = ()
+                  ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
+    """Return ``(shapes, problems)`` for the ``[shapes]`` lines.
+
+    `shapes` is ``(/pattern/ as written, wording)`` per usable line, in file
+    order, which is the order they are tried in.  The same pattern twice is a
+    problem, and the later line wins, taking its own place in the order.
+    """
+    filled = expand_parts(parts)
+    usable: dict[str, tuple[int, str]] = {}
+    problems: list[str] = []
+    for n, raw in lines:
+        parsed = _parse_shape(n, raw, filled)
+        if isinstance(parsed, str):
+            problems.append(parsed)
+        elif parsed is not None:
+            pattern, wording = parsed
+            if pattern in usable:
+                problems.append(f"[{SHAPES}] line {n}: "
+                                f"{_shown_pattern(pattern)} is also on line "
+                                f"{usable[pattern][0]}; line {n} wins")
+                del usable[pattern]
+            usable[pattern] = (n, wording)
+    return (tuple((pattern, wording)
+                  for pattern, (_n, wording) in usable.items()),
+            _capped(problems, SHAPES))
+
+
+def _capped(problems: list[str], section: str) -> list[str]:
+    """`problems`, past `_MAX_PROBLEMS` counted rather than listed."""
+    if len(problems) > _MAX_PROBLEMS:
+        hidden = len(problems) - _MAX_PROBLEMS
+        more = "1 more problem" if hidden == 1 else f"{hidden} more problems"
+        problems[_MAX_PROBLEMS:] = [f"[{section}]: {more} not shown"]
+    return problems
+
+
+def _parse_shape(n: int, raw: str, parts: dict[str, str]
+                 ) -> tuple[str, str] | str | None:
+    """One ``/pattern/ = wording`` line: the pair, a problem, or None.
+
+    The separator, the quotes and the comments follow the pronunciation
+    lines.  The pattern may use the parts as ``%{name}`` and must not match
+    empty text; the wording may be empty, which says the text as written,
+    and may name the pattern's groups as ``$name``, ``${name}`` or by number.
+    """
+    at = f"[{SHAPES}] line {n}: "
+    line = raw.strip()
+    if not line or line[0] in "#;":
+        return None
+    sides = _sides(line)
+    if sides is None:
+        return f'{at}{_shown(line)} has no "="; write it as: /pattern/ = wording'
+    pattern, wording = sides
+    wording = _normalise(wording)
+    shown = _shown_pattern(pattern)
+    if not is_pattern(pattern):
+        return f"{at}{_shown(pattern)} is not a pattern between slashes"
+    unknown = _unknown_parts(pattern, parts)
+    if unknown:
+        return f"{at}{shown} uses %{{{unknown[0]}}}, which is not a part"
+    problem, groups = check_shape(_fill(pattern[1:-1], parts))
+    if problem:
+        return f"{at}the shape {shown} cannot be used: {problem}"
+    names, count = groups
+    for ch in wording:
+        if unicodedata.category(ch) == "Cc" or ch == "\ufffd":
+            return f"{at}{_shown(wording)} has a character it cannot say"
+    found = [m for m in _REFERENCE_RE.finditer(wording) if m.group(0) != "$$"]
+    references = [m.group(1) if m.group(1) is not None else m.group(3)
+                  for m in found]
+    for m in found:
+        for swap in filter(None, (m.group(2) or "").split("|")):
+            if "=" not in swap or swap.startswith("="):
+                return (f"{at}{_shown(m.group(0))}: write a replacement as "
+                        f"|text=word, such as ${{path|/=slash}}")
+    for ref in references:
+        if not (ref in names or (ref.isdigit() and int(ref) <= count)):
+            known = ", ".join("$" + name for name in names) or "none"
+            return (f"{at}{shown} has no group ${ref}; its named groups are "
+                    f"{known}, and $0 is the whole match")
+    if _LINK_RE.search(wording):
+        return f"{at}[text](...) is not supported; write it the way it sounds"
+    if wording and not references and not any(ch.isalnum() for ch in wording):
+        return (f"{at}{_shown(wording)} has nothing to say; leave it empty to "
+                f"say the text as written")
+    return pattern, wording
+
+
 def _quoted(text: str) -> tuple[str, str] | None:
     """``(inside, after)`` when `text` opens with a quote that closes again."""
     if text[:1] in _QUOTES:
@@ -664,9 +919,10 @@ _PREAMBLE = f"""\
 # edit it to make that setting stick.  A command-line flag always wins over
 # this file, and this file always wins over the built-in default.
 #
-# [{PRONUNCIATIONS}] at the end tells readaloud how to say particular words.
-# It comes with entries for the ones Kokoro gets wrong; delete any you do not
-# want.
+# [{PARTS}] and [{SHAPES}] set how readaloud says a file with its line
+# number, a host with its port and a time, and [{PRONUNCIATIONS}] at the end
+# how to say particular words.  They come filled in; delete any line you do
+# not want.
 #
 # Delete this file and readaloud will write a fresh copy on its next run.
 
@@ -686,8 +942,8 @@ _PRONUNCIATIONS_HELP = f"""\
 # text with a capital matches that case only.  A space in a phrase matches any
 # spacing, one line break too.  Put quotes round text that starts with # or ;
 # or a quote, or that has an "=" with spaces round it.  Text between slashes
-# is a pattern, and $1 in how to say it is what its first group matched: see
-# the last examples below.
+# is a pattern, and $1 in how to say it is what its first group matched (see
+# docs/pronunciations.md in readaloud's repository).
 #
 # Try one before you rely on it: `readaloud 'user.id'` reads just that with
 # your pronunciations, and `readaloud --no-config 'user.id'` reads it without.
@@ -695,6 +951,66 @@ _PRONUNCIATIONS_HELP = f"""\
 # These come with readaloud, and they are only lines in a file: delete one to
 # stop readaloud saying it that way, or edit it to say it your way.
 """
+
+# Live headers and live lines, like [pronunciations]: a shape or a part is
+# there only while its line is.  No help line may hold " = " with spaces
+# round it.
+_PARTS_HELP = f"""\
+[{PARTS}]
+# Pieces of pattern the shapes below are built from: a name, then a regular
+# expression.  %{{name}} in a shape, or in a part further down, stands for
+# that piece.  Add a domain or a file extension here, or a piece of your own.
+"""
+
+_SHAPES_HELP = f"""\
+[{SHAPES}]
+# Text readaloud says a set way: a pattern between slashes, then what it
+# says, with $file, $line and the like standing for what the pattern's named
+# groups matched.  A shape starts and ends where a word does, and may span a
+# few words.  The lines are tried in order and the first that fits wins, so
+# a host is tried before a file.  What it says still goes through
+# [{PRONUNCIATIONS}], so the .py of settings.py:498 stays "dot pie".  An
+# empty right side says the text as written, which keeps a pattern off it:
+# Kokoro already says 14:35 as "fourteen thirty-five".  Delete a line to be
+# rid of that shape.
+"""
+
+#: The [parts] lines a fresh file comes with.
+TEMPLATE_PARTS: tuple[tuple[str, str], ...] = (
+    ("ext", r"[A-Za-z]\w*"),
+    ("file", r"\S+\.%{ext}"),
+    ("web", r"com|org|net|edu|gov|mil|int|info|biz|io|dev|ai|co|me|tv"),
+    ("newweb", r"cloud|tech|online|site|xyz"),
+    ("europe", r"de|uk|eu|fr|nl|ch|at|se|no|fi|dk|it|es|pt|pl|cz|be|ie"),
+    ("world", r"jp|cn|kr|in|us|ca|au|nz|br|ru"),
+    ("private", r"local|localdomain|lan|home|internal|intranet|corp"),
+    ("reserved", r"arpa|test|example|invalid"),
+    ("domain",
+     r"%{web}|%{newweb}|%{europe}|%{world}|%{private}|%{reserved}"),
+    ("name", r"[A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.(?i:%{domain})"),
+    ("octet", r"25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d"),
+    ("ipv4", r"%{octet}\.%{octet}\.%{octet}\.%{octet}"),
+    ("host", r"localhost|%{ipv4}|%{name}"),
+    ("port", r"6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|\d{1,4}"),
+    ("hostport", r"(?<host>%{host}):(?<port>%{port})"),
+    ("scheme", r"(?<scheme>https?|ftps?|ssh|git)://"),
+    ("path", "[^\\s<>\"'|)\\]]*[^\\s<>\"'|)\\].,;:!?]"),
+    ("hour", r"[01]?\d|2[0-3]"),
+    ("minute", r"[0-5]\d"),
+)
+
+#: The [shapes] lines a fresh file comes with, in the order they are tried.
+TEMPLATE_SHAPES: tuple[tuple[str, str], ...] = (
+    (r"/%{scheme}%{hostport}(?<path>/%{path})/",
+     "$host port $port ${path|/=slash}"),
+    (r"/%{scheme}%{hostport}/?/", "$host port $port"),
+    (r"/%{hostport}/", "$host port $port"),
+    (r"/(?<file>%{file}):(?<line>\d+):(?<col>\d+)/",
+     "$file line $line, column $col"),
+    (r"/(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/", "$file lines $from to $to"),
+    (r"/(?<file>%{file}):(?<line>\d+)/", "$file line $line"),
+    (r"/(?<hour>%{hour}):(?<minute>%{minute})(?::(?<second>%{minute}))?/", ""),
+)
 
 #: What the generated file says out of the box, in the groups it keeps.  Each
 #: one is text Kokoro reads wrongly without it, measured with misaki: it says
@@ -790,6 +1106,7 @@ _TEMPLATE_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ("journalctl", "journal control"),
         ("kubectl", "cube control"),
         ("k8s", "kubernetes"),
+        ("localhost", "local host"),
         ("PyPI", "pie pea eye"),
         ("enum", "ee num"),
     )),
@@ -813,10 +1130,6 @@ _TEMPLATE_EXAMPLES: tuple[tuple[str, str], ...] = (
     ("GIF", "jif"),
     ("New York City", "NYC"),
     ("#include", "hash include"),
-    # a pattern, between slashes: says settings.py:281-283 as "settings dot
-    # pie lines 281 to 283".  Also turns 3:45 into "3 line 45".
-    (r"/:(\d+)-(\d+)/", "lines $1 to $2"),
-    (r"/:(\d+)/", "line $1"),
 )
 
 
@@ -829,14 +1142,20 @@ def _pronunciation_line(text: str, say: str) -> str:
 
 
 def template() -> str:
-    """The fully commented INI text: every setting present and disabled, then
-    the ``[pronunciations]`` section with its shipped entries and examples."""
+    """The INI text of a fresh file: every setting present and commented out,
+    then the ``[parts]``, ``[shapes]`` and ``[pronunciations]`` sections with
+    their shipped lines, and the pronunciation examples commented out."""
     out = [_PREAMBLE]
     for field in _FIELDS:
         block = [f"# {line}" for line in field.help]
         block.append(f"# default: {_format_default(field) or '(empty)'}")
         block.append(f"#{field.name} = {_format_default(field)}".rstrip())
         out.append("\n".join(block) + "\n")
+    out.append(_PARTS_HELP + "\n".join(
+        f"{name} = {pattern}" for name, pattern in TEMPLATE_PARTS) + "\n")
+    out.append(_SHAPES_HELP + "\n".join(
+        f"{pattern} = {say}".rstrip() for pattern, say in TEMPLATE_SHAPES)
+        + "\n")
     out.append(_pronunciations_block())
     return "\n".join(out)
 

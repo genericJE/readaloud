@@ -29,9 +29,9 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
   rather than being interpolated.
 - **Says words the way you do.** A `[pronunciations]` section in the config file sets how
   a word or phrase is said, and comes filled in with the words Kokoro gets wrong:
-  `main.py` is "main dot pie", and `id` is "eye dee" rather than Freud's id. A pattern
-  can say a whole shape of text, so `settings.py:281-283` becomes "settings dot pie lines
-  281 to 283". See [Pronunciations](docs/pronunciations.md).
+  `main.py` is "main dot pie", and `id` is "eye dee" rather than Freud's id. A file
+  reference is read as one, so `settings.py:281-283` is "settings dot pie lines 281 to
+  283", and a port stays a port. See [Pronunciations](docs/pronunciations.md).
 - **Never blocks.** A background thread loads the model and keeps the current chunk plus
   a couple more synthesized in a bounded cache. The document is on screen and scrollable
   before the voice has finished loading, and playback carries on wherever you scroll.

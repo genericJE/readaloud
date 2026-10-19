@@ -8,6 +8,13 @@
 //! a hash probe per word rather than a pass per key.  Each pattern keeps a
 //! cursor on its next match, so it scans the text about once.
 //!
+//! A word slot can also have a shape (see `shapes.rs`): a file and its line,
+//! a host and its port.  A shape is tried on whole slots only, and loses to
+//! any entry of the same length.  What a shape or a pattern says goes once
+//! more through the literal entries, so `.py = dot pie` applies inside
+//! `$file line $line`; the literal entries' own output is final, so that
+//! second pass cannot loop.
+//!
 //! Every position and span counts characters, never bytes.
 
 use std::collections::{BTreeMap, HashMap};
@@ -15,6 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
+use crate::shapes::Shapes;
 use crate::text::{collapse, is_hump, is_space, is_upper, is_word_char, lower, same_folded};
 
 /// The gutter mdcat draws down a blockquote, which may follow a line break
@@ -55,7 +63,13 @@ pub struct Lexicon {
     /// a key without its variation selectors -> what a symbol by that name
     /// says
     symbols: HashMap<String, String>,
+    /// the config file's shapes
+    shapes: Shapes,
 }
+
+/// A candidate's rank: the longest match wins, then a key with a capital,
+/// then an entry over a shape, then the later line.
+type Rank = (usize, bool, u8, usize);
 
 /// Why a pattern cannot be used, or None.
 pub fn check_pattern(pattern: &str) -> Option<String> {
@@ -96,7 +110,9 @@ fn push_once(bucket: &mut Vec<usize>, i: usize) {
 impl Lexicon {
     /// `pairs` are `(written, spoken, is_pattern)` in file order.  A pair with
     /// an empty side, or a pattern that does not compile, is skipped.
-    pub fn new(pairs: &[(String, String, bool)]) -> Self {
+    /// `shapes` are `(pattern, wording)` in file order; an empty wording says
+    /// the text as written, and a pattern that cannot be used is skipped.
+    pub fn new(pairs: &[(String, String, bool)], shapes: &[(String, String)]) -> Self {
         let mut lex = Lexicon {
             literals: Vec::new(),
             patterns: Vec::new(),
@@ -106,6 +122,7 @@ impl Lexicon {
             leads: HashMap::new(),
             folded_leads: HashMap::new(),
             symbols: HashMap::new(),
+            shapes: Shapes::new(shapes),
         };
         for (rank, (written, spoken, is_pattern)) in pairs.iter().enumerate() {
             let say = collapse(spoken);
@@ -169,14 +186,37 @@ impl Lexicon {
         self.literals.len() + self.patterns.len()
     }
 
+    /// How many shapes are on.
+    pub fn shape_count(&self) -> usize {
+        self.shapes.len()
+    }
+
     /// Every `(start, end, say)` to respell in `text`: sorted, never empty and
     /// never overlapping.
     ///
     /// `symbols` lists `(start, end, symbol)` for each slot that says a symbol
     /// by its name.  No match may reach into a name; a literal whose key is
-    /// the symbol replaces the whole name instead.
-    pub fn find(&self, text: &str, symbols: &[(usize, usize, String)]) -> Vec<Found> {
-        if self.len() == 0 {
+    /// the symbol replaces the whole name instead.  `slots` are the chunk's
+    /// word slots, the only places a shape is looked for.
+    pub fn find(
+        &self,
+        text: &str,
+        symbols: &[(usize, usize, String)],
+        slots: &[(usize, usize)],
+    ) -> Vec<Found> {
+        self.scan(text, symbols, slots, true)
+    }
+
+    /// `find` with or without the patterns and shapes: the second pass uses
+    /// the literal entries alone.
+    fn scan(
+        &self,
+        text: &str,
+        symbols: &[(usize, usize, String)],
+        slots: &[(usize, usize)],
+        everything: bool,
+    ) -> Vec<Found> {
+        if self.literals.is_empty() && (!everything || self.len() + self.shape_count() == 0) {
             return Vec::new();
         }
         let chars: Vec<char> = text.chars().collect();
@@ -186,7 +226,11 @@ impl Lexicon {
         let name_ends: Vec<usize> = names.iter().map(|n| n.1).collect();
 
         let candidates = self.candidates(&chars);
-        let mut cursors = Cursors::new(&self.patterns, text);
+        let no_patterns: &[Pattern] = &[];
+        let mut cursors =
+            Cursors::new(if everything { &self.patterns } else { no_patterns }, text);
+        let shaped = if everything { self.shaped(&chars, slots) } else { Vec::new() };
+        let mut si = 0;
         let mut found: Vec<Found> = Vec::new();
         let mut pos = 0;
         let mut ci = 0;
@@ -194,19 +238,20 @@ impl Lexicon {
             while ci < candidates.len() && candidates[ci].0 < pos {
                 ci += 1;
             }
+            while si < shaped.len() && shaped[si].0 < pos {
+                si += 1;
+            }
             let literal_at = candidates.get(ci).map(|c| c.0);
             let pattern_at = cursors.next_start(pos);
-            let p = match (literal_at, pattern_at) {
-                (Some(a), Some(b)) => a.min(b),
-                (Some(a), None) => a,
-                (None, Some(b)) => b,
-                (None, None) => break,
+            let shape_at = shaped.get(si).map(|c| c.0);
+            let Some(p) = [literal_at, pattern_at, shape_at].into_iter().flatten().min() else {
+                break;
             };
             // the first name that ends after p: a match may not reach into it
             let k = name_ends.partition_point(|&e| e <= p);
             let name_at = names.get(k).map_or(chars.len(), |n| n.0);
-            // (end, exact, rank), and what to say
-            let mut best: Option<((usize, bool, usize), String, bool)> = None;
+            // its rank, what to say, and whether it is a guard
+            let mut best: Option<(Rank, String, bool)> = None;
             if literal_at == Some(p) {
                 for &i in &candidates[ci].1 {
                     let lit = &self.literals[i];
@@ -214,7 +259,7 @@ impl Lexicon {
                     if end <= p || name_at < end {
                         continue;
                     }
-                    let rank = (end, lit.exact, lit.rank);
+                    let rank = (end, lit.exact, 1, lit.rank);
                     if best.as_ref().is_none_or(|b| rank > b.0) {
                         best = Some((rank, lit.say.clone(), lit.say == lit.key));
                     }
@@ -225,14 +270,29 @@ impl Lexicon {
                 if name_at < m.end {
                     continue;
                 }
-                let rank = (m.end, true, self.patterns[k].rank);
+                let rank = (m.end, true, 1, self.patterns[k].rank);
                 if best.as_ref().is_none_or(|b| rank > b.0) {
-                    best = Some((rank, m.say.clone(), false));
+                    // a pattern that says what it matched is a guard, which
+                    // the second pass must leave alone too
+                    let written: String = chars[p..m.end].iter().collect();
+                    best = Some(if m.say == written {
+                        (rank, written, true)
+                    } else {
+                        (rank, self.respoken(&m.say), false)
+                    });
                 }
+            }
+            if shape_at == Some(p) {
+                let (_, end, say, guard) = &shaped[si];
+                let rank = (*end, false, 0, 0);
+                if name_at >= *end && best.as_ref().is_none_or(|b| rank > b.0) {
+                    best = Some((rank, say.clone(), *guard));
+                }
+                si += 1;
             }
             match best {
                 None => cursors.pass(p + 1),
-                Some(((end, _, _), say, guard)) => {
+                Some(((end, _, _, _), say, guard)) => {
                     // a guard, or text already said this way: claimed, not
                     // changed
                     let written: String = chars[p..end].iter().collect();
@@ -258,6 +318,44 @@ impl Lexicon {
             found.sort();
         }
         found
+    }
+
+    /// `(start, end, say, guard)` of every shape found at the word slots, in
+    /// order.  `say` has been through the literal entries.
+    fn shaped(&self, chars: &[char], slots: &[(usize, usize)]) -> Vec<(usize, usize, String, bool)> {
+        if self.shape_count() == 0 {
+            return Vec::new();
+        }
+        let mut slots: Vec<(usize, usize)> =
+            slots.iter().copied().filter(|&(a, b)| a < b && b <= chars.len()).collect();
+        slots.sort_unstable();
+        let text: String = chars.iter().collect();
+        let mut out = Vec::new();
+        for found in self.shapes.found(&text, &slots) {
+            if found.as_written {
+                out.push((found.start, found.end, found.say, true));
+                continue;
+            }
+            let say = self.respoken(&found.say);
+            if say.chars().any(is_word_char) {
+                out.push((found.start, found.end, say, false));
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// `say` with the literal entries applied, as one slot.
+    fn respoken(&self, say: &str) -> String {
+        let n = say.chars().count();
+        if self.literals.is_empty() || n == 0 {
+            return say.to_string();
+        }
+        let found = self.scan(say, &[], &[], false);
+        if found.is_empty() {
+            return say.to_string();
+        }
+        respell(say, &[(0, n)], &found).map_or_else(|_| say.to_string(), |r| r.0)
     }
 
     /// `(position, literals)` of every place a literal key may start, in
@@ -443,9 +541,7 @@ impl<'a> Cursors<'a> {
             let start = self.char_of[&m.start()];
             let end = self.char_of[&m.end()];
             if end > start {
-                let mut said = String::new();
-                caps.expand(&pattern.template, &mut said);
-                let say = collapse(&said);
+                let say = collapse(&crate::shapes::expand(&pattern.template, &caps));
                 if say.chars().any(is_word_char) {
                     return Some(Match { start, end, say });
                 }
@@ -648,12 +744,12 @@ mod tests {
                 (k.to_string(), s.to_string(), pattern)
             })
             .collect();
-        Lexicon::new(&pairs)
+        Lexicon::new(&pairs, &[])
     }
 
     fn said(l: &Lexicon, text: &str) -> String {
         let n = text.chars().count();
-        let found = l.find(text, &[]);
+        let found = l.find(text, &[], &[]);
         respell(text, &[(0, n)], &found).unwrap().0
     }
 
@@ -667,7 +763,7 @@ mod tests {
     #[test]
     fn a_literal_is_found_by_its_break_rules() {
         let l = lex(&[("id", "ID")]);
-        let f = |t: &str| l.find(t, &[]).iter().map(|m| (m.0, m.1)).collect::<Vec<_>>();
+        let f = |t: &str| l.find(t, &[], &[]).iter().map(|m| (m.0, m.1)).collect::<Vec<_>>();
         assert_eq!(f("user.id userId idle"), vec![(5, 7), (12, 14)]);
     }
 

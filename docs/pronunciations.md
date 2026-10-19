@@ -58,7 +58,8 @@ How the text on the left is found:
   at the same place the longest one wins: with `New York = the big apple` as well, "New
   York City" still says "NYC". A tie goes to the text with a capital, then to the later
   line. Reading carries on after the match, so a respelling is never matched again and
-  `id = id card` is safe.
+  `id = id card` is safe. The one exception is what a [shape](#shapes) or a
+  [pattern](#patterns) says, which goes through these entries once more.
 
 Put quotes, single or double, round text that starts with `#`, `;` or a quote, or that has
 an `=` with spaces round it: `"#include" = hash include`, `"a = b" = c`. Without the
@@ -102,22 +103,120 @@ other words, and `✓ = check` makes it say "check" there too, lighting the tick
 does. A line or cell holding nothing but symbols readaloud has no name for is still
 skipped, so `★ = star` does nothing for a `★★★★` rating.
 
-## Patterns
+## Shapes
 
-Some text is a shape rather than a word: a file name with a line number after it, a
-version, an issue number. Put a [regular expression][regex] between slashes on the left,
-and on the right say how to read what it matched, naming its groups:
+Some text is a shape rather than a word: a file name with a line number after it, a host
+with its port. A `[shapes]` line describes one with a [regular expression][regex] between
+slashes and says how to read it, naming what the pattern's groups matched:
 
 ```ini
-/:(\d+)-(\d+)/ = lines $1 to $2   # settings.py:281-283 says "settings dot pie lines 281 to 283"
-/:(\d+)/ = line $1                 # settings.py:498 says "settings dot pie line 498"
+[shapes]
+/%{scheme}%{hostport}(?<path>/%{path})/ = $host port $port ${path|/=slash}
+/%{scheme}%{hostport}/?/ = $host port $port
+/%{hostport}/ = $host port $port
+/(?<file>%{file}):(?<line>\d+):(?<col>\d+)/ = $file line $line, column $col
+/(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/ = $file lines $from to $to
+/(?<file>%{file}):(?<line>\d+)/ = $file line $line
+/(?<hour>%{hour}):(?<minute>%{minute})(?::(?<second>%{minute}))?/ =
 ```
 
-The `.py` comes from the entry `.py = dot pie`, and the line numbers from the patterns:
-the two take turns, left to right, like any other entries. The whole `settings.py:281-283`
-stays lit while all of it is said. A fresh `~/.readaloud.conf` has these two lines
-commented out at the end: delete the `# ` in front of them to use them. They are not on
-by default because `/:(\d+)/` also reads a time, so `3:45` becomes "3 line 45".
+| Text | Said, with the lines above |
+| --- | --- |
+| `https://example.com:8443/status?verbose=1` | example.com port 8443 slash status?verbose=1 |
+| `https://example.com:8443/docs/v2/index.html` | example.com port 8443 slash docs slash v2 slash index dot H T M L |
+| `localhost:8080`, `192.168.178.88:8123`, `example.com:443` | local host port 8080 |
+| `main.rs:12:5` | main dot R S line 12, column 5 |
+| `settings.py:281-283` | settings dot pie lines 281 to 283 |
+| `settings.py:498` | settings dot pie line 498 |
+| `14:35`, `9:05:59` | as written: Kokoro says "fourteen thirty-five" |
+
+readaloud has no shape of its own: those seven lines are what a fresh `~/.readaloud.conf`
+comes with, and you add, change and delete them like any other line. A file with no
+`[shapes]` section has none, which is the case for a file written by an older readaloud;
+copy this section and the `[parts]` section below into it, before `[pronunciations]`.
+`--no-config` reads with no shapes, as with no pronunciations.
+
+- **A shape starts where a word starts and ends where a word ends,** or just past the
+  punctuation after a word, so it sees the whole of `settings.py:498`, both sides of the
+  colon, and never matches inside a word: `/py:\d+/` does not fire in `a.py:12`. It may
+  span up to eight words, so `/(?<file>%{file})\((?<line>\d+)\)/` can read
+  `x.py(12)` and `/File "(?<file>[^"]+)", line (?<line>\d+)/` a Python traceback.
+- **The first line that fits wins.** At each word the lines are tried in order, and the
+  first that fits takes its longest fit there. That is why the hosts come first: they
+  keep `example.com:443` a host, while `a.py:12`, whose `.py` is no web domain, falls
+  through to the files. A URL with a port says the port and then its path with each `/` said
+  as "slash": Kokoro is silent for a slash, and a path that starts with one makes it drop
+  the query. A URL without a port is left as written. The scheme is a named group too, so
+  `$scheme $host port $port` says it; Kokoro is silent for `https` on its own, which a
+  pronunciation such as `https = H T T P S` fixes.
+- **What it says goes through your pronunciations.** The `.py` of `settings.py:498`
+  stays "dot pie" and `localhost` stays "local host", because a shape's wording is read
+  by your entries once more before it is said.
+- **An empty wording says the text as written.** That is not the same as no line: the
+  shape still claims the text, so a pattern such as `/:(\d+)/` cannot reach into a time.
+- **Your entries win.** An entry for the same text (`settings.py:498 = the settings`)
+  beats the shape.
+
+In a wording, `$name` or `${name}` is what the group `(?<name>...)` matched, `$1` and so on
+a group by number, `$0` the whole match, and `$$` a dollar sign. `${name|from=to}` is the
+group with every `from` in it said as the word `to`, so `${path|/=slash}` says each slash
+of a path, however many there are; more replacements can follow, as in
+`${path|/=slash|.=dot}`, and each is made once, in what the group matched. The same works
+in the wording of a pattern under `[pronunciations]`. A line that cannot be used
+is reported with its line number and costs only itself: a pattern that will not compile or
+could match empty text, a group the pattern does not have, a part that does not exist.
+
+### Parts
+
+The shapes are built from parts: named pieces of pattern under `[parts]`, which a shape,
+or a part further down, uses as `%{name}`. A fresh file comes with these:
+
+```ini
+[parts]
+ext = [A-Za-z]\w*
+file = \S+\.%{ext}
+web = com|org|net|edu|gov|mil|int|info|biz|io|dev|ai|co|me|tv
+newweb = cloud|tech|online|site|xyz
+europe = de|uk|eu|fr|nl|ch|at|se|no|fi|dk|it|es|pt|pl|cz|be|ie
+world = jp|cn|kr|in|us|ca|au|nz|br|ru
+private = local|localdomain|lan|home|internal|intranet|corp
+reserved = arpa|test|example|invalid
+domain = %{web}|%{newweb}|%{europe}|%{world}|%{private}|%{reserved}
+name = [A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.(?i:%{domain})
+octet = 25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d
+ipv4 = %{octet}\.%{octet}\.%{octet}\.%{octet}
+host = localhost|%{ipv4}|%{name}
+port = 6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|\d{1,4}
+hostport = (?<host>%{host}):(?<port>%{port})
+scheme = (?<scheme>https?|ftps?|ssh|git)://
+path = [^\s<>"'|)\]]*[^\s<>"'|)\].,;:!?]
+hour = [01]?\d|2[0-3]
+minute = [0-5]\d
+```
+
+They are lines like the shapes: add a domain to `web` or `private`, give `ext` your own
+file extensions, or add a part of your own. readaloud has none built in. A part may use
+only the parts on the lines above it, so they can never go round in a circle, and a shape
+may use any of them. Each `%{name}` is put in as a group of its own, so `%{web}|%{world}`
+means one or the other however many `|` each holds. A part may hold named groups of its own, as
+`hostport` does, so a shape using it can say `$host` and `$port`; such a part can appear
+once in a shape, since a name can only name one group.
+
+## Patterns
+
+For text readaloud has no shape for, put a [regular expression][regex] between slashes on
+the left, and on the right say how to read what it matched, naming its groups:
+
+```ini
+/#(\d+)\b/ = issue $1           # #123 says "issue 123"
+/(\w+\.py) --help/ = $1 help    # main.py --help says "main dot pie help"
+```
+
+Like a shape's wording, what a pattern says goes through your pronunciations once more,
+which is why the second example says "dot pie". What those entries say is final, so
+nothing is read more than twice. A pattern takes its turn with the other entries, left to
+right, and a shape is only ever a whole word, so a pattern can still reach where a shape
+does not.
 
 - **Groups.** `$1`, `$2` and so on are what the pattern's parentheses captured, and `$0`
   is the whole match. Write `${1}` when a letter or digit follows (`${1}st`, since `$1st`

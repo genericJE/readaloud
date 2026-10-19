@@ -5,10 +5,11 @@ holds, and how readaloud reports a problem with it.
 
 Most flags can also be preferences in `~/.readaloud.conf`; the ones that pick the input or
 the output (`-f`, `-md`, `--start`, `--save`) cannot. A `[pronunciations]` section in the
-same file tells readaloud how to say particular words (see
+same file tells readaloud how to say particular words, and the `[shapes]` and `[parts]`
+sections how it says a file with its line number or a host with its port (see
 [Pronunciations](pronunciations.md)). The first run writes a template with every setting
 present but commented out, so an untouched file leaves every setting at its default, and
-with the pronunciations below already in it. It says so on stderr once:
+with the parts, shapes and pronunciations below already in it. It says so on stderr once:
 
 ```
 readaloud: created /Users/you/.readaloud.conf -- your defaults live there now
@@ -64,6 +65,16 @@ follow_margin = 2
 # Take over the system play/pause button.  Needs the optional [mediakeys]
 # extra; without it this setting does nothing at all.
 media_keys = true
+
+[parts]
+# Pieces of pattern the shapes are built from (see Pronunciations).
+ext = [A-Za-z]\w*
+file = \S+\.%{ext}
+
+[shapes]
+# How readaloud says a file with its line, a host with its port, a time.
+# Delete a line to be rid of that shape.
+/(?<file>%{file}):(?<line>\d+)/ = $file line $line
 
 [pronunciations]
 # How to say a word or phrase: the text as written on the left of the "=",

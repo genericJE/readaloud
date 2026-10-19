@@ -58,7 +58,22 @@ that does not compile, or that could match empty text, is skipped (config.py
 reports it).  A key that only looks like a pattern is kept literal by making
 it a :class:`Literal`, which is what config.py does for a quoted key.
 
-The work is done by :mod:`readaloud._core` (``rust/src/pronounce.rs``).
+Shapes are text the config file's ``[shapes]`` describes with a pattern and
+says a set way: a file with its line (``settings.py:498``), a host with its
+port.  readaloud has none of its own.  A shape must start where a word starts
+and end where a word ends, so it sees both sides of the colon, and it may
+span a few words.  It says its wording with the pattern's named groups in
+place (``$file line $line``).  The lines are tried in file order at each
+word, and the first that fits wins.  It loses to any entry of the
+same length.  An empty wording says the word as written, which keeps a
+pattern off it.
+
+What a shape or a pattern says goes through the literal entries once more,
+so ``.py = dot pie`` still applies inside ``$file line $line``.  What the
+literal entries say is final, so nothing is read more than twice.
+
+The work is done by :mod:`readaloud._core` (``rust/src/pronounce.rs`` and
+``rust/src/shapes.rs``).
 Every literal key is indexed by its first run of letters and digits, or by
 its first character when that is a symbol, so the text costs a hash probe per
 word rather than a pass per key, and each pattern keeps a cursor on its next
@@ -71,7 +86,8 @@ from typing import Iterable, Sequence
 
 from . import _core
 
-__all__ = ["Lexicon", "Literal", "check_pattern", "is_pattern", "respell"]
+__all__ = ["Lexicon", "Literal", "check_pattern", "check_regex",
+           "check_shape", "is_pattern", "respell"]
 
 
 class Literal(str):
@@ -93,25 +109,47 @@ def check_pattern(pattern: str) -> str | None:
     return _core.check_pattern(pattern)
 
 
+def check_regex(pattern: str) -> str | None:
+    """Why `pattern` does not compile, or None; it may match empty text."""
+    return _core.check_regex(pattern)
+
+
+def check_shape(pattern: str) -> tuple[str | None, tuple[list[str], int] | None]:
+    """``(problem, None)`` when `pattern` cannot be a shape, else ``(None,
+    (group names, group count))``."""
+    return _core.check_shape(pattern)
+
+
 class Lexicon:
     """The pronunciations from the config file, ready to be found in text.
 
     `pairs` are (written, spoken) in file order.  config.py has already
     checked them; a pair with an empty side, or a pattern that does not
-    compile, is skipped all the same.
+    compile, is skipped all the same.  `shapes` are (pattern, wording) in
+    file order, the patterns without slashes and with their parts filled in;
+    none by default.  A shape is only looked for at the word slots handed to
+    :meth:`find`.
     """
 
-    def __init__(self, pairs: Iterable[tuple[str, str]] = ()) -> None:
+    def __init__(self, pairs: Iterable[tuple[str, str]] = (),
+                 shapes: Iterable[tuple[str, str]] = ()) -> None:
         self._core = _core.Lexicon(
-            [(written, spoken, is_pattern(written)) for written, spoken in pairs])
+            [(written, spoken, is_pattern(written)) for written, spoken in pairs],
+            [(name, say) for name, say in shapes])
+
+    @property
+    def shapes(self) -> int:
+        """How many shapes are on."""
+        return self._core.shape_count()
 
     def __bool__(self) -> bool:
-        return len(self._core) > 0
+        return len(self._core) > 0 or self.shapes > 0
 
     def __len__(self) -> int:
         return len(self._core)
 
-    def find(self, text: str, symbols: Sequence[tuple[int, int, str]] = ()
+    def find(self, text: str, symbols: Sequence[tuple[int, int, str]] = (),
+             slots: Sequence[tuple[int, int]] = ()
              ) -> list[tuple[int, int, str]]:
         """Every ``(start, end, say)`` to respell in `text`.
 
@@ -122,8 +160,11 @@ class Lexicon:
         on screen, in order and never overlapping.  No match of text may
         overlap a name; an entry whose key is the symbol replaces the whole
         name instead.
+
+        `slots` are the ``(start, end)`` of the word slots in `text`; a shape
+        is matched against a whole slot, so without slots there is none.
         """
-        return self._core.find(text, list(symbols))
+        return self._core.find(text, list(symbols), list(slots))
 
 
 def respell(text: str, slots: Sequence[tuple[int, int]],

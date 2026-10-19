@@ -875,9 +875,21 @@ def test_chunks_a_pronunciation_fails_on_are_read_as_written_with_a_notice(
 def test_no_config_or_no_pronunciations_never_respell(
         tmp_path, monkeypatch, launched):
     sabotage_find(monkeypatch)             # never called without an entry
-    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\n")
+    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\n"
+                                "[shapes]\n/(?<f>\\S+):(?<n>\\d+)/ = $f at $n\n")
     assert cli.main(["--config", str(conf), "--no-config", "foo.id"]) == 0
     assert launched["doc"].respell_failures == 0
     assert launched["notices"] == []
+    assert cli.main(["--config", str(conf), "--no-config", "a.py:1"]) == 0
+    assert launched["doc"].respell_failures == 0
+    assert launched["doc"].chunks[0].text == "a.py:1"
     assert cli.main(["foo.id"]) == 0       # the sandbox has no config file
     assert launched["doc"].chunks[0].text == "foo.id"
+
+
+def test_the_config_file_turns_shapes_on(tmp_path, launched):
+    conf = write_conf(tmp_path, "[parts]\nnum = \\d+\n[shapes]\n"
+                                "/(?<f>\\S+\\.rs):(?<l>%{num}):(?<c>%{num})/"
+                                " = $f line $l, column $c\n")
+    assert cli.main(["--config", str(conf), "main.rs:12:5"]) == 0
+    assert launched["doc"].chunks[0].text == "main.rs line 12, column 5"

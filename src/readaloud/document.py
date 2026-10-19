@@ -1187,7 +1187,11 @@ class Document:
                 symbols = [(a, b, self.words[w].text) for (a, b), w, t
                            in zip(slots, chunk.words, chunk.word_texts)
                            if t != self.words[w].text]
-                matches = lexicon.find(chunk.text, symbols)
+                # the slots go along only for a lexicon with shapes, which
+                # is all they are for
+                matches = (lexicon.find(chunk.text, symbols, slots)
+                           if getattr(lexicon, "shapes", 0)
+                           else lexicon.find(chunk.text, symbols))
                 if not matches:
                     continue
                 extra = self._unslotted(chunk, slots, matches, taken)

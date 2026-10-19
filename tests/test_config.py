@@ -858,12 +858,11 @@ TEMPLATE_EXAMPLES = (
     ("GIF", "jif"),
     ("New York City", "NYC"),
     ("#include", "hash include"),
-    (r"/:(\d+)-(\d+)/", "lines $1 to $2"),
-    (r"/:(\d+)/", "line $1"),
 )
 
 #: What a fresh file says out of the box, settings at their defaults.
-SHIPPED = Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS)
+SHIPPED = Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS,
+                 shapes=config.TEMPLATE_SHAPES, parts=config.TEMPLATE_PARTS)
 
 
 def test_template_ends_with_a_live_pronunciations_section():
@@ -904,7 +903,8 @@ def test_everything_uncommented_in_the_template(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf", live))
     assert warnings == []
     assert cfg == Config(
-        pronunciations=config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES)
+        pronunciations=config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES,
+        shapes=config.TEMPLATE_SHAPES, parts=config.TEMPLATE_PARTS)
 
 
 def test_every_shipped_pronunciation_is_usable(tmp_path):

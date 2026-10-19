@@ -289,6 +289,16 @@ def _expand(template: str, m: re.Match[str]) -> str:
     return re.sub(r"\$\$|\$\{(\w+)\}|\$(\w+)", group, template)
 
 
+def second_pass(pairs, said: str) -> str:
+    """What a pattern says, through the literal entries once more."""
+    literal = [(w, s) for w, s in pairs
+               if not (len(w) >= 3 and w[0] == w[-1] == "/")]
+    matches = reference_find(literal, said)
+    if not matches:
+        return said
+    return reference.respell(said, [(0, len(said))], matches)[0]
+
+
 def reference_find(pairs, text: str, symbols=()) -> list[tuple[int, int, str]]:
     """`Lexicon.find` the slow way: every entry at every position."""
     entries = []
@@ -315,7 +325,9 @@ def reference_find(pairs, text: str, symbols=()) -> list[tuple[int, int, str]]:
                 said = " ".join(_expand(say, m).split())
                 if not any(_alnum(ch) for ch in said):
                     continue
-                guard = False
+                guard = said == text[p:end]
+                if not guard:
+                    said = second_pass(pairs, said)
             else:
                 exact = any(ch.isupper() for ch in key)
                 end = None
