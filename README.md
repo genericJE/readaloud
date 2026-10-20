@@ -130,7 +130,7 @@ words Kokoro says wrongly, as ordinary lines to edit or delete. A shortened exam
 one setting changed:
 
 ```ini
-[readaloud]
+[config]
 # settings; docs/configuration.md lists them all
 speed = 1.2
 

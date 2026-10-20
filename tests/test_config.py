@@ -77,7 +77,7 @@ def test_missing_file_is_not_a_warning(tmp_path):
 
 
 def test_load_with_no_argument_uses_default_path(tmp_path):
-    write(tmp_path / "sandbox.conf", "[readaloud]\nspeed = 1.5\n")
+    write(tmp_path / "sandbox.conf", "[config]\nspeed = 1.5\n")
     cfg, warnings = config.load()
     assert (cfg.speed, warnings) == (1.5, [])
 
@@ -89,7 +89,7 @@ def test_empty_file_yields_defaults(tmp_path):
 
 
 def test_comments_only_file_yields_defaults(tmp_path):
-    body = "# just a note\n; and another\n\n[readaloud]\n# nothing set\n"
+    body = "# just a note\n; and another\n\n[config]\n# nothing set\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg == DEFAULTS
     assert warnings == []
@@ -110,7 +110,7 @@ def test_config_dataclass_defaults():
 
 
 ALL_KEYS = """\
-[readaloud]
+[config]
 voice = bf_emma
 speed = 1.25
 lang = b
@@ -143,31 +143,31 @@ def test_every_key_is_read(tmp_path):
     ("0", False),
 ])
 def test_boolean_spellings(tmp_path, key, raw, expected):
-    body = f"[readaloud]\n{key} = {raw}\n"
+    body = f"[config]\n{key} = {raw}\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (getattr(cfg, key), warnings) == (expected, [])
 
 
 def test_keys_are_case_insensitive_and_values_are_stripped(tmp_path):
-    body = "[readaloud]\nVOICE =   am_adam   \nSpeed = 2\n"
+    body = "[config]\nVOICE =   am_adam   \nSpeed = 2\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.voice, cfg.speed, warnings) == ("am_adam", 2.0, [])
 
 
 def test_quoted_values_and_inline_comments(tmp_path):
-    body = '[readaloud]\nvoice = "af_sarah"   # the calm one\nspeed = 1.5 ; faster\n'
+    body = '[config]\nvoice = "af_sarah"   # the calm one\nspeed = 1.5 ; faster\n'
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.voice, cfg.speed, warnings) == ("af_sarah", 1.5, [])
 
 
 def test_empty_string_keys_stay_empty(tmp_path):
-    body = "[readaloud]\nlang =\ndevice =\n"
+    body = "[config]\nlang =\ndevice =\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.lang, cfg.device, warnings) == ("", "", [])
 
 
 def test_follow_lead_zero_is_kept_not_treated_as_unset(tmp_path):
-    body = "[readaloud]\nfollow_lead = 0\nfollow_margin = 0\nprefetch = 0\n"
+    body = "[config]\nfollow_lead = 0\nfollow_margin = 0\nprefetch = 0\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.follow_lead, cfg.follow_margin, cfg.prefetch) == (0, 0, 0)
     assert warnings == []
@@ -189,7 +189,7 @@ def test_follow_lead_zero_is_kept_not_treated_as_unset(tmp_path):
     ("follow_margin", "-2", 0),
 ])
 def test_out_of_range_values_clamp_and_warn(tmp_path, key, given, expected):
-    body = f"[readaloud]\n{key} = {given}\n"
+    body = f"[config]\n{key} = {given}\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert getattr(cfg, key) == expected
     assert len(warnings) == 1
@@ -198,13 +198,13 @@ def test_out_of_range_values_clamp_and_warn(tmp_path, key, given, expected):
 
 @pytest.mark.parametrize("value", ["0.5", "1.0", "3.0"])
 def test_speed_edges_are_in_range(tmp_path, value):
-    body = f"[readaloud]\nspeed = {value}\n"
+    body = f"[config]\nspeed = {value}\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, warnings) == (float(value), [])
 
 
 def test_clamping_one_key_leaves_the_others_alone(tmp_path):
-    body = "[readaloud]\nspeed = 99\nvoice = bf_emma\nfollow_lead = 30\n"
+    body = "[config]\nspeed = 99\nvoice = bf_emma\nfollow_lead = 30\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.voice, cfg.follow_lead) == (3.0, "bf_emma", 30)
     assert len(warnings) == 1 and "speed" in warnings[0]
@@ -228,7 +228,7 @@ def test_clamping_one_key_leaves_the_others_alone(tmp_path):
     ("media_keys", "sometimes"),
 ])
 def test_malformed_value_falls_back_to_default_and_warns(tmp_path, key, given):
-    body = f"[readaloud]\n{key} = {given}\n"
+    body = f"[config]\n{key} = {given}\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert getattr(cfg, key) == getattr(DEFAULTS, key)
     assert len(warnings) == 1
@@ -236,7 +236,7 @@ def test_malformed_value_falls_back_to_default_and_warns(tmp_path, key, given):
 
 
 def test_one_bad_key_never_discards_the_rest_of_the_file(tmp_path):
-    body = ("[readaloud]\nvoice = am_adam\nspeed = quick\n"
+    body = ("[config]\nvoice = am_adam\nspeed = quick\n"
             "follow_lead = 40\ncolor = off\n")
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.voice == "am_adam"
@@ -252,17 +252,17 @@ def test_one_bad_key_never_discards_the_rest_of_the_file(tmp_path):
 
 
 def test_unknown_key_warns_by_name_and_is_ignored(tmp_path):
-    body = "[readaloud]\nvolume = 11\nspeed = 1.5\n"
+    body = "[config]\nvolume = 11\nspeed = 1.5\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == 1.5
     assert len(warnings) == 1 and "volume" in warnings[0]
     assert not hasattr(cfg, "volume")
 
 
-def test_a_pronunciation_under_readaloud_is_pointed_at_its_section(tmp_path):
-    # a file from before [pronunciations] existed ends inside [readaloud]
+def test_a_pronunciation_under_config_is_pointed_at_its_section(tmp_path):
+    # a file from before [pronunciations] existed ends inside [config]
     path = write(tmp_path / "c.conf",
-                 "[readaloud]\nspeed = 1.5\nid = ID\ncolour = true\n")
+                 "[config]\nspeed = 1.5\nid = ID\ncolour = true\n")
     cfg, warnings = config.load(path)
     assert (cfg.speed, cfg.pronunciations) == (1.5, ())
     assert warnings == [
@@ -272,7 +272,7 @@ def test_a_pronunciation_under_readaloud_is_pointed_at_its_section(tmp_path):
 
 
 def test_unknown_section_is_ignored_with_a_warning(tmp_path):
-    body = "[readaloud]\nspeed = 2\n\n[colors]\nhighlight = red\n"
+    body = "[config]\nspeed = 2\n\n[colors]\nhighlight = red\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == 2.0
     assert len(warnings) == 1 and "colors" in warnings[0]
@@ -291,28 +291,28 @@ def test_missing_section_header_is_tolerated(tmp_path):
 
 
 def test_keys_before_the_section_header_are_tolerated(tmp_path):
-    body = "voice = am_adam\n\n[readaloud]\nspeed = 1.5\n"
+    body = "voice = am_adam\n\n[config]\nspeed = 1.5\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.voice, cfg.speed) == ("am_adam", 1.5)
     assert warnings == []
 
 
 def test_duplicate_keys_do_not_raise_and_the_last_wins(tmp_path):
-    body = "[readaloud]\nspeed = 1.5\nspeed = 2.5\n"
+    body = "[config]\nspeed = 1.5\nspeed = 2.5\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == 2.5
     assert warnings == []
 
 
 def test_duplicate_sections_do_not_raise(tmp_path):
-    body = "[readaloud]\nspeed = 1.5\n[readaloud]\nvoice = bf_emma\n"
+    body = "[config]\nspeed = 1.5\n[config]\nvoice = bf_emma\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.voice) == (1.5, "bf_emma")
 
 
 def test_percent_signs_in_values_do_not_raise(tmp_path):
     # configparser's default interpolation would choke on a bare '%'.
-    body = "[readaloud]\ndevice = 100%% Output\nvoice = af_heart\n"
+    body = "[config]\ndevice = 100%% Output\nvoice = af_heart\n"
     cfg, _ = config.load(write(tmp_path / "c.conf", body))
     assert "%" in cfg.device
 
@@ -348,7 +348,7 @@ def test_directory_where_the_file_should_be(tmp_path):
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
 def test_unreadable_file(tmp_path):
-    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 2\n")
+    path = write(tmp_path / "c.conf", "[config]\nspeed = 2\n")
     path.chmod(0o000)
     try:
         cfg, warnings = config.load(path)
@@ -359,14 +359,14 @@ def test_unreadable_file(tmp_path):
 
 
 def test_very_long_and_weird_lines_do_not_raise(tmp_path):
-    body = "[readaloud]\n" + "x" * 10000 + " = " + "y" * 10000 + "\n\n\n\t\n"
+    body = "[config]\n" + "x" * 10000 + " = " + "y" * 10000 + "\n\n\n\t\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg == DEFAULTS
     assert warnings
 
 
 def test_load_accepts_a_string_path(tmp_path):
-    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n")
+    path = write(tmp_path / "c.conf", "[config]\nspeed = 1.5\n")
     cfg, warnings = config.load(str(path))
     assert (cfg.speed, warnings) == (1.5, [])
 
@@ -434,7 +434,7 @@ def test_blank_and_comment_lines_are_nothing(tmp_path, line):
 
 def test_crlf_file(tmp_path):
     path = tmp_path / "c.conf"
-    path.write_bytes(b"[readaloud]\r\nspeed = 1.5\r\n\r\n[pronunciations]\r\n"
+    path.write_bytes(b"[config]\r\nspeed = 1.5\r\n\r\n[pronunciations]\r\n"
                      b"id = ID\r\nkubectl = cube control  # k\r\n")
     cfg, warnings = config.load(path)
     assert warnings == []
@@ -485,10 +485,10 @@ def test_pairs_keep_the_file_order(tmp_path):
     ("tick = \u2713",
      "'tick': '\u2713' has nothing to say (no letters or digits)"),
     ("speed = 1.5",
-     "'speed' is a setting: move it under [readaloud], or put quotes round "
+     "'speed' is a setting: move it under [config], or put quotes round "
      "the word to pronounce it"),
     ("Follow_Lead = 3",
-     "'Follow_Lead' is a setting: move it under [readaloud], or put quotes "
+     "'Follow_Lead' is a setting: move it under [config], or put quotes "
      "round the word to pronounce it"),
 ])
 def test_each_problem_skips_its_line_with_a_warning(tmp_path, line, problem):
@@ -561,7 +561,7 @@ def test_five_problems_are_all_listed(tmp_path):
 
 def test_problems_count_file_line_numbers(tmp_path):
     body = ("# my settings\n"
-            "[readaloud]\n"
+            "[config]\n"
             "speed = 1.5\n"
             "\n"
             "[pronunciations]\n"
@@ -573,7 +573,7 @@ def test_problems_count_file_line_numbers(tmp_path):
 
 
 def test_problems_come_after_the_settings_warnings(tmp_path):
-    body = "[pronunciations]\nnot a pronunciation\n[readaloud]\nspeed = fast\n"
+    body = "[pronunciations]\nnot a pronunciation\n[config]\nspeed = fast\n"
     path = write(tmp_path / "c.conf", body)
     _, warnings = config.load(path)
     assert len(warnings) == 2
@@ -587,7 +587,7 @@ def test_problems_come_after_the_settings_warnings(tmp_path):
 
 
 def test_a_bad_pronunciation_line_keeps_the_settings(tmp_path):
-    body = ("[readaloud]\nspeed = 1.5\n\n[pronunciations]\nid = ID\n"
+    body = ("[config]\nspeed = 1.5\n\n[pronunciations]\nid = ID\n"
             "this line has no equals\n    kubectl = cube control\n")
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == 1.5
@@ -602,8 +602,8 @@ def test_settings_before_any_header_and_pronunciations(tmp_path):
     assert warnings == []
 
 
-def test_a_readaloud_header_with_a_comment_ends_the_section(tmp_path):
-    body = "[pronunciations]\nid = ID\n[readaloud]  # c\nspeed = 1.5\n"
+def test_a_config_header_with_a_comment_ends_the_section(tmp_path):
+    body = "[pronunciations]\nid = ID\n[config]  # c\nspeed = 1.5\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
     assert warnings == []
@@ -613,14 +613,14 @@ def test_a_readaloud_header_with_a_comment_ends_the_section(tmp_path):
     "[Pronunciations]", "[ pronunciations ]", "[pronunciations] ; words",
 ])
 def test_the_section_name_ignores_case_and_spaces(tmp_path, header):
-    body = f"[readaloud]\nspeed = 1.5\n{header}\nid = ID\n"
+    body = f"[config]\nspeed = 1.5\n{header}\nid = ID\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.pronunciations) == (1.5, (("id", "ID"),))
     assert warnings == []
 
 
 def test_several_pronunciations_sections_are_read_as_one(tmp_path):
-    body = ("[pronunciations]\nid = ID\n[readaloud]\nspeed = 2\n"
+    body = ("[pronunciations]\nid = ID\n[config]\nspeed = 2\n"
             "[pronunciations]\nkubectl = cube control\nid = eye dee\n")
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == 2.0
@@ -630,7 +630,7 @@ def test_several_pronunciations_sections_are_read_as_one(tmp_path):
 
 
 def test_an_entry_in_brackets_then_a_bad_line_keeps_the_settings(tmp_path):
-    body = ("[readaloud]\nspeed = 1.5\n[pronunciations]\n[1] = footnote one\n"
+    body = ("[config]\nspeed = 1.5\n[pronunciations]\n[1] = footnote one\n"
             "no equals here\n")
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.pronunciations) == (1.5, (("[1]", "footnote one"),))
@@ -639,7 +639,7 @@ def test_an_entry_in_brackets_then_a_bad_line_keeps_the_settings(tmp_path):
 
 def test_a_misspelled_section_keeps_the_settings_and_says_so(tmp_path):
     path = write(tmp_path / "c.conf",
-                 "[readaloud]\nspeed = 1.5\n\n[pronunciation]\nid = ID\n"
+                 "[config]\nspeed = 1.5\n\n[pronunciation]\nid = ID\n"
                  "no equals here\n")
     cfg, warnings = config.load(path)
     assert (cfg.speed, cfg.pronunciations) == (1.5, ())
@@ -648,23 +648,32 @@ def test_a_misspelled_section_keeps_the_settings_and_says_so(tmp_path):
         f"(did you mean [pronunciations]?)"]
 
 
-def test_a_misspelled_readaloud_section_says_so(tmp_path):
-    path = write(tmp_path / "c.conf", "[readalod]\nspeed = 1.5\n")
+def test_a_misspelled_config_section_says_so(tmp_path):
+    path = write(tmp_path / "c.conf", "[confg]\nspeed = 1.5\n")
     cfg, warnings = config.load(path)
     assert cfg == DEFAULTS
     assert warnings == [
-        f"{path}: ignoring unknown section [readalod] "
-        f"(did you mean [readaloud]?)"]
+        f"{path}: ignoring unknown section [confg] "
+        f"(did you mean [config]?)"]
+
+
+def test_the_old_readaloud_header_is_pointed_to_config(tmp_path):
+    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n")
+    cfg, warnings = config.load(path)
+    assert cfg == DEFAULTS
+    assert warnings == [
+        f"{path}: ignoring unknown section [readaloud] "
+        f"(the settings section is now [config])"]
 
 
 @pytest.mark.parametrize("body", [
-    "[DEFAULT]\nspeed = 1.5\n[readaloud]\nvoice = bf_emma\n",
-    "[readaloud]\nvoice = bf_emma\n[pronunciations]\nid = ID\n"
+    "[DEFAULT]\nspeed = 1.5\n[config]\nvoice = bf_emma\n",
+    "[config]\nvoice = bf_emma\n[pronunciations]\nid = ID\n"
     "[DEFAULT]\nspeed = 1.5\n",
 ])
 def test_a_default_section_still_fills_the_settings(tmp_path, body):
     # configparser's [DEFAULT] was never an unknown section: its keys are
-    # every section's, [readaloud]'s included.
+    # every section's, [config]'s included.
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.speed, cfg.voice) == (1.5, "bf_emma")
     assert warnings == []
@@ -685,7 +694,7 @@ def test_a_setting_appended_to_the_template_is_not_a_pronunciation(tmp_path,
     cfg, warnings = config.load(path)
     assert cfg == SHIPPED
     assert len(warnings) == 1
-    assert "is a setting: move it under [readaloud]" in warnings[0]
+    assert "is a setting: move it under [config]" in warnings[0]
 
 
 def test_a_colon_after_a_word_that_is_not_a_setting_has_no_equals(tmp_path):
@@ -701,8 +710,8 @@ def test_an_indented_header_after_a_lifted_section_is_a_header(tmp_path,
                                                                 section):
     # configparser reads the empty lines left in place of the section as
     # part of voice's value; the indented header after them must not be
-    body = ("[readaloud]\nvoice = af_bella\n\n" + section
-            + "\n    [readaloud]\n    speed = 1.5\n")
+    body = ("[config]\nvoice = af_bella\n\n" + section
+            + "\n    [config]\n    speed = 1.5\n")
     cfg, _warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.voice, cfg.speed) == ("af_bella", 1.5)
 
@@ -710,16 +719,16 @@ def test_an_indented_header_after_a_lifted_section_is_a_header(tmp_path,
 @pytest.mark.parametrize("body,speed,voice,warnings", [
     # an indented header under a key is more of its value, as configparser
     # has always read it, even right after a lifted section
-    ("[readaloud]\nspeed = 1.5\nvoice = af_sky\n  [colors]\n  [readaloud]\n"
-     "  more\n", 1.5, "af_sky\n[colors]\n[readaloud]\nmore", []),
-    ("[readaloud]\nspeed = 1.5\n  [colors]\nvoice = af_sky\n", 1.0, "af_sky",
+    ("[config]\nspeed = 1.5\nvoice = af_sky\n  [colors]\n  [config]\n"
+     "  more\n", 1.5, "af_sky\n[colors]\n[config]\nmore", []),
+    ("[config]\nspeed = 1.5\n  [colors]\nvoice = af_sky\n", 1.0, "af_sky",
      ["speed: '1.5\\n[colors]' is not a number; using 1.0"]),
-    ("[colors]\nx = 1\n  [readaloud]\nspeed = 1.5\n", 1.0, "af_heart",
+    ("[colors]\nx = 1\n  [config]\nspeed = 1.5\n", 1.0, "af_heart",
      ["ignoring unknown section [colors]"]),
     # a comment is found the way configparser finds it, # and ; in turns
-    ("[readaloud]\nspeed = 2\n[x#] #] ;z\n", 2.0, "af_heart",
+    ("[config]\nspeed = 2\n[x#] #] ;z\n", 2.0, "af_heart",
      ["ignoring unknown section [x#] #]"]),
-    ("[readaloud]\nspeed = 2\n[foo]\n[a#x #b] ;c\n", 2.0, "af_heart",
+    ("[config]\nspeed = 2\n[foo]\n[a#x #b] ;c\n", 2.0, "af_heart",
      ["ignoring unknown section [foo]", "ignoring unknown section [a#x #b]"]),
 ])
 def test_the_split_reads_lines_as_configparser_does(tmp_path, body, speed,
@@ -732,22 +741,22 @@ def test_the_split_reads_lines_as_configparser_does(tmp_path, body, speed,
 
 def test_an_indented_pronunciations_header_is_still_a_header(tmp_path):
     # nothing written before [pronunciations] existed meant it as a value
-    body = "[readaloud]\nvoice = af_sky\n  [pronunciations]\n  id = ID\n"
+    body = "[config]\nvoice = af_sky\n  [pronunciations]\n  id = ID\n"
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert (cfg.voice, cfg.pronunciations) == ("af_sky", (("id", "ID"),))
     assert warnings == []
 
 
 def test_a_repeated_unknown_section_is_reported_once(tmp_path):
-    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n"
+    path = write(tmp_path / "c.conf", "[config]\nspeed = 1.5\n"
                  "[colors]\na = 1\n[colors]\nb = 2\n")
     cfg, warnings = config.load(path)
     assert cfg.speed == 1.5
     assert warnings == [f"{path}: ignoring unknown section [colors]"]
 
 
-def test_pronunciations_survive_a_broken_readaloud_section(tmp_path):
-    body = ("[readaloud]\nspeed 1.5\n\n[pronunciations]\nid = ID\n"
+def test_pronunciations_survive_a_broken_config_section(tmp_path):
+    body = ("[config]\nspeed 1.5\n\n[pronunciations]\nid = ID\n"
             "just words\n")
     cfg, warnings = config.load(write(tmp_path / "c.conf", body))
     assert cfg.speed == DEFAULTS.speed
@@ -763,7 +772,7 @@ def test_a_bug_in_the_section_costs_only_the_pronunciations(tmp_path,
         raise RuntimeError("boom")
 
     monkeypatch.setattr(config, "_parse_pronunciations", broken)
-    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 1.5\n")
+    path = write(tmp_path / "c.conf", "[config]\nspeed = 1.5\n")
     cfg, warnings = config.load(path)
     assert (cfg.speed, cfg.pronunciations) == (1.5, ())
     assert warnings == [
@@ -771,10 +780,10 @@ def test_a_bug_in_the_section_costs_only_the_pronunciations(tmp_path,
 
 
 def test_split_keeps_configparser_line_numbers():
-    text = ("speed = 1\n[pronunciations]\nid = ID\n[readaloud]  # c\n"
+    text = ("speed = 1\n[pronunciations]\nid = ID\n[config]  # c\n"
             "voice = x\n[nope]\nfoo\n[ Pronunciations ] ; x\n[1] = x\n")
     ini, lines, warnings = config._split(text)
-    assert ini.split("\n") == ["speed = 1", "", "", "[readaloud]  # c",
+    assert ini.split("\n") == ["speed = 1", "", "", "[config]  # c",
                                "voice = x", "", "", "", "", ""]
     assert lines == [(3, "id = ID"), (9, "[1] = x"), (10, "")]
     assert warnings == ["ignoring unknown section [nope]"]
@@ -786,7 +795,7 @@ def test_load_never_raises_on_garbage_in_the_section(tmp_path):
     rng = random.Random(20260911)
     alphabet = (list(" \t=#;\"'[]()/\\:.,aZ9_-\u00e9\u0301\u2713\ufffd")
                 + list("\x00\x07\x0c\r\u2028") + [" = "] * 4
-                + ["speed", "id", "[readaloud]", "//", "]("])
+                + ["speed", "id", "[config]", "//", "]("])
     ends_the_section = re.compile(r"\[[^\[\]]+\]\s*(?:[#;].*)?")
     lines: list[str] = []
     while len(lines) < 400:
@@ -794,7 +803,7 @@ def test_load_never_raises_on_garbage_in_the_section(tmp_path):
         if not ends_the_section.fullmatch(line.strip()):
             lines.append(line)
     for start in range(0, len(lines), 20):
-        body = ("[readaloud]\nspeed = 1.5\n[pronunciations]\n"
+        body = ("[config]\nspeed = 1.5\n[pronunciations]\n"
                 + "\n".join(lines[start:start + 20]) + "\n")
         cfg, warnings = config.load(write(tmp_path / "c.conf", body))
         assert cfg.speed == 1.5, body
@@ -892,10 +901,10 @@ def test_ensure_creates_the_template(tmp_path):
 
 
 def test_ensure_is_idempotent_and_does_not_clobber(tmp_path):
-    path = write(tmp_path / "c.conf", "[readaloud]\nspeed = 2.5\n")
+    path = write(tmp_path / "c.conf", "[config]\nspeed = 2.5\n")
     assert config.ensure(path) is False
     assert config.ensure(path) is False
-    assert path.read_text(encoding="utf-8") == "[readaloud]\nspeed = 2.5\n"
+    assert path.read_text(encoding="utf-8") == "[config]\nspeed = 2.5\n"
     assert config.load(path)[0].speed == 2.5
 
 

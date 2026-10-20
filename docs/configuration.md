@@ -24,7 +24,9 @@ built-in default, so `--speed 1.0` really does mean 1.0 whatever the file says.
 
 ## Every setting
 
-Settings go under `[readaloud]`. A setting the file leaves out keeps its default.
+Settings go under `[config]`. A setting the file leaves out keeps its default.
+
+The section was called `[readaloud]` up to readaloud 1.2; a file that still says so is warned about and its settings are ignored until the header is renamed.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -48,7 +50,7 @@ writes. It leaves every setting at its default, and fills in the parts, shapes a
 pronunciations: delete any line you do not want.
 
 ```ini
-[readaloud]
+[config]
 # settings; docs/configuration.md lists them all
 
 [parts]

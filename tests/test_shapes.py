@@ -219,7 +219,7 @@ def load(tmp_path, body: str):
 
 
 def test_no_sections_is_no_shapes_and_no_parts(tmp_path):
-    cfg, warnings = load(tmp_path, "[readaloud]\nspeed = 1.5\n")
+    cfg, warnings = load(tmp_path, "[config]\nspeed = 1.5\n")
     assert (cfg.shapes, cfg.parts, warnings) == ((), (), [])
     assert config.Config().shapes == () and config.Config().parts == ()
 

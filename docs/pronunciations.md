@@ -279,13 +279,13 @@ readaloud: /Users/you/.readaloud.conf: [pronunciations] line 99: 'kubectl' has n
 The same text on two lines is reported too, and the later line wins; `id`, `Id` and `ID`
 are three different entries. An existing `~/.readaloud.conf` is never touched, so a file
 written by an older readaloud has neither the shipped entries nor the `[pronunciations]`
-line: add the line above your own entries, since an entry left under `[readaloud]` is
+line: add the line above your own entries, since an entry left under `[config]` is
 ignored with a warning that it belongs under `[pronunciations]`. To take the shipped ones,
 copy them from a fresh file (`readaloud --write-config` writes one, discarding your
 edits, so save the file first if you have any), or from
 [Configuration](configuration.md#the-file-a-first-run-writes). A fresh file ends
 with `[pronunciations]`, so a setting added at the bottom of it lands there: `speed = 1.5`
-is then reported as a setting to move under `[readaloud]`, not taken for a word (quote it,
+is then reported as a setting to move under `[config]`, not taken for a word (quote it,
 `"speed" = spead`, if you do mean the word). A misspelled heading such as
 `[pronunciation]` is ignored with a warning
 that names the section it probably meant, and past five problems the rest are counted

@@ -663,9 +663,9 @@ def test_save_reports_a_load_failure(tmp_path, monkeypatch, capsys):
 
 
 def write_conf(tmp_path, body: str) -> str:
-    """A config file with a real [readaloud] header, returned as a path str."""
+    """A config file with a real [config] header, returned as a path str."""
     path = tmp_path / "readaloud.conf"
-    path.write_text("[readaloud]\n" + body, encoding="utf-8")
+    path.write_text("[config]\n" + body, encoding="utf-8")
     return str(path)
 
 
@@ -741,9 +741,9 @@ def test_a_missing_config_file_is_not_an_error(tmp_path, launched, capsys):
 def test_no_color_overrides_color_true_and_color_overrides_color_false(
         tmp_path, launched):
     conf_on = tmp_path / "on.conf"
-    conf_on.write_text("[readaloud]\ncolor = true\n", encoding="utf-8")
+    conf_on.write_text("[config]\ncolor = true\n", encoding="utf-8")
     conf_off = tmp_path / "off.conf"
-    conf_off.write_text("[readaloud]\ncolor = false\n", encoding="utf-8")
+    conf_off.write_text("[config]\ncolor = false\n", encoding="utf-8")
 
     assert cli.main(["--config", str(conf_on)]) == 0
     assert launched["no_color"] is False
@@ -757,9 +757,9 @@ def test_no_color_overrides_color_true_and_color_overrides_color_false(
 
 def test_no_media_keys_overrides_the_config_in_both_directions(tmp_path, launched):
     conf_on = tmp_path / "on.conf"
-    conf_on.write_text("[readaloud]\nmedia_keys = true\n", encoding="utf-8")
+    conf_on.write_text("[config]\nmedia_keys = true\n", encoding="utf-8")
     conf_off = tmp_path / "off.conf"
-    conf_off.write_text("[readaloud]\nmedia_keys = false\n", encoding="utf-8")
+    conf_off.write_text("[config]\nmedia_keys = false\n", encoding="utf-8")
 
     assert cli.main(["--config", str(conf_on)]) == 0
     assert launched["media_keys"] is True
@@ -838,7 +838,7 @@ def test_first_run_creates_the_config_and_says_so(tmp_path, launched, capsys):
     assert str(conf) in err and "created" in err
 
     # second run: the file is there, so nothing is said and nothing is clobbered
-    conf.write_text("[readaloud]\nspeed = 1.3\n", encoding="utf-8")
+    conf.write_text("[config]\nspeed = 1.3\n", encoding="utf-8")
     assert cli.main(["--config", str(conf)]) == 0
     assert capsys.readouterr().err == ""
     assert launched["speed"] == 1.3
@@ -868,7 +868,7 @@ def test_the_default_path_is_used_when_no_config_flag_is_given(
         tmp_path, launched, monkeypatch):
     """`--config` is a detour; the plain run must read ~/.readaloud.conf."""
     conf = tmp_path / "home.conf"
-    conf.write_text("[readaloud]\nvoice = bf_emma\n", encoding="utf-8")
+    conf.write_text("[config]\nvoice = bf_emma\n", encoding="utf-8")
     monkeypatch.setattr(config, "DEFAULT_PATH", conf)
     assert cli.main([]) == 0
     assert launched["voice"] == "bf_emma"
@@ -2684,7 +2684,7 @@ def test_pty_start_flag_lands_on_that_chunk(stub_child):
 def test_pty_reads_the_config_file_from_home(stub_child, tmp_path):
     """The whole chain in one run: ~/.readaloud.conf -> flags -> status bar."""
     (tmp_path / ".readaloud.conf").write_text(
-        "[readaloud]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
+        "[config]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
     body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
     with PtyRun(stub_argv(stub_child), stdin_bytes=body, cwd=REPO,
                 home=str(tmp_path)) as p:
@@ -2698,7 +2698,7 @@ def test_pty_reads_the_config_file_from_home(stub_child, tmp_path):
 
 def test_pty_a_flag_still_beats_the_config_file(stub_child, tmp_path):
     (tmp_path / ".readaloud.conf").write_text(
-        "[readaloud]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
+        "[config]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
     body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
     with PtyRun(stub_argv(stub_child, "--voice", "af_heart"), stdin_bytes=body,
                 cwd=REPO, home=str(tmp_path)) as p:
@@ -2726,7 +2726,7 @@ def test_pty_first_run_leaves_a_config_behind(stub_child, tmp_path):
 def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):
     """It must reach the user, and it must not be printed over the document."""
     (tmp_path / ".readaloud.conf").write_text(
-        "[readaloud]\nspeed = maybe\n", encoding="utf-8")
+        "[config]\nspeed = maybe\n", encoding="utf-8")
     # long enough that playback does not reach "end of document" and replace
     # the notice while the test is still looking for it
     body = ("Some words to read here.\n\n" + "\n\n".join(

@@ -587,7 +587,7 @@ def test_md_notices_take_their_turn_after_the_config_warnings(
     from readaloud.app import NOTICE_TTL, App
 
     conf = tmp_path / "readaloud.conf"
-    conf.write_text("[readaloud]\nspeed = 9.0\n", encoding="utf-8")
+    conf.write_text("[config]\nspeed = 9.0\n", encoding="utf-8")
     assert cli.main(["-md", "--config", str(conf)]) == 0
     notices = list(launched["notices"])
     assert notices[0].startswith("config: ") and "speed" in notices[0]
@@ -796,7 +796,7 @@ def test_md_save_says_the_pronunciations_in_the_cells(
 def test_a_bad_pronunciation_line_is_reported_and_costs_only_itself(
         tmp_path, monkeypatch, capsys, stub_voices):
     monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
-    conf = write_conf(tmp_path, "[readaloud]\nspeed = 1.5\n\n"
+    conf = write_conf(tmp_path, "[config]\nspeed = 1.5\n\n"
                                 "[pronunciations]\nkubectl cube control\n"
                                 "id = ID\n")
     target = tmp_path / "out.wav"

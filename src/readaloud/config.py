@@ -11,7 +11,7 @@ argparse: baking config values in as argparse defaults would make "did the user
 pass this flag?" unanswerable.
 
 The file is INI (stdlib `configparser`), and it is meant to be hand-edited.
-The settings live in a ``[readaloud]`` section.  A first run, and
+The settings live in a ``[config]`` section.  A first run, and
 ``--write-config``, write `template`: the file shipped in the package as
 ``readaloud/readaloud.conf``, copied as it is.
 
@@ -75,7 +75,7 @@ __all__ = [
 #: so tests can point the module elsewhere.
 DEFAULT_PATH = Path.home() / ".readaloud.conf"
 
-SECTION = "readaloud"
+SECTION = "config"
 
 #: The section of words and phrases readaloud should say differently.
 PRONUNCIATIONS = "pronunciations"
@@ -159,7 +159,7 @@ _FIELDS: tuple[_Field, ...] = (
 _BY_NAME = {f.name: f for f in _FIELDS}
 
 # The dataclass and the metadata table are edited by hand; keep them honest.
-# pronunciations, shapes and parts are the fields that are not [readaloud]
+# pronunciations, shapes and parts are the fields that are not [config]
 # keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
                            - {"pronunciations", "shapes", "parts"})
@@ -325,7 +325,7 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             parts, shapes = (), ()
             notes.append(f"[{SHAPES}] and [{PARTS}] could not be used "
                          f"({exc!r})")
-        # Set before configparser gets a say: a [readaloud] section it rejects
+        # Set before configparser gets a say: a [config] section it rejects
         # must not cost the pronunciations as well.
         cfg.pronunciations = pairs
         cfg.shapes = shapes
@@ -345,7 +345,7 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
 
 def _read_settings(parser: configparser.ConfigParser, cfg: Config,
                    path: Path, warnings: list[str]) -> None:
-    """Set the ``[readaloud]`` keys in `parser` on `cfg`, warning as it goes."""
+    """Set the ``[config]`` keys in `parser` on `cfg`, warning as it goes."""
     for name in parser.sections():
         if name != SECTION:
             warnings.append(f"{path}: ignoring unknown section [{name}]")
@@ -430,7 +430,7 @@ def _split_sections(text: str) -> tuple[
     sections: dict[str, list[tuple[int, str]]] = {name: [] for name in _LIFTED}
     warnings: list[str] = []
     warned: set[str] = set()
-    # "ini" is [readaloud] and whatever precedes the first header, where bare
+    # "ini" is [config] and whatever precedes the first header, where bare
     # keys are allowed; "other" is an unknown section.
     state = "ini"                  # "ini" | one of _LIFTED | "other"
     # configparser's continuation rule, followed on every line it reads or
@@ -459,7 +459,7 @@ def _split_sections(text: str) -> tuple[
             if _lifted(header):
                 state = _lifted(header)
             elif name in (SECTION, configparser.DEFAULTSECT):
-                # [DEFAULT] stays configparser's: its keys fill [readaloud]
+                # [DEFAULT] stays configparser's: its keys fill [config]
                 state = "ini"
                 if lifted:
                     # configparser carries a value across the empty lines
@@ -510,6 +510,9 @@ def _lifted(header: re.Match[str]) -> str | None:
 
 
 def _unknown_section(name: str) -> str:
+    if name.strip().lower() == "readaloud":
+        return (f"ignoring unknown section [{name}] "
+                f"(the settings section is now [{SECTION}])")
     hint = difflib.get_close_matches(name.strip().lower(),
                                      [SECTION, *_LIFTED],
                                      n=1, cutoff=0.6)
