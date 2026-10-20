@@ -820,6 +820,85 @@ def test_the_reader_gets_pronunciation_problems_in_the_status_bar(
     assert capsys.readouterr() == ("", "")
 
 
+# ---------------------------------------------------------------------------
+# sections for one file type
+# ---------------------------------------------------------------------------
+
+
+TYPE_CONF = r"""[config]
+speed = 1.4
+
+[config.py]
+speed = 2
+markdown = no
+
+[parts.py]
+ident = [A-Za-z_]\w*
+
+[shapes.py]
+dflt: /=\s*(?<v>[^,)]+)/ = with a default of $v
+param: /(?<name>%{ident})\s*(?<type>:\s*[^,=)]+)?\s*(?<default>=\s*[^,)]+)?/ = $name ${default|dflt} ${type|:=type}
+/def\s+(?<fn>%{ident})\s*\((?<params>[^()]*?),?\s*\)\s*(?<ret>->\s*[^:]+)?:/ = function $fn takes ${params|param|,=and} ${ret|->=and returns a}
+
+[pronunciations.py]
+str = string
+
+[pronunciations]
+"''" = empty string
+"""
+
+SIGNATURE = "def foo(\n    bar: int,\n    baz: str = '',\n) -> str:\n"
+
+
+def test_a_type_section_applies_to_the_file_it_names(tmp_path, launched):
+    conf = write_conf(tmp_path, TYPE_CONF)
+    for name, speed in [("x.py", 2.0), ("x.md", 1.4)]:
+        (tmp_path / name).write_text("hello\n", encoding="utf-8")
+        assert cli.main(["--config", str(conf), "-f",
+                         str(tmp_path / name)]) == 0
+        assert launched["speed"] == speed, name
+    assert cli.main(["--config", str(conf)]) == 0      # piped: no type
+    assert launched["speed"] == 1.4
+
+
+def test_a_flag_still_beats_a_type_setting(tmp_path, launched):
+    (tmp_path / "x.py").write_text("hello\n", encoding="utf-8")
+    assert cli.main(["--config", str(write_conf(tmp_path, TYPE_CONF)),
+                     "-s", "1.1", "-f", str(tmp_path / "x.py")]) == 0
+    assert launched["speed"] == 1.1
+
+
+def test_a_markdown_file_named_in_text_gets_its_type(
+        tmp_path, launched, fake_mdcat):
+    conf = write_conf(tmp_path, "[config.md]\nspeed = 1.7\n")
+    (tmp_path / "x.md").write_text(TEAM_MD, encoding="utf-8")
+    assert cli.main(["--config", str(conf), str(tmp_path / "x.md"),
+                     "-md"]) == 0
+    assert launched["speed"] == 1.7
+
+
+def test_a_type_shape_reads_a_python_def(tmp_path, monkeypatch, stub_voices):
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    source = tmp_path / "x.py"
+    source.write_text(SIGNATURE, encoding="utf-8")
+    assert cli.main(["--config", str(write_conf(tmp_path, TYPE_CONF)),
+                     "--save", str(tmp_path / "out.wav"), "-f",
+                     str(source)]) == cli.EXIT_OK
+    assert [c.text for c in RecordingEngine.chunks] == [
+        "function foo takes bar type int and baz with a default of empty "
+        "string type string and returns a string"]
+
+
+def test_a_type_problem_reaches_the_status_bar_with_its_label(
+        tmp_path, launched):
+    conf = write_conf(tmp_path, "[pronunciations.py]\nid ID\n")
+    (tmp_path / "x.py").write_text("hello\n", encoding="utf-8")
+    assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
+    assert launched["notices"] == [
+        "config: [pronunciations.py] line 2: 'id ID' has no \"=\"; "
+        "write it as: text = how to say it"]
+
+
 def sabotage_find(monkeypatch):
     def boom(self, text, symbols=()):
         raise RuntimeError("sabotaged")

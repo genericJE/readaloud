@@ -208,7 +208,9 @@ shapes may call on one another eight deep. `dflt` is a named shape, not `|=...`,
 a replacement cannot start with `=`. `[^,=)]` keeps the example short: a type such as
 `dict[str, int]` breaks at its comma, and `*args` keeps its star unless you add `|*=star`.
 A shape is found within one stretch of text: a blank line ends one, and so can a long
-paragraph, which is cut at about 380 characters.
+paragraph, which is cut at about 380 characters. Shapes like these belong to one language,
+so they usually go in `[shapes.py]`, `[parts.py]` and `[pronunciations.py]`, which apply only
+to a `.py` file (see [file types](configuration.md#file-types)).
 
 ### Parts
 

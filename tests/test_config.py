@@ -821,6 +821,158 @@ def test_load_never_raises_on_garbage_in_the_section(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# sections for one file type
+# --------------------------------------------------------------------------- #
+
+
+TYPED = """\
+[config]
+speed = 1.2
+voice = bf_emma
+
+[config.py]
+speed = 2
+markdown = no
+
+[parts]
+num = \\d+
+
+[parts.py]
+word = [a-z]+
+
+[shapes]
+/(?<n>%{num})/ = general $n
+/(?<w>%{word})!/ = never: no general part word
+
+[shapes.py]
+item: /(?<n>%{num})/ = item $n
+/\\[(?<l>[^\\]]+)\\]/ = list ${l|item|,=and}
+/(?<w>%{word}):(?<n>%{num})/ = $w at $n
+
+[pronunciations]
+id = I D
+api = general
+
+[pronunciations.py]
+api = A P I
+"""
+
+
+def test_a_type_section_is_read_for_each_section(tmp_path):
+    path = write(tmp_path / "c.conf", TYPED)
+    cfg, warnings = config.load(path)
+    assert warnings == [
+        f"{path}: [shapes] line 17: /(?<w>%{{word}})!/ uses %{{word}}, which "
+        f"is not a part"]
+    (py,) = cfg.types
+    assert py == config.FileType(
+        ".py", settings=(("speed", 2.0), ("markdown", False)),
+        pronunciations=(("api", "A P I"),),
+        shapes=((r"/\[(?<l>[^\]]+)\]/", "list ${l|item|,=and}"),
+                (r"/(?<w>%{word}):(?<n>%{num})/", "$w at $n")),
+        named_shapes=(("item", r"/(?<n>%{num})/", "item $n"),),
+        parts=(("word", "[a-z]+"),))
+    # the general config is untouched
+    assert (cfg.speed, cfg.markdown) == (1.2, True)
+    assert cfg.pronunciations == (("id", "I D"), ("api", "general"))
+    assert cfg.shapes == ((r"/(?<n>%{num})/", "general $n"),)
+
+
+def test_for_suffix_lays_the_type_over_the_general_config(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
+    py = cfg.for_suffix(".PY")
+    assert (py.speed, py.voice, py.markdown, py.types) == (
+        2.0, "bf_emma", False, ())
+    # a type's shapes are tried first; its pronunciations and parts follow
+    # the general ones, so the type's win a tie
+    assert py.shapes == cfg.types[0].shapes + cfg.shapes
+    assert py.pronunciations == cfg.pronunciations + (("api", "A P I"),)
+    assert py.parts == (("num", r"\d+"), ("word", "[a-z]+"))
+    assert py.shape_patterns[1] == (r"(?<w>(?:[a-z]+)):(?<n>(?:\d+))",
+                                    "$w at $n")
+    assert py.sub_patterns == (("item", r"(?<n>(?:\d+))", "item $n"),)
+
+
+@pytest.mark.parametrize("path", [None, "-", "notes.md", "Makefile", ".py"])
+def test_a_file_of_no_known_type_gets_the_general_config(tmp_path, path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
+    assert cfg.for_file(path) is cfg
+
+
+def test_for_file_goes_by_the_suffix(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
+    assert cfg.for_file("src/a.py").speed == 2.0
+    assert cfg.for_file("src/A.PY").speed == 2.0
+
+
+def test_type_headers_ignore_case_and_take_one_extension(tmp_path):
+    path = write(tmp_path / "c.conf",
+                 "[Shapes.PY]\n/x+/ = ex\n[config.]\n[.py]\n[shapes.tar.gz]\n")
+    cfg, warnings = config.load(path)
+    assert cfg.types[0].suffix == ".py" and cfg.types[0].shapes == (
+        ("/x+/", "ex"),)
+    assert [w.split(": ", 1)[1].split(" (")[0] for w in warnings] == [
+        "ignoring unknown section [config.]",
+        "ignoring unknown section [.py]",
+        "ignoring unknown section [shapes.tar.gz]"]
+
+
+def test_a_misspelled_type_header_is_hinted(tmp_path):
+    path = write(tmp_path / "c.conf", "[shapess.py]\n/x+/ = ex\n")
+    cfg, warnings = config.load(path)
+    assert cfg.types == ()
+    assert warnings == [f"{path}: ignoring unknown section [shapess.py] "
+                        f"(did you mean [shapes.py]?)"]
+
+
+def test_type_problems_carry_the_type_label(tmp_path):
+    path = write(tmp_path / "c.conf",
+                 "[config.py]\nspeed = fast\nspead = 2\n"
+                 "[parts.py]\nbad = (x\n"
+                 "[shapes.py]\n/x*/ = ex\n"
+                 "[pronunciations.py]\nno equals here\n")
+    cfg, warnings = config.load(path)
+    assert [w.removeprefix(f"{path}: ") for w in warnings] == [
+        "[config.py] speed: 'fast' is not a number; using 1.0",
+        "[config.py] unknown key 'spead' (ignored)",
+        "[pronunciations.py] line 9: 'no equals here' has no \"=\"; write it "
+        "as: text = how to say it",
+        "[parts.py] line 5: 'bad' cannot be used: unclosed group",
+        "[shapes.py] line 7: the shape /x*/ cannot be used: it can match "
+        "empty text",
+    ]
+
+
+def test_a_type_part_may_share_a_general_name_without_a_warning(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf",
+                                      "[parts]\nx = a\n[parts.py]\nx = b\n"
+                                      "[shapes.py]\n/%{x}/ = it\n"))
+    assert warnings == []
+    assert cfg.for_suffix(".py").shape_patterns == (("(?:b)", "it"),)
+
+
+def test_a_type_shape_may_use_a_general_named_shape(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf",
+                                      "[shapes]\nn: /\\d/ = digit\n"
+                                      "[shapes.py]\n/<(?<l>[\\d,]+)>/ = ${l|n}\n"))
+    assert warnings == []
+    assert cfg.shapes == ()
+    assert cfg.for_suffix(".py").shapes == (("/<(?<l>[\\d,]+)>/", "${l|n}"),)
+
+
+def test_a_repeated_type_header_is_read_as_one(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf",
+                                      "[config.py]\nspeed = 2\n"
+                                      "[pronunciations.py]\na = b\n"
+                                      "[config.py]\nmarkdown = no\n"
+                                      "[pronunciations.py]\nc = d\n"))
+    assert warnings == []
+    (py,) = cfg.types
+    assert py.settings == (("speed", 2.0), ("markdown", False))
+    assert py.pronunciations == (("a", "b"), ("c", "d"))
+
+
+# --------------------------------------------------------------------------- #
 # template
 # --------------------------------------------------------------------------- #
 

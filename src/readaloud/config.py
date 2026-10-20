@@ -31,7 +31,9 @@ a part is ``name = pattern``, a piece any pattern below it or any shape can
 use as ``%{name}``.  A named shape, ``param: /pattern/ = wording``, is never
 found on its own: the shapes below it use it as ``%{param}`` in a pattern and
 as ``${group|param}`` in a wording, which says each of its matches in that
-group.  readaloud has no shape and no part of its own: a file
+group.  Each section may also have one for a file type, ``[shapes.py]``
+and the like, which `Config.for_file` lays over the general one for a file
+with that extension.  readaloud has no shape and no part of its own: a file
 without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
 `TEMPLATE_PRONUNCIATIONS` are what the shipped file holds.
 
@@ -50,7 +52,7 @@ import difflib
 import io
 import re
 import unicodedata
-from dataclasses import dataclass, fields as _dataclass_fields
+from dataclasses import dataclass, fields as _dataclass_fields, replace
 from importlib import resources
 from pathlib import Path
 
@@ -59,6 +61,7 @@ from .pronounce import (Literal, check_pattern, check_regex, check_shape,
 
 __all__ = [
     "Config",
+    "FileType",
     "DEFAULT_PATH",
     "PRONUNCIATIONS",
     "PARTS",
@@ -99,6 +102,18 @@ _PART_RE = re.compile(r"%\{(\w+)\}")
 _PART_NAME_RE = re.compile(r"[A-Za-z_]\w*")
 
 
+@dataclass(frozen=True)
+class FileType:
+    """The sections for one file type, such as ``[shapes.py]``."""
+
+    suffix: str                    # ".py", in lower case
+    settings: tuple[tuple[str, object], ...] = ()
+    pronunciations: tuple[tuple[str, str], ...] = ()
+    shapes: tuple[tuple[str, str], ...] = ()
+    named_shapes: tuple[tuple[str, str, str], ...] = ()
+    parts: tuple[tuple[str, str], ...] = ()
+
+
 @dataclass
 class Config:
     """Every setting the config file can carry, at its built-in default."""
@@ -124,6 +139,33 @@ class Config:
     named_shapes: tuple[tuple[str, str, str], ...] = ()
     # (name, pattern as written) of each [parts] line, in file order
     parts: tuple[tuple[str, str], ...] = ()
+    # what [config.py], [parts.py], [shapes.py] and [pronunciations.py] add
+    # for a file of that type, one per suffix, in file order
+    types: tuple[FileType, ...] = ()
+
+    def for_file(self, path: str | Path | None) -> Config:
+        """This config with the sections for `path`'s file type laid over
+        it; itself for no file, stdin (``-``), or a type with no sections."""
+        if not path or str(path) == "-":
+            return self
+        return self.for_suffix(Path(path).suffix)
+
+    def for_suffix(self, suffix: str) -> Config:
+        """This config with the sections for `suffix` (``.py``) laid over
+        it: their settings replace the general ones, their shapes are tried
+        first, and their pronunciations, parts and named shapes come after
+        the general ones, so the type's win."""
+        typed = next((t for t in self.types if t.suffix == suffix.lower()),
+                     None)
+        if typed is None:
+            return self
+        return replace(
+            self, **dict(typed.settings),
+            pronunciations=self.pronunciations + typed.pronunciations,
+            shapes=typed.shapes + self.shapes,
+            named_shapes=self.named_shapes + typed.named_shapes,
+            parts=self.parts + typed.parts,
+            types=())
 
     @property
     def shape_patterns(self) -> tuple[tuple[str, str], ...]:
@@ -177,7 +219,7 @@ _BY_NAME = {f.name: f for f in _FIELDS}
 # [config] keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
                            - {"pronunciations", "shapes", "named_shapes",
-                              "parts"})
+                              "parts", "types"})
 
 
 def _default_of(name: str) -> object:
@@ -261,7 +303,7 @@ def _one_line(text: str, limit: int = 120) -> str:
 
 
 def _coerce(field: _Field, raw: str, path: Path,
-            warnings: list[str]) -> object | None:
+            warnings: list[str], where: str = "") -> object | None:
     """Return the value for `field`, or ``None`` to keep the default."""
     default = _default_of(field.name)
     value = _unquote(raw)
@@ -274,7 +316,7 @@ def _coerce(field: _Field, raw: str, path: Path,
             return _BOOLEANS[value.strip().lower()]
         except KeyError:
             warnings.append(
-                f"{path}: {field.name}: {raw.strip()!r} is not a boolean "
+                f"{path}: {where}{field.name}: {raw.strip()!r} is not a boolean "
                 f"(try true/false); using {'true' if default else 'false'}")
             return None
 
@@ -283,18 +325,18 @@ def _coerce(field: _Field, raw: str, path: Path,
                                else float(value))
     except ValueError:
         kind = "a whole number" if field.kind == "int" else "a number"
-        warnings.append(f"{path}: {field.name}: {raw.strip()!r} is not {kind}; "
+        warnings.append(f"{path}: {where}{field.name}: {raw.strip()!r} is not {kind}; "
                         f"using {default}")
         return None
 
     if field.lo is not None and number < field.lo:
         clamped = int(field.lo) if field.kind == "int" else field.lo
-        warnings.append(f"{path}: {field.name}: {number} is below the minimum "
+        warnings.append(f"{path}: {where}{field.name}: {number} is below the minimum "
                         f"{clamped}; clamped to {clamped}")
         return clamped
     if field.hi is not None and number > field.hi:
         clamped = int(field.hi) if field.kind == "int" else field.hi
-        warnings.append(f"{path}: {field.name}: {number} is above the maximum "
+        warnings.append(f"{path}: {where}{field.name}: {number} is above the maximum "
                         f"{clamped}; clamped to {clamped}")
         return clamped
     return number
@@ -340,6 +382,12 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             parts, shapes, named = (), (), ()
             notes.append(f"[{SHAPES}] and [{PARTS}] could not be used "
                          f"({exc!r})")
+        try:
+            typed = _parse_types(lifted, parts, named, problems)
+        except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
+            typed = {}
+            notes.append(f"the sections for file types could not be used "
+                         f"({exc!r})")
         # Set before configparser gets a say: a [config] section it rejects
         # must not cost the pronunciations as well.
         cfg.pronunciations = pairs
@@ -350,8 +398,13 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
 
         parser, parse_warnings = _parse(ini, target)
         warnings += parse_warnings
+        settings: dict[str, dict[str, object]] = {}
         if parser is not None:
-            _read_settings(parser, cfg, target, warnings)
+            settings = _read_settings(parser, cfg, target, warnings)
+        cfg.types = tuple(
+            FileType(suffix, tuple(settings.get(suffix, {}).items()),
+                     **typed.get(suffix, {}))
+            for suffix in dict.fromkeys([*typed, *settings]))
         warnings += [f"{target}: {problem}" for problem in problems]
         return cfg, warnings
     except Exception as exc:  # noqa: BLE001 - the whole point: never raise
@@ -360,16 +413,37 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
 
 
 def _read_settings(parser: configparser.ConfigParser, cfg: Config,
-                   path: Path, warnings: list[str]) -> None:
-    """Set the ``[config]`` keys in `parser` on `cfg`, warning as it goes."""
+                   path: Path, warnings: list[str]
+                   ) -> dict[str, dict[str, object]]:
+    """Set the ``[config]`` keys in `parser` on `cfg`, warning as it goes,
+    and return each ``[config.<ext>]`` section's settings by suffix."""
+    typed: list[tuple[str, str]] = []
     for name in parser.sections():
-        if name != SECTION:
+        kind = _typed(name)
+        if kind is not None and kind[0] == SECTION:
+            typed.append((name, kind[1]))
+        elif name != SECTION:
             warnings.append(f"{path}: ignoring unknown section [{name}]")
 
-    if not parser.has_section(SECTION):
-        return
+    if parser.has_section(SECTION):
+        for field, value in _read_section(parser.items(SECTION), path,
+                                          warnings).items():
+            setattr(cfg, field, value)
+    settings: dict[str, dict[str, object]] = {}
+    for name, suffix in typed:
+        # a type's own keys only: [DEFAULT]'s are already the general ones
+        own = parser._sections[name].items()  # noqa: SLF001
+        settings.setdefault(suffix, {}).update(
+            _read_section(own, path, warnings, f"[{name.lower()}] "))
+    return settings
 
-    for key, raw in parser.items(SECTION):
+
+def _read_section(items, path: Path, warnings: list[str], where: str = ""
+                  ) -> dict[str, object]:
+    """The settings among `items` (``(key, raw value)``) by field name,
+    warning as it goes; `where` names a file type's section in a warning."""
+    out: dict[str, object] = {}
+    for key, raw in items:
         field = _BY_NAME.get(key.strip().lower())
         if field is None:
             # A key nothing like a setting is most likely a pronunciation in
@@ -378,12 +452,14 @@ def _read_settings(parser: configparser.ConfigParser, cfg: Config,
                                              n=1, cutoff=0.6)
             hint = ("" if like else
                     f"; a pronunciation goes under [{PRONUNCIATIONS}]")
-            warnings.append(f"{path}: unknown key {key!r} (ignored{hint})")
+            warnings.append(f"{path}: {where}unknown key {key!r} "
+                            f"(ignored{hint})")
             continue
         value = _coerce(field, raw if raw is not None else "",
-                        path, warnings)
+                        path, warnings, where)
         if value is not None:
-            setattr(cfg, field.name, value)
+            out[field.name] = value
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -448,7 +524,7 @@ def _split_sections(text: str) -> tuple[
     warned: set[str] = set()
     # "ini" is [config] and whatever precedes the first header, where bare
     # keys are allowed; "other" is an unknown section.
-    state = "ini"                  # "ini" | one of _LIFTED | "other"
+    state = "ini"                  # "ini" | a lifted section | "other"
     # configparser's continuation rule, followed on every line it reads or
     # would have read: a line indented deeper than the option line above it
     # is more of that value, even when it looks like a header.  Only a
@@ -457,7 +533,7 @@ def _split_sections(text: str) -> tuple[
     indent, option = 0, False
     for n, line in enumerate(text.split("\n"), 1):
         header = None
-        if state in _LIFTED:
+        if state in sections:
             header = _SECTION_END_RE.match(line.strip())
         elif value := line[:_comment_start(line)].strip():
             depth = len(line) - len(line.lstrip())
@@ -474,7 +550,9 @@ def _split_sections(text: str) -> tuple[
             name = header.group("name")
             if _lifted(header):
                 state = _lifted(header)
-            elif name in (SECTION, configparser.DEFAULTSECT):
+                sections.setdefault(state, [])
+            elif (name in (SECTION, configparser.DEFAULTSECT)
+                  or (_typed(name) or ("",))[0] == SECTION):
                 # [DEFAULT] stays configparser's: its keys fill [config]
                 state = "ini"
                 if lifted:
@@ -487,7 +565,7 @@ def _split_sections(text: str) -> tuple[
                 if name not in warned:      # configparser merged repeats
                     warned.add(name)
                     warnings.append(_unknown_section(name))
-        elif state in _LIFTED:
+        elif state in sections:
             sections[state].append((n, line))
         kept.append(line if state == "ini" else "")
     return "\n".join(kept), sections, warnings
@@ -520,19 +598,38 @@ def _comment_start(line: str) -> int:
 
 
 def _lifted(header: re.Match[str]) -> str | None:
-    """The section `header` names when this module reads it itself."""
+    """The section `header` names when this module reads it itself: one of
+    `_LIFTED`, or one for a file type such as ``shapes.py``."""
     name = header.group("name").strip().lower()
-    return name if name in _LIFTED else None
+    if name in _LIFTED or (_typed(name) or ("",))[0] in _LIFTED:
+        return name
+    return None
+
+
+#: A section for one file type: ``shapes.py``, the section and an extension.
+_TYPE_RE = re.compile(r"(?P<base>[a-z]+)\.(?P<ext>[a-z0-9_+-]+)")
+
+
+def _typed(name: str) -> tuple[str, str] | None:
+    """``(section, suffix)`` when `name` is a section for one file type,
+    such as ``("shapes", ".py")`` for ``[Shapes.PY]``."""
+    match = _TYPE_RE.fullmatch(name.strip().lower())
+    if match is None or match["base"] not in (SECTION, *_LIFTED):
+        return None
+    return match["base"], "." + match["ext"]
 
 
 def _unknown_section(name: str) -> str:
     if name.strip().lower() == "readaloud":
         return (f"ignoring unknown section [{name}] "
                 f"(the settings section is now [{SECTION}])")
-    hint = difflib.get_close_matches(name.strip().lower(),
+    base, dot, ext = name.strip().lower().partition(".")
+    hint = difflib.get_close_matches(base if dot else name.strip().lower(),
                                      [SECTION, *_LIFTED],
                                      n=1, cutoff=0.6)
-    guess = f" (did you mean [{hint[0]}]?)" if hint else ""
+    guess = (f" (did you mean [{hint[0]}{dot}{ext}]?)" if hint and (
+        not dot or re.fullmatch(_TYPE_RE.pattern, f"{hint[0]}.{ext}"))
+        else "")
     return f"ignoring unknown section [{name}]{guess}"
 
 
@@ -751,7 +848,8 @@ def expand_parts(parts: tuple[tuple[str, str], ...]) -> dict[str, str]:
     return out
 
 
-def _parse_parts(lines: list[tuple[int, str]]
+def _parse_parts(lines: list[tuple[int, str]],
+                 known: tuple[tuple[str, str], ...] = ()
                  ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
     """Return ``(parts, problems)`` for the ``[parts]`` lines.
 
@@ -759,10 +857,11 @@ def _parse_parts(lines: list[tuple[int, str]]
     A part may use the parts on the lines above it as ``%{name}``; one used
     before it is defined, an unknown one, or a pattern that does not compile
     costs only its own line.  The same name twice is a problem, and the later
-    line wins.
+    line wins.  The `known` parts, a file type's general ones, are above
+    every line.
     """
     usable: dict[str, tuple[int, str]] = {}
-    filled: dict[str, str] = {}
+    filled: dict[str, str] = expand_parts(known)
     problems: list[str] = []
     for n, raw in lines:
         line = raw.strip()
@@ -810,7 +909,8 @@ _NAMED_SHAPE_RE = re.compile(r"([A-Za-z_]\w*)\s*:\s*(?=/)")
 
 
 def _parse_shapes(lines: list[tuple[int, str]],
-                  parts: tuple[tuple[str, str], ...] = ()
+                  parts: tuple[tuple[str, str], ...] = (),
+                  named_above: tuple[tuple[str, str, str], ...] = ()
                   ) -> tuple[tuple[tuple[str, str], ...],
                              tuple[tuple[str, str, str], ...], list[str]]:
     """Return ``(shapes, named, problems)`` for the ``[shapes]`` lines.
@@ -821,14 +921,16 @@ def _parse_shapes(lines: list[tuple[int, str]],
     found on its own, but the lines below it may use it, as ``%{name}`` in a
     pattern or ``${group|name}`` in a wording.  The same pattern, or the same
     name, twice is a problem, and the later line wins, taking its own place
-    in the order.
+    in the order.  The `named_above` shapes, a file type's general ones, are
+    above every line.
     """
-    fills = expand_parts(parts)
+    fills, _subs = _shape_fills(parts, named_above)
+    above = {name: None for name, _pattern, _wording in named_above}
     usable: dict[str, tuple[int, str]] = {}
     named: dict[str, tuple[int, str, str]] = {}
     problems: list[str] = []
     for n, raw in lines:
-        parsed = _parse_shape(n, raw, fills, named)
+        parsed = _parse_shape(n, raw, fills, {**above, **named})
         if isinstance(parsed, str):
             problems.append(parsed)
         elif parsed is not None:
@@ -856,6 +958,39 @@ def _parse_shapes(lines: list[tuple[int, str]],
             tuple((name, pattern, wording)
                   for name, (_n, pattern, wording) in named.items()),
             _capped(problems, SHAPES))
+
+
+def _parse_types(lifted: dict[str, list[tuple[int, str]]],
+                 parts: tuple[tuple[str, str], ...],
+                 named: tuple[tuple[str, str, str], ...],
+                 problems: list[str]) -> dict[str, dict[str, tuple]]:
+    """The ``[pronunciations.py]``, ``[parts.py]`` and ``[shapes.py]`` lines
+    by suffix, as `FileType` fields; their problems go on `problems`.  A
+    type's parts and shapes may use the general parts and named shapes."""
+    out: dict[str, dict[str, tuple]] = {}
+    for label in lifted:
+        kind = _typed(label)
+        if kind is None or kind[1] in out:
+            continue
+        suffix = kind[1]
+
+        def lines(base: str) -> list[tuple[int, str]]:
+            return lifted.get(base + suffix, [])
+
+        def relabelled(found: list[str], base: str) -> list[str]:
+            return [f"[{base}{suffix}]" + p[len(base) + 2:]
+                    if p.startswith(f"[{base}]") else p for p in found]
+
+        pairs, found = _parse_pronunciations(lines(PRONUNCIATIONS))
+        problems += relabelled(found, PRONUNCIATIONS)
+        own_parts, found = _parse_parts(lines(PARTS), known=parts)
+        problems += relabelled(found, PARTS)
+        shapes, own_named, found = _parse_shapes(
+            lines(SHAPES), parts + own_parts, named)
+        problems += relabelled(found, SHAPES)
+        out[suffix] = {"pronunciations": pairs, "parts": own_parts,
+                       "shapes": shapes, "named_shapes": own_named}
+    return out
 
 
 def _capped(problems: list[str], section: str) -> list[str]:

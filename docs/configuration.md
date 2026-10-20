@@ -44,6 +44,51 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `markdown` | `true` | Strip Markdown syntax (`#`, `**`, `[text](url)`) from a plain file, a string or a pipe before it is spoken. `false` reads it as written, which suits source code. Coloured input and `-md` are never stripped. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |
 
+## File types
+
+A section can apply to one type of file only: put its extension after the section's name,
+as `[config.py]`, `[parts.py]`, `[shapes.py]` or `[pronunciations.py]`. They count when
+readaloud reads a file with that extension, named with `-f FILE`, `-md FILE` or
+`FILE -md`; piped input and text on the command line have no type, so only the general
+sections apply to them. The extension ignores case (`[shapes.PY]` and `x.PY` are `.py`),
+and a header holds one extension, so `.pyi` needs sections of its own.
+
+They are laid over the general sections rather than replacing them:
+
+- **`[config.py]`** sets the settings it names; the rest keep the `[config]` value. A
+  flag still beats both.
+- **`[shapes.py]`** is tried before `[shapes]`, so at each word a type's line that fits
+  wins over a general one.
+- **`[pronunciations.py]`** wins a tie with `[pronunciations]`: an entry for the same text
+  replaces the general one.
+- **`[parts.py]`** may use the general parts, and a part of the same name replaces the
+  general one for the type's shapes. The type's shapes may use the general named shapes.
+
+A problem in one of them is reported with its section, as in `[shapes.py] line 12: ...`.
+This reads Python source as written and says a function signature, on one line or
+spread over several, the way it would be described (see
+[named shapes](pronunciations.md#named-shapes)):
+
+```ini
+[config.py]
+markdown = no
+
+[parts.py]
+ident = [A-Za-z_]\w*
+
+[shapes.py]
+dflt: /=\s*(?<v>[^,)]+)/ = with a default of $v
+param: /(?<name>%{ident})\s*(?<type>:\s*[^,=)]+)?\s*(?<default>=\s*[^,)]+)?/ = $name ${default|dflt} ${type|:=type}
+/def\s+(?<fn>%{ident})\s*\((?<params>[^()]*?),?\s*\)\s*(?<ret>->\s*[^:]+)?:/ = function $fn takes ${params|param|,=and} ${ret|->=and returns a}
+
+[pronunciations.py]
+str = string
+```
+
+`readaloud -f app.py` then says `def foo(bar: int, baz: str='') -> str:` as "function
+foo takes bar type int and baz with a default of empty string type string and returns a
+string".
+
 ## The file a first run writes
 
 This is what `~/.readaloud.conf` holds after the first run, and what `--write-config`

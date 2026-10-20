@@ -474,9 +474,19 @@ def _main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if (args.markdown is True and args.file is None and len(args.text) == 1
+            and os.path.isfile(args.text[0])):
+        # `readaloud notes.md -md` and `-md --save x.wav notes.md` leave the
+        # file in TEXT, since a bare -md takes no value there.  Nobody wants a
+        # file's name rendered as Markdown, so read the file it names.
+        args.markdown, args.text = args.text[0], []
+
     # ---- ~/.readaloud.conf ----------------------------------------------
+    # The file named for the input picks the sections for its type, before
+    # any setting is applied.
     target = config_path(args)
     cfg, warnings = load_config(args)
+    cfg = cfg.for_file(input_file(args))
     _apply_config(args, cfg)
 
     # Anything that is not the TUI can print to stderr; the reader gets its
@@ -523,12 +533,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if isinstance(args.markdown, str) and args.file is not None:
         _err("use either -md FILE or -f FILE -md")
         return EXIT_USAGE
-    if (args.markdown is True and args.file is None and len(args.text) == 1
-            and os.path.isfile(args.text[0])):
-        # `readaloud notes.md -md` and `-md --save x.wav notes.md` leave the
-        # file in TEXT, since a bare -md takes no value there.  Nobody wants a
-        # file's name rendered as Markdown, so read the file it names.
-        args.markdown, args.text = args.text[0], []
     if args.speed <= 0:
         _err("--speed must be greater than 0")
         return EXIT_USAGE
