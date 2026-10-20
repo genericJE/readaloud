@@ -21,8 +21,9 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
   [mdcat][mdcat] draws it and reads its tables one cell at a time, row by row, with the
   highlight on the cell even where it wraps beside its neighbours. See
   [Markdown with `-md`](docs/markdown.md).
-- **Reads styled terminal output.** Piped ANSI (`mdcat --ansi`, `bat`, `glow`) keeps its
-  colours, bold, italics and OSC-8 hyperlinks on screen. Raw Markdown gets its syntax
+- **Reads styled terminal output.** Piped ANSI (`bat`, `git log --color`) keeps its
+  colours, bold, italics and OSC-8 hyperlinks on screen. For Markdown, use `-md` above:
+  piped from a renderer, a table is read line by line instead of cell by cell. Raw Markdown gets its syntax
   characters stripped so `##` and `**` are not spoken out loud.
 - **Word-level highlighting.** misaki's per-token timestamps are aligned back onto the
   original characters, so the highlight tracks the audio to within a few milliseconds
@@ -62,8 +63,8 @@ The `[mediakeys]` extra is what makes the system play/pause button work; drop it
 smaller install. To run without installing: `uv run readaloud -f notes.md`. See
 [Development](docs/development.md) for what that pulls in.
 
-[mdcat][mdcat] is optional, and neither install brings it. `-md` runs it, and the
-`mdcat --ansi notes.md | readaloud` pipe needs it too; everything else works without it.
+[mdcat][mdcat] is optional, and neither install brings it. `-md` runs it; everything else
+works without it.
 
 ```bash
 brew install mdcat
@@ -74,9 +75,6 @@ brew install mdcat
 ```bash
 # the primary path for Markdown: drawn by mdcat, tables read one cell at a time
 readaloud -md notes.md
-
-# anything already rendered, colours and all
-mdcat --ansi notes.md | readaloud
 
 # a file, no mdcat needed (most Markdown syntax is stripped before it is spoken)
 readaloud -f README.md
@@ -95,8 +93,14 @@ readaloud -f notes.md --voice bf_emma --speed 1.2 --start 5
 readaloud -f notes.md --save notes.wav
 ```
 
+Read Markdown with `-md` rather than piping `mdcat --ansi notes.md | readaloud`. Piped
+output arrives as finished lines, so readaloud cannot tell a table's cells apart: it reads
+the table line by line, straight across its columns, and a cell that wraps gets mixed up
+with its neighbours ("writes the joined parser and the in tests March"). `-md` runs mdcat
+itself and reads every cell on its own, in order.
+
 Piping works even when stdout is redirected. `readaloud` reopens `/dev/tty` for both the
-keyboard and the screen, so `mdcat --ansi notes.md | readaloud > log` draws the reader on
+keyboard and the screen, so `git log --oneline -20 | readaloud > log` draws the reader on
 the terminal rather than into `log`.
 
 `readaloud --help` lists every flag, and [Options](docs/options.md) explains them.
