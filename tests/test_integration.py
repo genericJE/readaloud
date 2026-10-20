@@ -1203,7 +1203,7 @@ def test_follow_without_a_lead_pins_the_word_to_the_bottom_margin():
         assert settle(app)
         offsets = play_and_watch(app, player)
         assert app.top >= 120, "playback never got far enough to scroll"
-        bottom = screen.body_height - 1 - FOLLOW_MARGIN     # 26 on a 30-row term
+        bottom = screen.body_height - 1 - FOLLOW_MARGIN     # 23 on a 30-row term
         assert max(offsets) == bottom
         # once it has scrolled at all, the word never leaves that row again
         tail = offsets[len(offsets) // 2:]
@@ -1221,7 +1221,8 @@ def test_follow_lead_puts_the_word_near_the_top_and_shows_what_is_coming():
         offsets = play_and_watch(app, player)
         assert app.top >= 120, "playback never got far enough to scroll"
         h = screen.body_height                              # 29
-        landing = h - 1 - FOLLOW_MARGIN - 20                 # 6
+        # the lead stops where the word would pass the top margin
+        landing = max(h - 1 - FOLLOW_MARGIN - 20, FOLLOW_MARGIN)  # 5
         assert min(offsets) == landing
         assert max(offsets) <= h - 1 - FOLLOW_MARGIN
         # the point of the whole feature: rows of unread text below the word
@@ -1304,7 +1305,7 @@ def test_c_parks_the_view_where_follow_mode_would():
         was_following = app.follow
         app.handle(Command(Action.CURRENT))
         assert app.follow is was_following, "c changed follow mode"
-        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        assert app.top == screen.follow_top_for_word(app.cur_word, FOLLOW_MARGIN, 20)
         # the spoken word sits near the top with the upcoming text below it,
         # NOT in the middle -- that is what distinguishes `c` from `F` now
         offset = screen.row_of_word(app.cur_word) - app.top
@@ -1334,7 +1335,7 @@ def test_c_looks_at_the_spoken_word_without_following_it():
         away = app.top
         app.handle(Command(Action.CURRENT))
         assert app.follow is False, "c switched follow mode on"
-        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        assert app.top == screen.follow_top_for_word(app.cur_word, FOLLOW_MARGIN, 20)
         assert app.top != away, "c did not move the view to the spoken word"
         # and it stays put: the word scrolls away under playback, the view does not
         parked = app.top
@@ -1385,7 +1386,7 @@ def test_F_centres_and_follows_and_differs_from_c():
         centred = app.top
         assert centred == screen.center_on_word(app.cur_word)
         app.handle(Command(Action.CURRENT))
-        assert app.top == screen.follow_top_for_word(app.cur_word, 2, 20)
+        assert app.top == screen.follow_top_for_word(app.cur_word, FOLLOW_MARGIN, 20)
         assert app.top != centred, "c and F ended up identical"
     finally:
         app.close()
@@ -2077,6 +2078,11 @@ def up_scrolls(tops):
     return [(a, b) for a, b in zip(tops, tops[1:]) if b < a]
 
 
+#: The margin the table layouts below were measured with: what they test is
+#: how a row is followed, not the default margin.
+TABLE_MARGIN = 2
+
+
 def test_follow_mode_never_scrolls_up_while_reading_a_table_row():
     """The reproduction: 24 rows, lead 20.  "column" ends Bob's Role cell on
     the row's third line and the view scrolls down to it; "code" starts the
@@ -2084,11 +2090,12 @@ def test_follow_mode_never_scrolls_up_while_reading_a_table_row():
     scrolled the view back up."""
     doc = crew_doc(prose(15), prose(60, "Outro"))
     app, doc, engine, player, screen = make_app(doc=doc, height=24,
-                                                follow_lead=20)
+                                                follow_lead=20,
+                                                follow_margin=TABLE_MARGIN)
     # the old policy, word by word in reading order, over the same layout
     top, tops = 0, []
     for widx in range(len(doc.words)):
-        top = screen.top_for_word(widx, top, FOLLOW_MARGIN, 20)
+        top = screen.top_for_word(widx, top, TABLE_MARGIN, 20)
         tops.append(top)
     assert up_scrolls(tops), "this layout no longer reproduces the bug"
 
@@ -2131,13 +2138,13 @@ def test_following_a_table_never_scrolls_up_whatever_the_layout():
                 doc = crew_doc(prose(before), prose(30, "Outro"))
                 screen = FakeScreen(doc, height=height)
                 app = App(doc, screen, FakePlayer(), FakeEngine(), ahead=0,
-                          follow_lead=lead)
+                          follow_lead=lead, follow_margin=TABLE_MARGIN)
                 bob = next(c.idx for c in doc.chunks if c.text == "Bob")
                 assert (app._row_span(bob) is not None) == (height > 7)
                 word_top, word_tops, row_tops = 0, [], []
                 for widx in range(len(doc.words)):
                     word_top = screen.top_for_word(widx, word_top,
-                                                   FOLLOW_MARGIN, lead)
+                                                   TABLE_MARGIN, lead)
                     word_tops.append(word_top)
                     app.cur_word = widx
                     app.tick()               # never started: tick only follows

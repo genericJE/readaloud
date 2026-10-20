@@ -51,7 +51,7 @@ MESSAGE_TTL = 4.0
 NOTICE_TTL = 12.0
 
 #: rows of context follow-mode keeps above/below the spoken word
-FOLLOW_MARGIN = 2
+FOLLOW_MARGIN = 5
 
 #: extra rows follow mode scrolls past the strict minimum, so the text about to
 #: be spoken lands around the middle of the viewport instead of on the last row.

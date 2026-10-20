@@ -110,7 +110,7 @@ class Config:
     device: str = ""               # "" = system default output device
     color: bool = True
     follow_lead: int = 20          # extra rows to scroll ahead in follow mode
-    follow_margin: int = 2
+    follow_margin: int = 5
     media_keys: bool = True        # claim the system play/pause button
     # (written, spoken) pairs from [pronunciations], in file order
     pronunciations: tuple[tuple[str, str], ...] = ()

@@ -99,7 +99,7 @@ def test_config_dataclass_defaults():
     assert DEFAULTS == Config(
         voice="af_heart", speed=1.0, lang="", chars=380,
         repo="mlx-community/Kokoro-82M-4bit", sentences=4, prefetch=2,
-        device="", color=True, follow_lead=20, follow_margin=2,
+        device="", color=True, follow_lead=20, follow_margin=5,
         media_keys=True,
     )
 

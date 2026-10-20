@@ -38,7 +38,7 @@ Settings go under `[readaloud]`. A setting the file leaves out keeps its default
 | `device` | empty | Audio output: an index, part of a device name, or `default`. Empty is the system default. `readaloud --list-devices` lists them. |
 | `color` | `true` | Render the input's colours. `false` is `--no-color`. Takes true/false, yes/no, on/off, 1/0. |
 | `follow_lead` | `20` | Extra rows follow mode scrolls past the strict minimum (see below). |
-| `follow_margin` | `2` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
+| `follow_margin` | `5` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |
 
 ## The file a first run writes
@@ -246,8 +246,9 @@ heard and nothing you are about to. `follow_lead` scrolls that many rows *furthe
 moment a scroll is needed, so the view advances in stable jumps and the next chunk lands
 around the middle of the screen.
 
-On a 30-row terminal with the default `follow_lead = 20`, the spoken word lands on about
-row 7 and roughly 23 rows of unread text stay visible below it. It then drifts down to
+On a 30-row terminal with the defaults, `follow_lead = 20` and `follow_margin = 5`, the
+spoken word lands on about row 6, just below the top margin, and roughly 23 rows of unread
+text stay visible below it. It then drifts down to
 the bottom margin and the view jumps again. `follow_lead = 0` restores the old
 creep-one-row-at-a-time behaviour. The lead never scrolls so far that the spoken word
 would leave the screen, and it applies only when scrolling *down*: moving back up to a
