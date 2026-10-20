@@ -301,8 +301,12 @@ def read_input(args: argparse.Namespace) -> str:
 
 
 def build_document(data: str, *, max_sentences: int, max_chars: int,
-                   no_color: bool, pronunciations=None):
+                   no_color: bool, pronunciations=None,
+                   strip_markdown: bool = True):
     """Parse `data` (ANSI or raw markdown) into a `Document`.
+
+    Plain input has its Markdown syntax stripped unless `strip_markdown` is
+    false (the config file's ``markdown = no``); ANSI input never does.
 
     `pronunciations` is the config file's `readaloud.pronounce.Lexicon`, which
     the Document respells its chunks with.
@@ -311,7 +315,7 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
     from .document import Document
 
     lines = ansi.parse(data)
-    if not ansi.has_ansi(data):
+    if strip_markdown and not ansi.has_ansi(data):
         lines = ansi.strip_markdown(lines)
     if no_color:
         lines = _monochrome(lines)
@@ -605,6 +609,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             max_chars=args.chars,
             no_color=no_color,
             pronunciations=pronunciations,
+            strip_markdown=cfg.markdown,
         )
     if not doc.speakable_chunks:
         _err("the input contains nothing speakable (only rules, symbols or blanks)")

@@ -41,6 +41,7 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `color` | `true` | Render the input's colours. `false` is `--no-color`. Takes true/false, yes/no, on/off, 1/0. |
 | `follow_lead` | `20` | Extra rows follow mode scrolls past the strict minimum (see below). |
 | `follow_margin` | `5` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
+| `markdown` | `true` | Strip Markdown syntax (`#`, `**`, `[text](url)`) from a plain file, a string or a pipe before it is spoken. `false` reads it as written, which suits source code. Coloured input and `-md` are never stripped. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |
 
 ## The file a first run writes

@@ -100,7 +100,7 @@ def test_config_dataclass_defaults():
         voice="af_heart", speed=1.0, lang="", chars=380,
         repo="mlx-community/Kokoro-82M-4bit", sentences=4, prefetch=2,
         device="", color=True, follow_lead=20, follow_margin=5,
-        media_keys=True,
+        media_keys=True, markdown=True,
     )
 
 
@@ -123,6 +123,7 @@ color = false
 follow_lead = 12
 follow_margin = 5
 media_keys = false
+markdown = no
 """
 
 
@@ -133,10 +134,11 @@ def test_every_key_is_read(tmp_path):
         voice="bf_emma", speed=1.25, lang="b", repo="hexgrad/Kokoro-82M",
         sentences=7, chars=500, prefetch=0, device="MacBook Pro Speakers",
         color=False, follow_lead=12, follow_margin=5, media_keys=False,
+        markdown=False,
     )
 
 
-@pytest.mark.parametrize("key", ["color", "media_keys"])
+@pytest.mark.parametrize("key", ["color", "media_keys", "markdown"])
 @pytest.mark.parametrize("raw,expected", [
     ("true", True), ("True", True), ("yes", True), ("on", True), ("1", True),
     ("false", False), ("FALSE", False), ("no", False), ("off", False),
@@ -226,6 +228,7 @@ def test_clamping_one_key_leaves_the_others_alone(tmp_path):
     ("follow_margin", "?"),
     ("color", "maybe"),
     ("media_keys", "sometimes"),
+    ("markdown", "mostly"),
 ])
 def test_malformed_value_falls_back_to_default_and_warns(tmp_path, key, given):
     body = f"[config]\n{key} = {given}\n"

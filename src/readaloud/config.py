@@ -112,6 +112,7 @@ class Config:
     follow_lead: int = 20          # extra rows to scroll ahead in follow mode
     follow_margin: int = 5
     media_keys: bool = True        # claim the system play/pause button
+    markdown: bool = True          # strip Markdown syntax from plain input
     # (written, spoken) pairs from [pronunciations], in file order
     pronunciations: tuple[tuple[str, str], ...] = ()
     # (pattern as written, wording) of each [shapes] line, in file order
@@ -154,6 +155,7 @@ _FIELDS: tuple[_Field, ...] = (
     _Field("follow_lead", "int", lo=0),
     _Field("follow_margin", "int", lo=0),
     _Field("media_keys", "bool"),
+    _Field("markdown", "bool"),
 )
 
 _BY_NAME = {f.name: f for f in _FIELDS}

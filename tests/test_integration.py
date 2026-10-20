@@ -526,6 +526,14 @@ def test_build_document_strips_markdown_but_keeps_ansi():
     assert any(r.style.bold for r in doc.lines[0])
 
 
+def test_build_document_keeps_markdown_syntax_when_told_to():
+    kept = cli.build_document("# Heading\n\n**bold** text\n", max_sentences=4,
+                              max_chars=380, no_color=False,
+                              strip_markdown=False)
+    assert kept.plain[0] == "# Heading"
+    assert kept.plain[2] == "**bold** text"
+
+
 def test_no_color_drops_colour_but_keeps_text():
     data = "\x1b[38;5;196mred\x1b[0m and \x1b[1mbold\x1b[0m\n"
     doc = cli.build_document(data, max_sentences=4, max_chars=380, no_color=True)
@@ -706,6 +714,17 @@ def test_config_file_supplies_the_defaults(tmp_path, launched):
     assert launched["voice"] == "bm_george"
     assert launched["prefetch"] == 5
     assert launched["lang"] == "b"          # derived from the config's voice
+
+
+def test_markdown_off_reads_a_plain_file_as_written(tmp_path, launched):
+    source = tmp_path / "x.py"
+    source.write_text("# a comment\ndef f(*args): pass\n", encoding="utf-8")
+    assert cli.main(["--config", write_conf(tmp_path, ""), "-f",
+                     str(source)]) == 0
+    assert launched["doc"].plain[0] == "a comment"
+    assert cli.main(["--config", write_conf(tmp_path, "markdown = no\n"), "-f",
+                     str(source)]) == 0
+    assert launched["doc"].plain[:2] == ["# a comment", "def f(*args): pass"]
 
 
 def test_an_explicit_flag_beats_the_config_file(tmp_path, launched):
