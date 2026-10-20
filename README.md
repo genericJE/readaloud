@@ -122,17 +122,45 @@ mode and the headphone button.
 
 The first run writes `~/.readaloud.conf`, a copy of the file readaloud ships: every setting
 at its default, the shapes that say a file with its line or a URL with its port, and the
-words Kokoro says wrongly, as ordinary lines to edit or delete. An excerpt:
+words Kokoro says wrongly, as ordinary lines to edit or delete. A shortened example, with
+one setting changed:
 
 ```ini
+[readaloud]
+# settings; docs/configuration.md lists them all
+speed = 1.2
+
+[parts]
+# named pieces of pattern, used as %{name} by the shapes and by later parts
+ext = [A-Za-z]\w*
+file = \S+\.%{ext}
+
 [shapes]
+# /pattern/ = how to say it, $name being a named group; first fit wins
+/(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/ = $file lines $from to $to
 /(?<file>%{file}):(?<line>\d+)/ = $file line $line
 
 [pronunciations]
+# text = how to say it; lowercase matches any case, a capital only that case
+
+# names, and quotes that stand for nothing
 id = ID
-ids = IDs
 "''" = empty string
+
+# file names and extensions
+README.md = readme dot M D
+.py = dot pie
+
+# top-level domains
+.io = dot I O
+
+# what the punctuation of code is called
+!= = not equals
 ```
+
+With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 283",
+`user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b". The whole file, with every
+part, shape and pronunciation, is in [Configuration](docs/configuration.md#the-file-a-first-run-writes).
 
 Precedence is `explicit flag > ~/.readaloud.conf > built-in default`, key by key. The file
 is read forgivingly: a value that makes no sense keeps its default, one that is out of
