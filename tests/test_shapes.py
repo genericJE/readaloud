@@ -320,6 +320,130 @@ def test_the_same_shape_twice_keeps_the_later(tmp_path):
                                 "line 4 wins")
 
 
+# ---------------------------------------------------------------------------
+# named shapes
+# ---------------------------------------------------------------------------
+
+
+DEF = r"""[parts]
+ident = [A-Za-z_]\w*
+
+[shapes]
+dflt: /=\s*(?<v>[^,)]+)/ = with a default of $v
+param: /(?<name>%{ident})\s*(?<type>:\s*[^,=)]+)?\s*(?<default>=\s*[^,)]+)?/ = $name ${default|dflt} ${type|:=type}
+/def\s+(?<fn>%{ident})\s*\((?<params>[^()]*?),?\s*\)\s*(?<ret>->\s*[^:]+)?:/ = function $fn takes ${params|param|,=and} ${ret|->=and returns a}
+
+[pronunciations]
+"''" = empty string
+str = string
+"""
+
+SAID_DEF = ("function foo takes bar type int and baz with a default of empty "
+            "string type string and returns a string")
+
+
+def _said_with(lex, text: str) -> tuple[str, list[str]]:
+    doc = Document.from_text(text, pronunciations=lex)
+    (chunk,) = doc.chunks
+    return chunk.text, [doc.words[w].text for w in chunk.words]
+
+
+def said_by(cfg, text: str) -> tuple[str, list[str]]:
+    """What `text` says with the shapes, named ones too, of `cfg`."""
+    return _said_with(Lexicon(cfg.pronunciations, cfg.shape_patterns,
+                              cfg.sub_patterns), text)
+
+
+def test_a_named_shape_says_each_match_in_a_group(tmp_path):
+    cfg, warnings = load(tmp_path, DEF)
+    assert warnings == []
+    assert [name for name, _p, _w in cfg.named_shapes] == ["dflt", "param"]
+    assert len(cfg.shapes) == 1
+    text, words = said_by(cfg, "def foo(bar: int, baz: str='') -> str:")
+    assert text == SAID_DEF
+    assert words == ["def", "foo", "bar", "int", "baz", "str", "str"]
+
+
+def test_a_def_spread_over_lines(tmp_path):
+    cfg, _ = load(tmp_path, DEF)
+    signature = "def foo(\n    bar: int,\n    baz: str = '',\n) -> str:"
+    assert said_by(cfg, signature)[0] == SAID_DEF
+
+
+def test_a_named_shape_is_not_found_on_its_own(tmp_path):
+    cfg, _ = load(tmp_path, DEF)
+    assert said_by(cfg, "bar: int")[0] == "bar: int"
+
+
+def test_a_group_that_did_not_take_part_says_nothing(tmp_path):
+    cfg, _ = load(tmp_path, DEF)
+    assert said_by(cfg, "def go():")[0] == "function go takes"
+    assert said_by(cfg, "def f(a, *args):")[0] == "function f takes a and * args"
+
+
+def test_a_named_shape_fills_a_pattern_with_its_groups_unnamed(tmp_path):
+    cfg, warnings = load(tmp_path, r"""[shapes]
+n: /(?<d>\d+)/ = number $d
+/(?<a>%{n})\+%{n}/ = $a plus another
+""")
+    assert warnings == []
+    assert cfg.shape_patterns == ((r"(?<a>(?:(?:\d+)))\+(?:(?:\d+))",
+                                   "$a plus another"),)
+    assert cfg.sub_patterns == (("n", r"(?<d>\d+)", "number $d"),)
+    assert said_by(cfg, "2+3")[0] == "2 plus another"
+
+
+def test_a_pattern_may_say_a_group_through_a_named_shape():
+    lex = Lexicon([(r"/\[(?<l>[^\]]+)\]/", "list of ${l|n|,=and}")], (),
+                  [("n", r"\d+", "number $0")])
+    assert _said_with(lex, "see [1, 2]")[0] == "see list of number 1 and number 2"
+
+
+def test_a_wording_may_name_only_a_shape_above_it(tmp_path):
+    above = "a: /x/ = ex\nb: /y/ = why\n"
+    for line, problem in [
+        ("/(?<p>\\w+)/ = ${p|c}", "'${p|c}' names no shape above it"),
+        ("/(?<p>\\w+)/ = ${p|a|b}", "'${p|a|b}' names two shapes; use one"),
+        ("/(?<p>\\w+)/ = ${p|a|=x}", "write a replacement as |text=word"),
+    ]:
+        cfg, warnings = load(tmp_path, f"[shapes]\n{above}{line}\n")
+        assert cfg.shapes == () and problem in warnings[0], (line, warnings)
+    cfg, warnings = load(tmp_path, "[shapes]\n/(?<p>\\w+)/ = ${p|a}\n" + above)
+    assert cfg.shapes == () and "'${p|a}' names no shape above it" in warnings[0]
+
+
+def test_a_named_shape_is_checked_like_any_shape(tmp_path):
+    cfg, warnings = load(tmp_path, "[parts]\nx = a\n[shapes]\nx: /b/ = bee\n"
+                                   "e: /\\d*/ = n\nn: /\\d/ = one\nn: /\\d+/ = more\n")
+    assert [name for name, _p, _w in cfg.named_shapes] == ["n"]
+    assert cfg.named_shapes[0][1] == r"/\d+/"
+    at = f"{tmp_path / 'c.conf'}: [shapes] line"
+    assert warnings == [
+        f"{at} 4: 'x' is also a part; give the shape another name",
+        f"{at} 5: the shape /\\d*/ cannot be used: it can match empty text",
+        f"{at} 7: 'n' is also on line 6; line 7 wins",
+    ]
+
+
+def test_named_shapes_cost_nothing_when_unused():
+    assert config.Config().named_shapes == () and config.Config().sub_patterns == ()
+
+
+def test_shapes_are_fast_over_a_long_code_text(tmp_path):
+    import time
+    cfg, _ = load(tmp_path, DEF)
+    lex = Lexicon(cfg.pronunciations, cfg.shape_patterns, cfg.sub_patterns)
+    body = "\n\n".join(
+        f"def f{i}(a{i}: int, b: str = 'x', *args, **kw) -> dict:\n"
+        f"    return {{'a': a{i}, 'b': b}}  # see x.py:{i}"
+        for i in range(200))
+    started = time.perf_counter()
+    doc = Document.from_text(body, pronunciations=lex)
+    assert time.perf_counter() - started < 5.0
+    assert doc.respell_failures == 0
+    assert doc.chunks[0].text.startswith("function f0 takes a0 type int and b")
+
+
 def test_the_template_ships_every_part_and_shape(tmp_path):
     text = config.template()
     head, _, tail = text.partition("\n[parts]\n")

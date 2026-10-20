@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
-use crate::shapes::Shapes;
+use crate::shapes::{Shapes, Subs};
 use crate::text::{collapse, is_hump, is_space, is_upper, is_word_char, lower, same_folded};
 
 /// The gutter mdcat draws down a blockquote, which may follow a line break
@@ -112,7 +112,13 @@ impl Lexicon {
     /// an empty side, or a pattern that does not compile, is skipped.
     /// `shapes` are `(pattern, wording)` in file order; an empty wording says
     /// the text as written, and a pattern that cannot be used is skipped.
-    pub fn new(pairs: &[(String, String, bool)], shapes: &[(String, String)]) -> Self {
+    /// `subs` are the named shapes, `(name, pattern, wording)`, which shape
+    /// and pattern wordings call on by name.
+    pub fn new(
+        pairs: &[(String, String, bool)],
+        shapes: &[(String, String)],
+        subs: &[(String, String, String)],
+    ) -> Self {
         let mut lex = Lexicon {
             literals: Vec::new(),
             patterns: Vec::new(),
@@ -122,7 +128,7 @@ impl Lexicon {
             leads: HashMap::new(),
             folded_leads: HashMap::new(),
             symbols: HashMap::new(),
-            shapes: Shapes::new(shapes),
+            shapes: Shapes::new(shapes, subs),
         };
         for (rank, (written, spoken, is_pattern)) in pairs.iter().enumerate() {
             let say = collapse(spoken);
@@ -228,7 +234,7 @@ impl Lexicon {
         let candidates = self.candidates(&chars);
         let no_patterns: &[Pattern] = &[];
         let mut cursors =
-            Cursors::new(if everything { &self.patterns } else { no_patterns }, text);
+            Cursors::new(if everything { &self.patterns } else { no_patterns }, text, self.shapes.subs());
         let shaped = if everything { self.shaped(&chars, slots) } else { Vec::new() };
         let mut si = 0;
         let mut found: Vec<Found> = Vec::new();
@@ -510,6 +516,8 @@ struct Match {
 struct Cursors<'a> {
     patterns: &'a [Pattern],
     text: &'a str,
+    /// the named shapes a wording may call on
+    subs: &'a Subs,
     /// character index -> byte offset, and back
     byte_of: Vec<usize>,
     char_of: HashMap<usize, usize>,
@@ -518,7 +526,7 @@ struct Cursors<'a> {
 }
 
 impl<'a> Cursors<'a> {
-    fn new(patterns: &'a [Pattern], text: &'a str) -> Self {
+    fn new(patterns: &'a [Pattern], text: &'a str, subs: &'a Subs) -> Self {
         let (mut byte_of, mut char_of): (Vec<usize>, HashMap<usize, usize>) = (Vec::new(), HashMap::new());
         if !patterns.is_empty() {
             for (c, (b, _)) in text.char_indices().enumerate() {
@@ -528,7 +536,7 @@ impl<'a> Cursors<'a> {
             char_of.insert(text.len(), byte_of.len());
             byte_of.push(text.len());
         }
-        Cursors { patterns, text, byte_of, char_of, next: (0..patterns.len()).map(|_| None).collect() }
+        Cursors { patterns, text, subs, byte_of, char_of, next: (0..patterns.len()).map(|_| None).collect() }
     }
 
     /// The first match of pattern `k` that starts at or after `from` and says
@@ -541,7 +549,7 @@ impl<'a> Cursors<'a> {
             let start = self.char_of[&m.start()];
             let end = self.char_of[&m.end()];
             if end > start {
-                let say = collapse(&crate::shapes::expand(&pattern.template, &caps));
+                let say = collapse(&crate::shapes::expand_in(&pattern.template, &caps, self.subs, 0));
                 if say.chars().any(is_word_char) {
                     return Some(Match { start, end, say });
                 }
@@ -744,7 +752,7 @@ mod tests {
                 (k.to_string(), s.to_string(), pattern)
             })
             .collect();
-        Lexicon::new(&pairs, &[])
+        Lexicon::new(&pairs, &[], &[])
     }
 
     fn said(l: &Lexicon, text: &str) -> String {
@@ -758,6 +766,14 @@ mod tests {
         let l = lex(&[(".py", "dot pie"), (r"/:(\d+)-(\d+)/", "lines $1 to $2"), (r"/:(\d+)/", "line $1")]);
         assert_eq!(said(&l, "settings.py:281-283"), "settings dot pie lines 281 to 283");
         assert_eq!(said(&l, "settings.py:498"), "settings dot pie line 498");
+    }
+
+    #[test]
+    fn a_pattern_wording_may_use_a_sub_shape() {
+        let pairs = vec![(r"/\[(?<items>[^\]]+)\]/".to_string(), "list of ${items|item|,=and}".to_string(), true)];
+        let subs = vec![("item".to_string(), r"\d+".to_string(), "number $0".to_string())];
+        let l = Lexicon::new(&pairs, &[], &subs);
+        assert_eq!(said(&l, "[1, 2]"), "list of number 1 and number 2");
     }
 
     #[test]

@@ -28,7 +28,10 @@ parses them; where a pronunciation applies is `readaloud.pronounce`'s business.
 a set way.  A shape is ``/pattern/ = wording``, its named groups the parts
 the wording names (``/(?<file>%{file}):(?<line>\\d+)/ = $file line $line``);
 a part is ``name = pattern``, a piece any pattern below it or any shape can
-use as ``%{name}``.  readaloud has no shape and no part of its own: a file
+use as ``%{name}``.  A named shape, ``param: /pattern/ = wording``, is never
+found on its own: the shapes below it use it as ``%{param}`` in a pattern and
+as ``${group|param}`` in a wording, which says each of its matches in that
+group.  readaloud has no shape and no part of its own: a file
 without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
 `TEMPLATE_PRONUNCIATIONS` are what the shipped file holds.
 
@@ -117,16 +120,25 @@ class Config:
     pronunciations: tuple[tuple[str, str], ...] = ()
     # (pattern as written, wording) of each [shapes] line, in file order
     shapes: tuple[tuple[str, str], ...] = ()
+    # (name, pattern as written, wording) of each named [shapes] line
+    named_shapes: tuple[tuple[str, str, str], ...] = ()
     # (name, pattern as written) of each [parts] line, in file order
     parts: tuple[tuple[str, str], ...] = ()
 
     @property
     def shape_patterns(self) -> tuple[tuple[str, str], ...]:
         """The shapes as `readaloud.pronounce.Lexicon` takes them: each
-        pattern without its slashes and with its parts filled in."""
-        parts = expand_parts(self.parts)
-        return tuple((_fill(pattern[1:-1], parts), say)
+        pattern without its slashes and with its parts and named shapes
+        filled in."""
+        fills, _subs = _shape_fills(self.parts, self.named_shapes)
+        return tuple((_fill(pattern[1:-1], fills), say)
                      for pattern, say in self.shapes)
+
+    @property
+    def sub_patterns(self) -> tuple[tuple[str, str, str], ...]:
+        """The named shapes as `readaloud.pronounce.Lexicon` takes them:
+        ``(name, pattern, wording)``, the pattern filled in like a shape's."""
+        return _shape_fills(self.parts, self.named_shapes)[1]
 
 
 # --------------------------------------------------------------------------- #
@@ -161,10 +173,11 @@ _FIELDS: tuple[_Field, ...] = (
 _BY_NAME = {f.name: f for f in _FIELDS}
 
 # The dataclass and the metadata table are edited by hand; keep them honest.
-# pronunciations, shapes and parts are the fields that are not [config]
-# keys.
+# pronunciations, shapes, named shapes and parts are the fields that are not
+# [config] keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
-                           - {"pronunciations", "shapes", "parts"})
+                           - {"pronunciations", "shapes", "named_shapes",
+                              "parts"})
 
 
 def _default_of(name: str) -> object:
@@ -320,17 +333,18 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             notes = [f"[{PRONUNCIATIONS}] could not be used ({exc!r})"]
         try:
             parts, part_problems = _parse_parts(lifted.get(PARTS, []))
-            shapes, shape_problems = _parse_shapes(lifted.get(SHAPES, []),
-                                                   parts)
+            shapes, named, shape_problems = _parse_shapes(
+                lifted.get(SHAPES, []), parts)
             problems += part_problems + shape_problems
         except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
-            parts, shapes = (), ()
+            parts, shapes, named = (), (), ()
             notes.append(f"[{SHAPES}] and [{PARTS}] could not be used "
                          f"({exc!r})")
         # Set before configparser gets a say: a [config] section it rejects
         # must not cost the pronunciations as well.
         cfg.pronunciations = pairs
         cfg.shapes = shapes
+        cfg.named_shapes = named
         cfg.parts = parts
         warnings += [f"{target}: {note}" for note in notes]
 
@@ -683,6 +697,46 @@ def _fill(pattern: str, parts: dict[str, str]) -> str:
     return _PART_RE.sub(lambda m: "(?:" + parts[m.group(1)] + ")", pattern)
 
 
+#: A named group's opening, ``(?<name>`` or ``(?P<name>``.
+_GROUP_OPEN_RE = re.compile(r"\(\?P?<[A-Za-z_]\w*>")
+
+
+def _unnamed(pattern: str) -> str:
+    """`pattern` with its named groups made non-capturing, so it may stand
+    in a pattern more than once."""
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i] == "\\":
+            out.append(pattern[i:i + 2])
+            i += 2
+            continue
+        opening = _GROUP_OPEN_RE.match(pattern, i)
+        if opening:
+            out.append("(?:")
+            i = opening.end()
+        else:
+            out.append(pattern[i])
+            i += 1
+    return "".join(out)
+
+
+def _shape_fills(parts: tuple[tuple[str, str], ...],
+                 named: tuple[tuple[str, str, str], ...]
+                 ) -> tuple[dict[str, str], tuple[tuple[str, str, str], ...]]:
+    """What each ``%{name}`` stands for in a shape, parts and named shapes
+    alike, and each named shape ``(name, filled pattern, wording)``.  A named
+    shape uses the parts and the named shapes above it, and stands in a
+    pattern with its groups unnamed."""
+    fills = expand_parts(parts)
+    subs = []
+    for name, pattern, wording in named:
+        filled = _fill(pattern[1:-1], fills)
+        subs.append((name, filled, wording))
+        fills[name] = _unnamed(filled)
+    return fills, tuple(subs)
+
+
 def _unknown_parts(pattern: str, parts: dict[str, str]) -> list[str]:
     return [m.group(1) for m in _PART_RE.finditer(pattern)
             if m.group(1) not in parts]
@@ -748,36 +802,59 @@ def _parse_parts(lines: list[tuple[int, str]]
 
 
 #: A reference in a wording: $$ (a dollar sign), $name, ${name}, or
-#: ${name|from=to|...}, the group with each `from` said as the word `to`.
+#: ${name|from=to|...}, the group with each `from` said as the word `to`;
+#: a piece without "=", ${name|shape}, says each match of a named shape.
 _REFERENCE_RE = re.compile(r"\$\$|\$\{([^}|]*)((?:\|[^}|]*)*)\}|\$(\w+)")
+#: A named shape's name, before its pattern: ``param: /pattern/``.
+_NAMED_SHAPE_RE = re.compile(r"([A-Za-z_]\w*)\s*:\s*(?=/)")
 
 
 def _parse_shapes(lines: list[tuple[int, str]],
                   parts: tuple[tuple[str, str], ...] = ()
-                  ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
-    """Return ``(shapes, problems)`` for the ``[shapes]`` lines.
+                  ) -> tuple[tuple[tuple[str, str], ...],
+                             tuple[tuple[str, str, str], ...], list[str]]:
+    """Return ``(shapes, named, problems)`` for the ``[shapes]`` lines.
 
     `shapes` is ``(/pattern/ as written, wording)`` per usable line, in file
-    order, which is the order they are tried in.  The same pattern twice is a
-    problem, and the later line wins, taking its own place in the order.
+    order, which is the order they are tried in.  `named` is ``(name,
+    /pattern/, wording)`` per usable named line: a named shape is never
+    found on its own, but the lines below it may use it, as ``%{name}`` in a
+    pattern or ``${group|name}`` in a wording.  The same pattern, or the same
+    name, twice is a problem, and the later line wins, taking its own place
+    in the order.
     """
-    filled = expand_parts(parts)
+    fills = expand_parts(parts)
     usable: dict[str, tuple[int, str]] = {}
+    named: dict[str, tuple[int, str, str]] = {}
     problems: list[str] = []
     for n, raw in lines:
-        parsed = _parse_shape(n, raw, filled)
+        parsed = _parse_shape(n, raw, fills, named)
         if isinstance(parsed, str):
             problems.append(parsed)
         elif parsed is not None:
-            pattern, wording = parsed
-            if pattern in usable:
-                problems.append(f"[{SHAPES}] line {n}: "
-                                f"{_shown_pattern(pattern)} is also on line "
-                                f"{usable[pattern][0]}; line {n} wins")
-                del usable[pattern]
-            usable[pattern] = (n, wording)
+            name, pattern, wording = parsed
+            at = f"[{SHAPES}] line {n}: "
+            if name is None:
+                if pattern in usable:
+                    problems.append(f"{at}{_shown_pattern(pattern)} is also on "
+                                    f"line {usable[pattern][0]}; line {n} wins")
+                    del usable[pattern]
+                usable[pattern] = (n, wording)
+                continue
+            if any(name == part for part, _ in parts):
+                problems.append(f"{at}{name!r} is also a part; give the shape "
+                                f"another name")
+                continue
+            if name in named:
+                problems.append(f"{at}{name!r} is also on line "
+                                f"{named[name][0]}; line {n} wins")
+                del named[name]
+            named[name] = (n, pattern, wording)
+            fills[name] = _unnamed(_fill(pattern[1:-1], fills))
     return (tuple((pattern, wording)
                   for pattern, (_n, wording) in usable.items()),
+            tuple((name, pattern, wording)
+                  for name, (_n, pattern, wording) in named.items()),
             _capped(problems, SHAPES))
 
 
@@ -790,15 +867,20 @@ def _capped(problems: list[str], section: str) -> list[str]:
     return problems
 
 
-def _parse_shape(n: int, raw: str, parts: dict[str, str]
-                 ) -> tuple[str, str] | str | None:
-    """One ``/pattern/ = wording`` line: the pair, a problem, or None.
+def _parse_shape(n: int, raw: str, parts: dict[str, str],
+                 named: dict[str, object] | None = None
+                 ) -> tuple[str | None, str, str] | str | None:
+    """One ``[name:] /pattern/ = wording`` line: ``(name or None, pattern,
+    wording)``, a problem, or None.
 
     The separator, the quotes and the comments follow the pronunciation
-    lines.  The pattern may use the parts as ``%{name}`` and must not match
-    empty text; the wording may be empty, which says the text as written,
-    and may name the pattern's groups as ``$name``, ``${name}`` or by number.
+    lines.  The pattern may use the parts, and the named shapes in `parts`,
+    as ``%{name}`` and must not match empty text; the wording may be empty,
+    which says the text as written, may name the pattern's groups as
+    ``$name``, ``${name}`` or by number, and may say a group through one of
+    the `named` shapes as ``${group|name}``.
     """
+    named = named or {}
     at = f"[{SHAPES}] line {n}: "
     line = raw.strip()
     if not line or line[0] in "#;":
@@ -808,6 +890,9 @@ def _parse_shape(n: int, raw: str, parts: dict[str, str]
         return f'{at}{_shown(line)} has no "="; write it as: /pattern/ = wording'
     pattern, wording = sides
     wording = _normalise(wording)
+    name = _NAMED_SHAPE_RE.match(pattern)
+    if name:
+        pattern = pattern[name.end():]
     shown = _shown_pattern(pattern)
     if not is_pattern(pattern):
         return f"{at}{_shown(pattern)} is not a pattern between slashes"
@@ -825,10 +910,21 @@ def _parse_shape(n: int, raw: str, parts: dict[str, str]
     references = [m.group(1) if m.group(1) is not None else m.group(3)
                   for m in found]
     for m in found:
+        shapes_named = []
         for swap in filter(None, (m.group(2) or "").split("|")):
-            if "=" not in swap or swap.startswith("="):
+            if "=" not in swap:
+                shapes_named.append(swap)
+            elif swap.startswith("="):
                 return (f"{at}{_shown(m.group(0))}: write a replacement as "
                         f"|text=word, such as ${{path|/=slash}}")
+        for called in shapes_named:
+            if called not in named:
+                return (f"{at}{_shown(m.group(0))} names no shape above it; "
+                        f"write a replacement as |text=word, and a named "
+                        f"shape as name: /pattern/ = wording")
+        if len(shapes_named) > 1:
+            return f"{at}{_shown(m.group(0))} names two shapes; use one"
+
     for ref in references:
         if not (ref in names or (ref.isdigit() and int(ref) <= count)):
             known = ", ".join("$" + name for name in names) or "none"
@@ -839,7 +935,7 @@ def _parse_shape(n: int, raw: str, parts: dict[str, str]
     if wording and not references and not any(ch.isalnum() for ch in wording):
         return (f"{at}{_shown(wording)} has nothing to say; leave it empty to "
                 f"say the text as written")
-    return pattern, wording
+    return (name.group(1) if name else None), pattern, wording
 
 
 def _quoted(text: str) -> tuple[str, str] | None:
@@ -877,7 +973,7 @@ def _shipped() -> tuple[tuple[tuple[str, str], ...], ...]:
     _ini, sections, _warnings = _split_sections(template())
     pairs, _ = _parse_pronunciations(sections[PRONUNCIATIONS])
     parts, _ = _parse_parts(sections[PARTS])
-    shapes, _ = _parse_shapes(sections[SHAPES], parts)
+    shapes, _named, _ = _parse_shapes(sections[SHAPES], parts)
     return pairs, parts, shapes
 
 

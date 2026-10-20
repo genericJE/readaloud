@@ -575,7 +575,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
     # Built once whichever way the document is read; --no-config has none.
     from .pronounce import Lexicon
 
-    pronunciations = Lexicon(cfg.pronunciations, cfg.shape_patterns)
+    pronunciations = Lexicon(cfg.pronunciations, cfg.shape_patterns,
+                             cfg.sub_patterns)
     no_color = not args.color
     md_notices: list[str] = []
     if mdcat is not None:

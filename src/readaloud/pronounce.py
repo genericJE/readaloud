@@ -128,14 +128,18 @@ class Lexicon:
     compile, is skipped all the same.  `shapes` are (pattern, wording) in
     file order, the patterns without slashes and with their parts filled in;
     none by default.  A shape is only looked for at the word slots handed to
-    :meth:`find`.
+    :meth:`find`.  `subshapes` are the named shapes, (name, pattern,
+    wording): never found on their own, they say each of their matches in
+    a group whose wording calls on them as ``${group|name}``.
     """
 
     def __init__(self, pairs: Iterable[tuple[str, str]] = (),
-                 shapes: Iterable[tuple[str, str]] = ()) -> None:
+                 shapes: Iterable[tuple[str, str]] = (),
+                 subshapes: Iterable[tuple[str, str, str]] = ()) -> None:
         self._core = _core.Lexicon(
             [(written, spoken, is_pattern(written)) for written, spoken in pairs],
-            [(name, say) for name, say in shapes])
+            [(pattern, say) for pattern, say in shapes],
+            [(name, pattern, say) for name, pattern, say in subshapes])
 
     @property
     def shapes(self) -> int:

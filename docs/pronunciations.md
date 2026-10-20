@@ -141,8 +141,10 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
 - **A shape starts where a word starts and ends where a word ends,** or just past the
   punctuation after a word, so it sees the whole of `settings.py:498`, both sides of the
   colon, and never matches inside a word: `/py:\d+/` does not fire in `a.py:12`. It may
-  span up to eight words, so `/(?<file>%{file})\((?<line>\d+)\)/` can read
-  `x.py(12)` and `/File "(?<file>[^"]+)", line (?<line>\d+)/` a Python traceback.
+  span up to 48 words and several lines, so `/(?<file>%{file})\((?<line>\d+)\)/` can read
+  `x.py(12)`, `/File "(?<file>[^"]+)", line (?<line>\d+)/` a Python traceback, and a
+  [named shape](#named-shapes) a function signature. To cross a line, a pattern uses `\s`
+  or a class such as `[^()]`; `.` and `\S` stop at the end of a line.
 - **The first line that fits wins.** At each word the lines are tried in order, and the
   first that fits takes its longest fit there. That is why the hosts come first: they
   keep `example.com:443` a host, while `a.py:12`, whose `.py` is no web domain, falls
@@ -167,6 +169,46 @@ of a path, however many there are; more replacements can follow, as in
 in the wording of a pattern under `[pronunciations]`. A line that cannot be used
 is reported with its line number and costs only itself: a pattern that will not compile or
 could match empty text, a group the pattern does not have, a part that does not exist.
+
+### Named shapes
+
+A pattern can say a list only if it knows how long the list is, since a group that repeats
+keeps only its last match. A named shape says a list of any length. Give a `[shapes]` line
+a name, `name: /pattern/ = wording`, and it is never looked for on its own; the lines
+below it use it instead:
+
+- **In a wording, `${group|name}`** says every match of the named shape in what the group
+  matched, each by the named shape's wording with its own groups. The text between the
+  matches goes through the `|from=to` replacements of the same `${...}`, so
+  `${params|param|,=and}` says each parameter and an "and" for each comma.
+- **In a pattern, `%{name}`** stands for the named shape's pattern, as a part would, with
+  its groups unnamed so it may appear more than once.
+
+This reads a Python `def`, on one line or spread over several:
+
+```ini
+[parts]
+ident = [A-Za-z_]\w*
+
+[shapes]
+dflt: /=\s*(?<v>[^,)]+)/ = with a default of $v
+param: /(?<name>%{ident})\s*(?<type>:\s*[^,=)]+)?\s*(?<default>=\s*[^,)]+)?/ = $name ${default|dflt} ${type|:=type}
+/def\s+(?<fn>%{ident})\s*\((?<params>[^()]*?),?\s*\)\s*(?<ret>->\s*[^:]+)?:/ = function $fn takes ${params|param|,=and} ${ret|->=and returns a}
+
+[pronunciations]
+str = string
+```
+
+`def foo(bar: int, baz: str='') -> str:` is then "function foo takes bar type int and baz
+with a default of empty string type string and returns a string": `''` is the shipped
+"empty string" and `str` the entry above, since the whole wording goes through your
+pronunciations once more. A group that took no part, such as a missing default, says
+nothing. A shape may name only the named shapes above it, one per `${...}`, and named
+shapes may call on one another eight deep. `dflt` is a named shape, not `|=...`, because
+a replacement cannot start with `=`. `[^,=)]` keeps the example short: a type such as
+`dict[str, int]` breaks at its comma, and `*args` keeps its star unless you add `|*=star`.
+A shape is found within one stretch of text: a blank line ends one, and so can a long
+paragraph, which is cut at about 380 characters.
 
 ### Parts
 

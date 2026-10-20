@@ -74,18 +74,22 @@ struct PyLexicon {
 #[pymethods]
 impl PyLexicon {
     /// `pairs` are `(written, spoken, is_pattern)` in file order; `shapes`
-    /// are `(pattern, wording)` in file order.
+    /// are `(pattern, wording)` in file order, and `subs` the named shapes,
+    /// `(name, pattern, wording)`.
     #[new]
-    #[pyo3(signature = (pairs = Vec::new(), shapes = Vec::new()))]
+    #[pyo3(signature = (pairs = Vec::new(), shapes = Vec::new(), subs = Vec::new()))]
     fn new(
         pairs: Vec<(Bound<'_, PyString>, Bound<'_, PyString>, bool)>,
         shapes: Vec<(Bound<'_, PyString>, Bound<'_, PyString>)>,
+        subs: Vec<(Bound<'_, PyString>, Bound<'_, PyString>, Bound<'_, PyString>)>,
     ) -> Self {
         let pairs: Vec<(String, String, bool)> =
             pairs.iter().map(|(w, s, p)| (text_of(w), text_of(s), *p)).collect();
         let shapes: Vec<(String, String)> =
             shapes.iter().map(|(pattern, say)| (text_of(pattern), text_of(say))).collect();
-        PyLexicon { inner: pronounce::Lexicon::new(&pairs, &shapes) }
+        let subs: Vec<(String, String, String)> =
+            subs.iter().map(|(n, p, s)| (text_of(n), text_of(p), text_of(s))).collect();
+        PyLexicon { inner: pronounce::Lexicon::new(&pairs, &shapes, &subs) }
     }
 
     fn __len__(&self) -> usize {
