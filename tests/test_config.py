@@ -25,6 +25,7 @@ import os
 import random
 import re
 import stat
+import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -811,117 +812,60 @@ def test_load_never_raises_on_garbage_in_the_section(tmp_path):
 # template
 # --------------------------------------------------------------------------- #
 
-
-def test_template_mentions_every_key_with_its_default():
-    text = config.template()
-    assert f"[{config.SECTION}]" in text
-    for field in ("voice", "speed", "lang", "repo", "sentences", "chars",
-                  "prefetch", "device", "color", "follow_lead",
-                  "follow_margin", "media_keys"):
-        assert re.search(rf"(?m)^#{field} =", text), field
-        assert re.search(rf"(?m)^# default:.*\n#{field} =", text), field
+SHIPPED_FILE = Path(config.__file__).with_name("readaloud.conf")
 
 
-def test_template_says_media_keys_needs_the_optional_extra():
-    """A user who turns it on and sees nothing happen must be able to find out
-    why from the file itself: the feature is inert without PyObjC."""
-    text = config.template()
-    block = text[text.index("#media_keys ") - 600:text.index("#media_keys ")]
-    assert "mediakeys" in block            # the extra's name
-    assert "play/pause" in block
-
-
-def test_template_has_a_comment_above_every_key():
-    lines = config.template().splitlines()
-    for i, line in enumerate(lines):
-        if re.match(r"^#\w+ =", line):
-            assert lines[i - 1].startswith("# default:")
-            assert lines[i - 2].startswith("# ")
-
-
-def test_template_round_trips_to_the_defaults(tmp_path):
-    path = write(tmp_path / "c.conf", config.template())
-    cfg, warnings = config.load(path)
-    assert cfg == SHIPPED
+def shipped() -> Config:
+    """What a fresh file says, as `load` reads it."""
+    with tempfile.TemporaryDirectory() as folder:
+        cfg, warnings = config.load(write(Path(folder) / "c.conf",
+                                          config.template()))
     assert warnings == []
+    return cfg
 
 
-def test_uncommented_template_round_trips_to_the_defaults(tmp_path):
-    live = re.sub(r"(?m)^#(\w+ =.*)$", r"\1", config.template())
-    assert "\nvoice = af_heart" in live  # the un-commenting really happened
-    cfg, warnings = config.load(write(tmp_path / "c.conf", live))
-    assert cfg == SHIPPED
+#: What a fresh file says out of the box.
+SHIPPED = shipped()
+
+
+def test_template_is_the_shipped_file_as_it_is():
+    assert config.template() == SHIPPED_FILE.read_text(encoding="utf-8")
+
+
+def test_template_loads_without_a_warning(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf", config.template()))
     assert warnings == []
-
-
-TEMPLATE_EXAMPLES = (
-    ("GIF", "jif"),
-    ("New York City", "NYC"),
-    ("#include", "hash include"),
-)
-
-#: What a fresh file says out of the box, settings at their defaults.
-SHIPPED = Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS,
-                 shapes=config.TEMPLATE_SHAPES, parts=config.TEMPLATE_PARTS)
+    assert cfg.pronunciations == config.TEMPLATE_PRONUNCIATIONS
+    assert cfg.parts == config.TEMPLATE_PARTS
+    assert cfg.shapes == config.TEMPLATE_SHAPES
+    assert cfg.pronunciations and cfg.parts and cfg.shapes
 
 
 def test_template_ends_with_a_live_pronunciations_section():
+    """A line appended to a fresh file lands under [pronunciations]."""
     text = config.template()
     head, _, block = text.partition(f"\n[{config.PRONUNCIATIONS}]\n")
     assert block, "no live [pronunciations] header"
     assert f"[{config.SECTION}]" in head
-    shipped = {config._pronunciation_line(text, say)
-               for text, say in config.TEMPLATE_PRONUNCIATIONS}
-    assert shipped <= set(block.splitlines())
-    assert all(line.startswith("# ") or line == "#" or line in shipped
-               for line in block.splitlines() if line)
-
-
-def test_template_lines_fit_in_79_columns():
-    assert max(len(line) for line in config.template().splitlines()) <= 79
-
-
-def test_uncommented_pronunciation_examples_are_exactly_the_pairs(tmp_path):
-    """Only the examples hold " = ", so taking the "# " off every line that
-    does must use the examples and leave every help line a comment."""
-    head, header, block = config.template().partition(
-        f"\n[{config.PRONUNCIATIONS}]\n")
-    live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", block)
-    # exactly the examples came alive: no help line holds " = "
-    assert set(live.splitlines()) - set(block.splitlines()) == {
-        config._pronunciation_line(text, say)
-        for text, say in TEMPLATE_EXAMPLES}
-    path = write(tmp_path / "c.conf", head + header + live)
-    cfg, warnings = config.load(path)
-    every = config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES
-    assert (cfg.pronunciations, warnings) == (every, [])
-
-
-def test_everything_uncommented_in_the_template(tmp_path):
-    live = re.sub(r"(?m)^#(\w+ =.*)$", r"\1", config.template())
-    live = re.sub(r"(?m)^# (\S.* = .*)$", r"\1", live)
-    cfg, warnings = config.load(write(tmp_path / "c.conf", live))
-    assert warnings == []
-    assert cfg == Config(
-        pronunciations=config.TEMPLATE_PRONUNCIATIONS + TEMPLATE_EXAMPLES,
-        shapes=config.TEMPLATE_SHAPES, parts=config.TEMPLATE_PARTS)
+    assert not re.search(r"(?m)^\[", block)
 
 
 def test_every_shipped_pronunciation_is_usable(tmp_path):
-    """Each one on its own: parsed, no warning, and not a settings name (the
+    """Each line on its own: parsed, no warning, and not a settings name (the
     parser refuses those), so a new entry cannot be quietly dropped."""
-    for text, say in config.TEMPLATE_PRONUNCIATIONS:
-        line = config._pronunciation_line(text, say)
+    block = config.template().partition(f"\n[{config.PRONUNCIATIONS}]\n")[2]
+    lines = [line for line in block.splitlines()
+             if line.strip() and not line.lstrip().startswith(("#", ";"))]
+    assert len(lines) == len(config.TEMPLATE_PRONUNCIATIONS)
+    for line, pair in zip(lines, config.TEMPLATE_PRONUNCIATIONS):
         cfg, warnings = config.load(
             write(tmp_path / "c.conf", f"[pronunciations]\n{line}\n"))
-        assert (cfg.pronunciations, warnings) == (((text, say),), []), line
+        assert (cfg.pronunciations, warnings) == ((pair,), []), line
 
 
-def test_the_shipped_pronunciations_do_not_repeat_themselves(tmp_path):
+def test_the_shipped_pronunciations_do_not_repeat_themselves():
     texts = [text for text, _say in config.TEMPLATE_PRONUNCIATIONS]
     assert len(texts) == len(set(texts))
-    examples = {text for text, _say in TEMPLATE_EXAMPLES}
-    assert not examples & set(texts)   # a repeat would warn on uncommenting
 
 
 def test_write_template_returns_the_path_and_writes_the_text(tmp_path):

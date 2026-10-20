@@ -879,16 +879,11 @@ def test_write_config_writes_a_template_that_parses_back_to_defaults(
     conf = tmp_path / "out.conf"
     assert cli.main(["--config", str(conf), "--write-config"]) == cli.EXIT_OK
     assert str(conf) in capsys.readouterr().out
+    # the shipped file, as it is, and it loads without a warning
+    assert conf.read_text(encoding="utf-8") == config.template()
     cfg, warnings = config.load(conf)
     assert warnings == []
-    assert cfg == config.Config(
-        pronunciations=config.TEMPLATE_PRONUNCIATIONS,
-        shapes=config.TEMPLATE_SHAPES,
-        parts=config.TEMPLATE_PARTS)
-    # and every key is present, commented out, with its default spelled out
-    text = conf.read_text(encoding="utf-8")
-    for field in ("voice", "speed", "follow_lead", "follow_margin", "color"):
-        assert f"#{field} = " in text or f"#{field} =" in text
+    assert cfg.pronunciations == config.TEMPLATE_PRONUNCIATIONS
 
 
 def test_write_config_overwrites_and_exits_without_reading_input(tmp_path,
@@ -896,7 +891,7 @@ def test_write_config_overwrites_and_exits_without_reading_input(tmp_path,
     conf = tmp_path / "out.conf"
     conf.write_text("nonsense that is not a config at all\n", encoding="utf-8")
     assert cli.main(["--config", str(conf), "--write-config"]) == cli.EXIT_OK
-    assert conf.read_text(encoding="utf-8").startswith("# ~/.readaloud.conf")
+    assert conf.read_text(encoding="utf-8") == config.template()
 
 
 def test_write_config_to_an_impossible_path_is_a_message(tmp_path, capsys):
@@ -2716,13 +2711,9 @@ def test_pty_first_run_leaves_a_config_behind(stub_child, tmp_path):
         st = p.wait(10)
     assert st is not None and os.WEXITSTATUS(st) == 0
     assert conf.exists(), "the first run did not write ~/.readaloud.conf"
-    cfg, warnings = config.load(conf)
-    # the settings at their defaults, and the shapes and pronunciations it
-    # ships
-    assert (cfg, warnings) == (
-        config.Config(pronunciations=config.TEMPLATE_PRONUNCIATIONS,
-                      shapes=config.TEMPLATE_SHAPES,
-        parts=config.TEMPLATE_PARTS), [])
+    # the shipped file, as it is
+    assert conf.read_text(encoding="utf-8") == config.template()
+    assert config.load(conf)[1] == []
 
 
 def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):

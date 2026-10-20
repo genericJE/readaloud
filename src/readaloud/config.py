@@ -11,13 +11,12 @@ argparse: baking config values in as argparse defaults would make "did the user
 pass this flag?" unanswerable.
 
 The file is INI (stdlib `configparser`), and it is meant to be hand-edited.
-The settings live in a ``[readaloud]`` section: `template` emits a comment
-above every key explaining it and showing its default, with every key
-commented out, so an untouched file leaves every setting at its default.
+The settings live in a ``[readaloud]`` section.  A first run, and
+``--write-config``, write `template`: the file shipped in the package as
+``readaloud/readaloud.conf``, copied as it is.
 
-A ``[pronunciations]`` section holds ``text = how to say it`` lines.  Unlike
-the settings, it is not empty to begin with: `template` writes the entries in
-`TEMPLATE_PRONUNCIATIONS`, the words Kokoro is measurably wrong about, as
+A ``[pronunciations]`` section holds ``text = how to say it`` lines, which
+the shipped file fills with the words Kokoro is measurably wrong about, as
 ordinary lines the reader can edit or delete.  Those lines are what
 configparser cannot read: it lowercases keys, splits "std::vector" at the
 colon, takes "[1] = x" for a section header, and one line without a delimiter
@@ -30,8 +29,8 @@ a set way.  A shape is ``/pattern/ = wording``, its named groups the parts
 the wording names (``/(?<file>%{file}):(?<line>\\d+)/ = $file line $line``);
 a part is ``name = pattern``, a piece any pattern below it or any shape can
 use as ``%{name}``.  readaloud has no shape and no part of its own: a file
-without the sections has none, and `template` writes `TEMPLATE_PARTS` and
-`TEMPLATE_SHAPES` into a fresh one, like the shipped pronunciations.
+without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
+`TEMPLATE_PRONUNCIATIONS` are what the shipped file holds.
 
 Nothing here raises.  A missing file means plain defaults and no warning; an
 unreadable, binary, duplicated or malformed file means the defaults for
@@ -49,6 +48,7 @@ import io
 import re
 import unicodedata
 from dataclasses import dataclass, fields as _dataclass_fields
+from importlib import resources
 from pathlib import Path
 
 from .pronounce import (Literal, check_pattern, check_regex, check_shape,
@@ -129,7 +129,7 @@ class Config:
 
 
 # --------------------------------------------------------------------------- #
-# field metadata -- drives both parsing and the generated template
+# field metadata -- drives the parsing
 # --------------------------------------------------------------------------- #
 
 
@@ -137,67 +137,23 @@ class Config:
 class _Field:
     name: str
     kind: str                      # "str" | "int" | "float" | "bool"
-    help: tuple[str, ...]          # comment lines, without the leading "# "
     lo: float | None = None
     hi: float | None = None
 
 
 _FIELDS: tuple[_Field, ...] = (
-    _Field("voice", "str", (
-        "Kokoro voice name.  `readaloud --list-voices` prints the ones your",
-        "model repo has; the first letter picks the language (a=American",
-        "English, b=British, e=Spanish, f=French, i=Italian, j=Japanese, ...).",
-    )),
-    _Field("speed", "float", (
-        "Speech rate multiplier.  Clamped to 0.5 - 3.0.",
-    ), lo=0.5, hi=3.0),
-    _Field("lang", "str", (
-        "Kokoro language code.  Leave empty to derive it from the voice name,",
-        "which is almost always what you want.",
-    )),
-    _Field("repo", "str", (
-        "HuggingFace model repo to load the voice from.",
-    )),
-    _Field("sentences", "int", (
-        "Maximum sentences per spoken chunk.  Smaller chunks start sooner and",
-        "seek more finely; larger ones give the model more context.  Minimum 1.",
-    ), lo=1),
-    _Field("chars", "int", (
-        "Maximum characters per spoken chunk, whichever limit is hit first.",
-        "Minimum 1.",
-    ), lo=1),
-    _Field("prefetch", "int", (
-        "Chunks to synthesize ahead of the one being spoken.  0 disables",
-        "prefetching (less memory, audible gaps between chunks).",
-    ), lo=0),
-    _Field("device", "str", (
-        "Audio output device: an index, a substring of the device name, or",
-        "'default'.  Leave empty for the system default output device.",
-        "`readaloud --list-devices` prints the choices.",
-    )),
-    _Field("color", "bool", (
-        "Render the input's colours.  false is the equivalent of --no-color.",
-        "Accepts true/false, yes/no, on/off, 1/0.",
-    )),
-    _Field("follow_lead", "int", (
-        "Extra rows to scroll ahead in follow mode.  When the spoken word",
-        "reaches the bottom margin the view jumps this many rows further than",
-        "strictly needed, so the text about to be read sits around the middle",
-        "of the screen instead of pinned to the last row.  0 restores the old",
-        "creep-by-one-row behaviour.",
-    ), lo=0),
-    _Field("follow_margin", "int", (
-        "Rows kept between the spoken word and the top/bottom edge of the",
-        "viewport before follow mode scrolls.",
-    ), lo=0),
-    _Field("media_keys", "bool", (
-        "Take over the system play/pause button -- the one on a Bluetooth",
-        "headset, on the keyboard, and in Control Center -- so pressing it",
-        "pauses readaloud instead of launching Apple Music.  Needs the",
-        "optional PyObjC extra (install with `uv tool install --editable",
-        "'.[mediakeys]'`); without it this setting does nothing at all.",
-        "false is the equivalent of --no-media-keys.",
-    )),
+    _Field("voice", "str"),
+    _Field("speed", "float", lo=0.5, hi=3.0),
+    _Field("lang", "str"),
+    _Field("repo", "str"),
+    _Field("sentences", "int", lo=1),
+    _Field("chars", "int", lo=1),
+    _Field("prefetch", "int", lo=0),
+    _Field("device", "str"),
+    _Field("color", "bool"),
+    _Field("follow_lead", "int", lo=0),
+    _Field("follow_margin", "int", lo=0),
+    _Field("media_keys", "bool"),
 )
 
 _BY_NAME = {f.name: f for f in _FIELDS}
@@ -211,13 +167,6 @@ assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
 
 def _default_of(name: str) -> object:
     return getattr(Config(), name)
-
-
-def _format_default(field: _Field) -> str:
-    value = _default_of(field.name)
-    if field.kind == "bool":
-        return "true" if value else "false"
-    return str(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -911,265 +860,24 @@ def _shown(text: str, limit: int = 40) -> str:
 # --------------------------------------------------------------------------- #
 
 
-_PREAMBLE = f"""\
-# ~/.readaloud.conf -- defaults for readaloud.
-#
-# Every setting under [{SECTION}] is commented out and shows its built-in
-# default, so this file as generated changes nothing.  Uncomment a line and
-# edit it to make that setting stick.  A command-line flag always wins over
-# this file, and this file always wins over the built-in default.
-#
-# [{PARTS}] and [{SHAPES}] set how readaloud says a file with its line
-# number, a host with its port and a time, and [{PRONUNCIATIONS}] at the end
-# how to say particular words.  They come filled in; delete any line you do
-# not want.
-#
-# Delete this file and readaloud will write a fresh copy on its next run.
-
-[{SECTION}]
-"""
-
-# Live header, commented body.  No help line may hold " = " with spaces round
-# it: only the examples do, so uncommenting them is all it takes to use them.
-_PRONUNCIATIONS_HELP = f"""\
-[{PRONUNCIATIONS}]
-# How to say a word or phrase: the text as written on the left of the "=",
-# and how to say it on the right, spelled the way it sounds.  Capitals are
-# usually read as letters, so ID says "eye dee".
-#
-# A word matches on its own and as part of a name: id matches the id, foo.id,
-# user_id and userId, but not idle or grid.  Lowercase text matches any case;
-# text with a capital matches that case only.  A space in a phrase matches any
-# spacing, one line break too.  Put quotes round text that starts with # or ;
-# or a quote, or that has an "=" with spaces round it.  Text between slashes
-# is a pattern, and $1 in how to say it is what its first group matched (see
-# docs/pronunciations.md in readaloud's repository).
-#
-# Try one before you rely on it: `readaloud 'user.id'` reads just that with
-# your pronunciations, and `readaloud --no-config 'user.id'` reads it without.
-#
-# These come with readaloud, and they are only lines in a file: delete one to
-# stop readaloud saying it that way, or edit it to say it your way.
-"""
-
-# Live headers and live lines, like [pronunciations]: a shape or a part is
-# there only while its line is.  No help line may hold " = " with spaces
-# round it.
-_PARTS_HELP = f"""\
-[{PARTS}]
-# Pieces of pattern the shapes below are built from: a name, then a regular
-# expression.  %{{name}} in a shape, or in a part further down, stands for
-# that piece.  Add a domain or a file extension here, or a piece of your own.
-"""
-
-_SHAPES_HELP = f"""\
-[{SHAPES}]
-# Text readaloud says a set way: a pattern between slashes, then what it
-# says, with $file, $line and the like standing for what the pattern's named
-# groups matched.  A shape starts and ends where a word does, and may span a
-# few words.  The lines are tried in order and the first that fits wins, so
-# a host is tried before a file.  What it says still goes through
-# [{PRONUNCIATIONS}], so the .py of settings.py:498 stays "dot pie".  An
-# empty right side says the text as written, which keeps a pattern off it:
-# Kokoro already says 14:35 as "fourteen thirty-five".  Delete a line to be
-# rid of that shape.
-"""
-
-#: The [parts] lines a fresh file comes with.
-TEMPLATE_PARTS: tuple[tuple[str, str], ...] = (
-    ("ext", r"[A-Za-z]\w*"),
-    ("file", r"\S+\.%{ext}"),
-    ("web", r"com|org|net|edu|gov|mil|int|info|biz|io|dev|ai|co|me|tv"),
-    ("newweb", r"cloud|tech|online|site|xyz"),
-    ("europe", r"de|uk|eu|fr|nl|ch|at|se|no|fi|dk|it|es|pt|pl|cz|be|ie"),
-    ("world", r"jp|cn|kr|in|us|ca|au|nz|br|ru"),
-    ("private", r"local|localdomain|lan|home|internal|intranet|corp"),
-    ("reserved", r"arpa|test|example|invalid"),
-    ("domain",
-     r"%{web}|%{newweb}|%{europe}|%{world}|%{private}|%{reserved}"),
-    ("name", r"[A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.(?i:%{domain})"),
-    ("octet", r"25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d"),
-    ("ipv4", r"%{octet}\.%{octet}\.%{octet}\.%{octet}"),
-    ("host", r"localhost|%{ipv4}|%{name}"),
-    ("port", r"6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|\d{1,4}"),
-    ("hostport", r"(?<host>%{host}):(?<port>%{port})"),
-    ("scheme", r"(?<scheme>https?|ftps?|ssh|git)://"),
-    ("path", "[^\\s<>\"'|)\\]]*[^\\s<>\"'|)\\].,;:!?]"),
-    ("hour", r"[01]?\d|2[0-3]"),
-    ("minute", r"[0-5]\d"),
-)
-
-#: The [shapes] lines a fresh file comes with, in the order they are tried.
-TEMPLATE_SHAPES: tuple[tuple[str, str], ...] = (
-    (r"/%{scheme}%{hostport}(?<path>/%{path})/",
-     "$host port $port ${path|/=slash}"),
-    (r"/%{scheme}%{hostport}/?/", "$host port $port"),
-    (r"/%{hostport}/", "$host port $port"),
-    (r"/(?<file>%{file}):(?<line>\d+):(?<col>\d+)/",
-     "$file line $line, column $col"),
-    (r"/(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/", "$file lines $from to $to"),
-    (r"/(?<file>%{file}):(?<line>\d+)/", "$file line $line"),
-    (r"/(?<hour>%{hour}):(?<minute>%{minute})(?::(?<second>%{minute}))?/", ""),
-)
-
-#: What the generated file says out of the box, in the groups it keeps.  Each
-#: one is text Kokoro reads wrongly without it, measured with misaki: it says
-#: "id" as Freud's id, spells JSON out letter by letter, swallows the dot of a
-#: file name, and runs "systemd" into a single cluster.
-_TEMPLATE_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
-    ("names, and the quotes that stand for nothing", (
-        ("id", "ID"),
-        ("ids", "IDs"),
-        ("''", "empty string"),
-        ('""', "empty string"),
-        ("'''", "triple quote"),
-        ('"""', "triple quote"),
-    )),
-    ("file types.  The three names come first: with the bare .md entry alone,\n"
-     "# README.md would be spelled out letter by letter", (
-        ("README.md", "readme dot M D"),
-        ("CHANGELOG.md", "changelog dot M D"),
-        ("TODO.md", "todo dot M D"),
-        (".md", "dot M D"),
-        (".txt", "dot text"),
-        (".rst", "dot R S T"),
-        (".json", "dot jason"),
-        (".yaml", "dot yaml"),
-        (".yml", "dot yaml"),
-        (".toml", "dot toml"),
-        (".ini", "dot I N I"),
-        (".cfg", "dot config"),
-        (".conf", "dot conf"),
-        (".env", "dot env"),
-        (".csv", "dot C S V"),
-        (".tsv", "dot T S V"),
-        (".xml", "dot X M L"),
-        (".html", "dot H T M L"),
-        (".css", "dot C S S"),
-        (".scss", "dot S C S S"),
-        (".js", "dot J S"),
-        (".jsx", "dot J S X"),
-        (".ts", "dot T S"),
-        (".tsx", "dot T S X"),
-        (".py", "dot pie"),
-        (".rb", "dot R B"),
-        (".go", "dot go"),
-        (".rs", "dot R S"),
-        (".java", "dot java"),
-        (".kt", "dot K T"),
-        (".swift", "dot swift"),
-        (".php", "dot P H P"),
-        (".lua", "dot lua"),
-        (".cpp", "dot C P P"),
-        (".hpp", "dot H P P"),
-        (".sh", "dot S H"),
-        (".bash", "dot bash"),
-        (".zsh", "dot Z S H"),
-        (".sql", "dot S Q L"),
-        (".sqlite", "dot sequel lite"),
-        (".db", "dot D B"),
-        (".log", "dot log"),
-        (".lock", "dot lock"),
-        (".pem", "dot pem"),
-        (".crt", "dot C R T"),
-        (".zip", "dot zip"),
-        (".tar", "dot tar"),
-        (".gz", "dot G Z"),
-        (".png", "dot P N G"),
-        (".jpg", "dot J peg"),
-        (".jpeg", "dot J peg"),
-        (".gif", "dot gif"),
-        (".svg", "dot S V G"),
-        (".webp", "dot web P"),
-        (".pdf", "dot P D F"),
-        (".mp3", "dot M P three"),
-        (".mp4", "dot M P four"),
-        (".wav", "dot wave"),
-        (".exe", "dot E X E"),
-        (".dll", "dot D L L"),
-        (".dylib", "dot dylib"),
-        (".app", "dot app"),
-    )),
-    ("languages, tools and formats", (
-        ("C#", "C sharp"),
-        ("F#", "F sharp"),
-        (".NET", "dot net"),
-        ("json", "jason"),
-        ("YAML", "yammle"),
-        ("TOML", "tommle"),
-        ("cli", "C L I"),
-        ("aws", "A. W. S."),
-        ("redis", "red iss"),
-        ("postgresql", "Postgres Q L"),
-        ("sqlite", "sequel lite"),
-        ("systemd", "system dee"),
-        ("journalctl", "journal control"),
-        ("kubectl", "cube control"),
-        ("k8s", "kubernetes"),
-        ("localhost", "local host"),
-        ("PyPI", "pie pea eye"),
-        ("enum", "ee num"),
-    )),
-    ("what the punctuation of code is called", (
-        ("!=", "not equals"),
-        ("-->", "arrow"),
-        ("->", "arrow"),
-        ("=>", "fat arrow"),
-        ("::", "colon colon"),
-        ("&&", "and and"),
-        ("||", "or or"),
-    )),
-)
-
-#: Every shipped pair, flat and in the file's order.
-TEMPLATE_PRONUNCIATIONS: tuple[tuple[str, str], ...] = tuple(
-    pair for _title, pairs in _TEMPLATE_GROUPS for pair in pairs)
-
-#: Left commented under the shipped ones, to show what else an entry can do.
-_TEMPLATE_EXAMPLES: tuple[tuple[str, str], ...] = (
-    ("GIF", "jif"),
-    ("New York City", "NYC"),
-    ("#include", "hash include"),
-)
-
-
-def _pronunciation_line(text: str, say: str) -> str:
-    """One ``text = how to say it`` line, the text quoted where it must be."""
-    if text[:1] in _QUOTES or text[:1] in "#;" or " = " in text:
-        quote = "'" if '"' in text else '"'
-        text = f"{quote}{text}{quote}"
-    return f"{text} = {say}"
-
-
 def template() -> str:
-    """The INI text of a fresh file: every setting present and commented out,
-    then the ``[parts]``, ``[shapes]`` and ``[pronunciations]`` sections with
-    their shipped lines, and the pronunciation examples commented out."""
-    out = [_PREAMBLE]
-    for field in _FIELDS:
-        block = [f"# {line}" for line in field.help]
-        block.append(f"# default: {_format_default(field) or '(empty)'}")
-        block.append(f"#{field.name} = {_format_default(field)}".rstrip())
-        out.append("\n".join(block) + "\n")
-    out.append(_PARTS_HELP + "\n".join(
-        f"{name} = {pattern}" for name, pattern in TEMPLATE_PARTS) + "\n")
-    out.append(_SHAPES_HELP + "\n".join(
-        f"{pattern} = {say}".rstrip() for pattern, say in TEMPLATE_SHAPES)
-        + "\n")
-    out.append(_pronunciations_block())
-    return "\n".join(out)
+    """The file a first run and ``--write-config`` write: the one shipped in
+    the package as ``readaloud/readaloud.conf``, as it is."""
+    return (resources.files(__package__) / "readaloud.conf").read_text(
+        encoding="utf-8")
 
 
-def _pronunciations_block() -> str:
-    """The ``[pronunciations]`` section: help, the shipped lines, examples."""
-    out = [_PRONUNCIATIONS_HELP]
-    for title, pairs in _TEMPLATE_GROUPS:
-        out.append(f"# {title}\n" + "\n".join(
-            _pronunciation_line(text, say) for text, say in pairs) + "\n")
-    out.append('# More to try.  To use one, delete the "# " in front of it.\n'
-               + "\n".join("# " + _pronunciation_line(text, say)
-                            for text, say in _TEMPLATE_EXAMPLES) + "\n")
-    return "\n".join(out)
+def _shipped() -> tuple[tuple[tuple[str, str], ...], ...]:
+    """The pronunciations, parts and shapes the shipped file holds."""
+    _ini, sections, _warnings = _split_sections(template())
+    pairs, _ = _parse_pronunciations(sections[PRONUNCIATIONS])
+    parts, _ = _parse_parts(sections[PARTS])
+    shapes, _ = _parse_shapes(sections[SHAPES], parts)
+    return pairs, parts, shapes
+
+
+#: What the shipped file holds, as `load` reads it.
+TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES = _shipped()
 
 
 def write_template(path: Path | None = None) -> Path:

@@ -45,16 +45,17 @@ def said(text: str, pairs=SHIPPED, shapes=SHIPPED_SHAPES
     ("node.js:20", "node dot J S line 20"),
     ("192.168.178.88:8123", "192.168.178.88 port 8123"),
     ("localhost:8080", "local host port 8080"),
-    ("example.com:443", "example.com port 443"),
-    ("EXAMPLE.COM:80", "EXAMPLE.COM port 80"),
-    ("www.example.co.uk:8443", "www.example.co.uk port 8443"),
+    ("example.com:443", "example dot com port 443"),
+    ("EXAMPLE.COM:80", "EXAMPLE dot com port 80"),
+    ("www.example.co.uk:8443", "www.example dot co dot U K port 8443"),
     ("https://example.com:8443/status?verbose=1&since=14:35",
-     "example.com port 8443 slash status?verbose=1&since=14:35"),
+     "H T T P S example dot com port 8443 slash status?verbose=1&since=14:35"),
     ("https://example.com:8443/docs/v2/index.html#setup",
-     "example.com port 8443 slash docs slash v2 slash index dot H T M L#setup"),
-    ("https://localhost:8443/health", "local host port 8443 slash health"),
-    ("http://192.168.178.88:8123", "192.168.178.88 port 8123"),
-    ("ssh://build-01.internal:2222/", "build-01.internal port 2222"),
+     "H T T P S example dot com port 8443 slash docs slash v2 slash index dot "
+     "H T M L#setup"),
+    ("https://localhost:8443/health", "H T T P S local host port 8443 slash health"),
+    ("http://192.168.178.88:8123", "H T T P 192.168.178.88 port 8123"),
+    ("ssh://build-01.internal:2222/", "S S H build-01.internal port 2222"),
 ])
 def test_a_shipped_shape_is_said_its_way_and_lit_whole(word, spoken):
     text, words = said(f"See {word} now")
@@ -88,18 +89,17 @@ def test_a_pattern_wording_can_replace_too():
         "Use version 1 point 2 point 3 now")
 
 
-def test_the_scheme_is_a_part_a_wording_may_say():
-    shapes = [(p, s.replace("$host port", "$scheme $host port"))
-              for p, s in SHIPPED_SHAPES[:1]]
-    assert said("Open https://localhost:8443/health",
-                pairs=list(SHIPPED) + [("https", "H T T P S")],
-                shapes=shapes)[0] == (
-        "Open H T T P S local host port 8443 slash health")
+def test_a_url_says_its_scheme_only_while_its_wording_names_it():
+    url = "Open https://localhost:8443/health"
+    assert said(url)[0] == "Open H T T P S local host port 8443 slash health"
+    shapes = [(p, w.replace("$scheme ", "")) for p, w in SHIPPED_SHAPES]
+    assert said(url, shapes=shapes)[0] == (
+        "Open local host port 8443 slash health")
 
 
 def test_a_url_keeps_sentence_punctuation_outside_its_path():
     text, words = said("Open https://localhost:8443/health. Then wait.")
-    assert text == "Open local host port 8443 slash health. Then wait."
+    assert text == "Open H T T P S local host port 8443 slash health. Then wait."
     assert words[1] == "https://localhost:8443/health"
 
 

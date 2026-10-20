@@ -26,13 +26,15 @@ OS = O S
 "#include" = hash include  # quote text that starts with # or ; or a quote
 ```
 
-A fresh `~/.readaloud.conf` already holds about ninety of these, each one a word Kokoro
+A fresh `~/.readaloud.conf` already holds about 125 of these, each one a word Kokoro
 was measured saying wrongly: the common file types (`main.py` is "main dot pie",
 `config.yml` is "config dot yaml", `README.md` keeps its name instead of being spelled
 out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string", `"""` is
 "triple quote"), languages and tools (`C#`, `.NET`, `json`, `YAML`, `systemd`,
 `journalctl`, `kubectl`, `k8s`, `redis`, `postgresql`, `PyPI`), and what the punctuation
-of code is called (`!=`, `->`, `=>`, `::`, `&&`, `||`). They are ordinary lines in your
+of code is called (`!=`, `->`, `=>`, `::`, `&&`, `||`), the URL schemes Kokoro says
+nothing for (`https`, `ssh`) and the common web domains (`.org`, `.io`, `.co.uk`). They are
+ordinary lines in your
 file: delete one to be rid of it, or edit it to say it your way. Anything readaloud
 already says correctly is deliberately absent, so `SQL` stays "sequel", `nginx` stays
 "engine x" and `C++` stays "C plus plus".
@@ -111,8 +113,8 @@ slashes and says how to read it, naming what the pattern's groups matched:
 
 ```ini
 [shapes]
-/%{scheme}%{hostport}(?<path>/%{path})/ = $host port $port ${path|/=slash}
-/%{scheme}%{hostport}/?/ = $host port $port
+/%{scheme}%{hostport}(?<path>/%{path})/ = $scheme $host port $port ${path|/=slash}
+/%{scheme}%{hostport}/?/ = $scheme $host port $port
 /%{hostport}/ = $host port $port
 /(?<file>%{file}):(?<line>\d+):(?<col>\d+)/ = $file line $line, column $col
 /(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/ = $file lines $from to $to
@@ -122,8 +124,8 @@ slashes and says how to read it, naming what the pattern's groups matched:
 
 | Text | Said, with the lines above |
 | --- | --- |
-| `https://example.com:8443/status?verbose=1` | example.com port 8443 slash status?verbose=1 |
-| `https://example.com:8443/docs/v2/index.html` | example.com port 8443 slash docs slash v2 slash index dot H T M L |
+| `https://example.com:8443/status?verbose=1` | H T T P S example dot com port 8443 slash status?verbose=1 |
+| `https://example.com:8443/docs/v2/index.html` | H T T P S example dot com port 8443 slash docs slash v2 slash index dot H T M L |
 | `localhost:8080`, `192.168.178.88:8123`, `example.com:443` | local host port 8080 |
 | `main.rs:12:5` | main dot R S line 12, column 5 |
 | `settings.py:281-283` | settings dot pie lines 281 to 283 |
@@ -146,9 +148,9 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
   keep `example.com:443` a host, while `a.py:12`, whose `.py` is no web domain, falls
   through to the files. A URL with a port says the port and then its path with each `/` said
   as "slash": Kokoro is silent for a slash, and a path that starts with one makes it drop
-  the query. A URL without a port is left as written. The scheme is a named group too, so
-  `$scheme $host port $port` says it; Kokoro is silent for `https` on its own, which a
-  pronunciation such as `https = H T T P S` fixes.
+  the query. A URL without a port is left as written. The scheme is said through `$scheme`; Kokoro
+  is silent for `https` on its own, so the shipped pronunciations spell it out
+  (`https = H T T P S`). Take `$scheme ` out of the wording to leave it unsaid.
 - **What it says goes through your pronunciations.** The `.py` of `settings.py:498`
   stays "dot pie" and `localhost` stays "local host", because a shape's wording is read
   by your entries once more before it is said.
@@ -279,8 +281,9 @@ are three different entries. An existing `~/.readaloud.conf` is never touched, s
 written by an older readaloud has neither the shipped entries nor the `[pronunciations]`
 line: add the line above your own entries, since an entry left under `[readaloud]` is
 ignored with a warning that it belongs under `[pronunciations]`. To take the shipped ones,
-copy them from a fresh template (`readaloud --write-config` writes one, discarding your
-edits, so save the file first if you have any). A fresh template ends
+copy them from a fresh file (`readaloud --write-config` writes one, discarding your
+edits, so save the file first if you have any), or from
+[Configuration](configuration.md#the-file-a-first-run-writes). A fresh file ends
 with `[pronunciations]`, so a setting added at the bottom of it lands there: `speed = 1.5`
 is then reported as a setting to move under `[readaloud]`, not taken for a word (quote it,
 `"speed" = spead`, if you do mean the word). A misspelled heading such as

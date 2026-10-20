@@ -23,7 +23,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--media-keys` / `--no-media-keys` | on | take over the system play/pause button, or leave it alone |
 | `--config PATH` | `~/.readaloud.conf` | read defaults from `PATH` instead |
 | `--no-config` | | ignore the config file; built-in defaults only |
-| `--write-config` | | write a fresh commented template (overwriting) and exit |
+| `--write-config` | | write the shipped config file (overwriting) and exit |
 | `--list-voices` | | print the voices for the chosen language |
 | `--list-devices` | | print the audio output devices |
 

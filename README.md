@@ -120,18 +120,18 @@ mode and the headphone button.
 
 ## Configuration
 
-The first run writes `~/.readaloud.conf`: every setting commented out at its default, and
-a `[pronunciations]` section already filled in with the words Kokoro says wrongly.
+The first run writes `~/.readaloud.conf`, a copy of the file readaloud ships: every setting
+at its default, the shapes that say a file with its line or a URL with its port, and the
+words Kokoro says wrongly, as ordinary lines to edit or delete. An excerpt:
 
 ```ini
-[readaloud]
-voice = af_heart
-speed = 1.0
+[shapes]
+/(?<file>%{file}):(?<line>\d+)/ = $file line $line
 
 [pronunciations]
 id = ID
-.py = dot pie
-C# = C sharp
+ids = IDs
+"''" = empty string
 ```
 
 Precedence is `explicit flag > ~/.readaloud.conf > built-in default`, key by key. The file
