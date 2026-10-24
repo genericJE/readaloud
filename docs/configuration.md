@@ -42,6 +42,7 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `follow_lead` | `20` | Extra rows follow mode scrolls past the strict minimum (see below). |
 | `follow_margin` | `5` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
 | `markdown` | `true` | Strip Markdown syntax (`#`, `**`, `[text](url)`) from a plain file, a string or a pipe before it is spoken. `false` reads it as written, which suits source code. Coloured input and `-md` are never stripped. |
+| `highlight` | `true` | Colour a source file by its grammar (see [Syntax](pronunciations.md#syntax)): keywords, strings, comments, names. `false` reads it in the terminal's plain colours; `--no-color` does too. |
 | `language` | empty | The grammar a source file is read with, where that differs from what its suffix says (`py` is `python`, `rs` is `rust`, and so on). Set it under `[config.<ext>]`. |
 | `parsers` | empty | A directory of `<language>.so` parser files, as Neovim's `:TSInstall` builds them, tried when no `tree-sitter-<language>` package is installed. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |

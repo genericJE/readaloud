@@ -913,6 +913,23 @@ def test_syntax_rules_read_a_python_file_through_its_grammar(
         "of empty string\nand returns type string"]
 
 
+def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
+    pytest.importorskip("tree_sitter_python")
+    source = tmp_path / "x.py"
+    source.write_text("def f():\n    pass  # c\n", encoding="utf-8")
+    conf = write_conf(tmp_path, "[config.py]\nmarkdown = no\n")
+    assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
+    runs = [(r.text, r.style.fg) for r in launched["doc"].lines[0]]
+    assert runs[:3] == [("def", 5), (" ", None), ("f", 4)]
+    assert launched["notices"] == []
+    # --no-color, and highlight = no, leave it plain
+    assert cli.main(["--config", str(conf), "--no-color", "-f", str(source)]) == 0
+    assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
+    conf = write_conf(tmp_path, "[config.py]\nmarkdown = no\nhighlight = no\n")
+    assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
+    assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
+
+
 def test_a_file_with_no_known_grammar_is_read_without_one(tmp_path, launched):
     conf = write_conf(tmp_path, "[syntax.xyz]\nfunction_definition = f $name\n")
     (tmp_path / "x.xyz").write_text("def f(): pass\n", encoding="utf-8")

@@ -100,7 +100,8 @@ def test_config_dataclass_defaults():
         voice="af_heart", speed=1.0, lang="", chars=380,
         repo="mlx-community/Kokoro-82M-4bit", sentences=4, prefetch=2,
         device="", color=True, follow_lead=20, follow_margin=5,
-        media_keys=True, markdown=True, language="", parsers="",
+        media_keys=True, markdown=True, highlight=True, language="",
+        parsers="",
     )
 
 
@@ -124,6 +125,7 @@ follow_lead = 12
 follow_margin = 5
 media_keys = false
 markdown = no
+highlight = no
 language = python
 parsers = ~/.local/share/nvim/lazy/nvim-treesitter/parser
 """
@@ -136,12 +138,12 @@ def test_every_key_is_read(tmp_path):
         voice="bf_emma", speed=1.25, lang="b", repo="hexgrad/Kokoro-82M",
         sentences=7, chars=500, prefetch=0, device="MacBook Pro Speakers",
         color=False, follow_lead=12, follow_margin=5, media_keys=False,
-        markdown=False, language="python",
+        markdown=False, highlight=False, language="python",
         parsers="~/.local/share/nvim/lazy/nvim-treesitter/parser",
     )
 
 
-@pytest.mark.parametrize("key", ["color", "media_keys", "markdown"])
+@pytest.mark.parametrize("key", ["color", "media_keys", "markdown", "highlight"])
 @pytest.mark.parametrize("raw,expected", [
     ("true", True), ("True", True), ("yes", True), ("on", True), ("1", True),
     ("false", False), ("FALSE", False), ("no", False), ("off", False),

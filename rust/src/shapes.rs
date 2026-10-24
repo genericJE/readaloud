@@ -466,10 +466,11 @@ mod tests {
         // `(` before self, so it lights self; `->` is no word, so "and
         // returns a" goes to the word after it
         // (the test slots split at white space only; the document's words
-        // leave the punctuation out, see tests/test_shapes.py)
+        // leave the punctuation out, see tests/test_shapes.py; a piece opens
+        // with a space when its first word had one before it)
         assert_eq!(
             lit_def("def foo(self, bar: int, baz: str='') -> str:"),
-            ["function", "foo takes self and", "bar type", "int and", "baz", "with a default of '' type str", "and returns a", "str"]
+            ["function", " foo takes self and", " bar type", " int and", " baz", " with a default of '' type str", " and returns a", " str"]
         );
     }
 
@@ -481,7 +482,7 @@ mod tests {
         assert_eq!(found[0].pieces, ["", "", "z then x"]);
         let shapes = [(r"(?<a>\w+) (?<b>\w+)", "$a: $b")];
         let found = Shapes::new(&to_owned(&shapes), &[]).found("x y", &slots("x y"));
-        assert_eq!(found[0].pieces, ["x:", "y"]);
+        assert_eq!(found[0].pieces, ["x:", " y"]);
     }
 
     fn to_owned(shapes: &[(&str, &str)]) -> Vec<(String, String)> {

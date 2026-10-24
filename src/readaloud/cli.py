@@ -230,32 +230,55 @@ def input_file(args: argparse.Namespace) -> str | None:
 
 
 def grammar_for_input(args: argparse.Namespace, cfg):
-    """The grammar the config's ``[syntax]`` rules read the input file with,
-    and the notices on the way: ``(grammar or None, notices)``.
+    """The grammar the input file is read with, for the config's
+    ``[syntax]`` rules and for colouring it, and the notices on the way:
+    ``(grammar or None, language or None, notices)``.
 
     Only a named file with a type (``-f x.py``) has a grammar, found by its
-    suffix or the ``language`` setting; without one, or with rules the
+    suffix or the ``language`` setting, and only when the config has rules
+    for it or wants it coloured; without a grammar, or with rules the
     grammar does not have, the notices say so and the file is read without.
     """
     from . import config as config_mod
     from . import syntax
 
     path = input_file(args)
-    if not cfg.syntax or not path or path == "-":
-        return None, []
+    if not (cfg.syntax or cfg.highlight) or not path or path == "-":
+        return None, None, []
     suffix = Path(path).suffix
     language = syntax.language_for(suffix, cfg.language)
     at = f"{config_path(args)}: "
     if language is None:
-        return None, [f"{at}[{config_mod.SYNTAX}{suffix.lower()}]: no grammar "
-                      f"is known for {suffix} files; set language under "
-                      f"[{config_mod.SECTION}{suffix.lower()}]"]
+        if not cfg.syntax:
+            return None, None, []          # nothing to colour it with: fine
+        return None, None, [
+            f"{at}[{config_mod.SYNTAX}{suffix.lower()}]: no grammar is known "
+            f"for {suffix} files; set language under "
+            f"[{config_mod.SECTION}{suffix.lower()}]"]
     try:
         grammar = syntax.grammar_for(language, cfg.parsers)
     except syntax.GrammarError as exc:
-        return None, [f"{at}{exc}"]
+        return None, language, [f"{at}{exc}"] if cfg.syntax else []
     section = f"{config_mod.SYNTAX}{suffix.lower()}"
-    return grammar, [f"{at}{p}" for p in syntax.check_rules(cfg.syntax, grammar, section)]
+    problems = syntax.check_rules(cfg.syntax, grammar, section)
+    return grammar, language, [f"{at}{p}" for p in problems]
+
+
+def highlighter_for_input(args: argparse.Namespace, cfg, grammar, language):
+    """What colours the input file by its `grammar`, or None, and the
+    notices on the way: nothing without a grammar, with ``highlight = no``,
+    with ``--no-color``, or for a grammar that ships no highlights query."""
+    from . import syntax
+
+    if grammar is None or not cfg.highlight or not args.color:
+        return None, []
+    query = syntax.highlights_for(language, cfg.parsers)
+    if query is None:
+        return None, []
+    try:
+        return syntax.highlighter(grammar, query), []
+    except syntax.GrammarError as exc:
+        return None, [f"{config_path(args)}: {language}: {exc}"]
 
 
 def document_name(args: argparse.Namespace) -> str:
@@ -331,11 +354,13 @@ def read_input(args: argparse.Namespace) -> str:
 
 def build_document(data: str, *, max_sentences: int, max_chars: int,
                    no_color: bool, pronunciations=None,
-                   strip_markdown: bool = True):
+                   strip_markdown: bool = True, highlighter=None):
     """Parse `data` (ANSI or raw markdown) into a `Document`.
 
     Plain input has its Markdown syntax stripped unless `strip_markdown` is
     false (the config file's ``markdown = no``); ANSI input never does.
+    `highlighter`, from `readaloud.syntax`, colours plain input by its
+    grammar; coloured input keeps the colours it came with.
 
     `pronunciations` is the config file's `readaloud.pronounce.Lexicon`, which
     the Document respells its chunks with.
@@ -344,8 +369,11 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
     from .document import Document
 
     lines = ansi.parse(data)
-    if strip_markdown and not ansi.has_ansi(data):
-        lines = ansi.strip_markdown(lines)
+    if not ansi.has_ansi(data):
+        if strip_markdown:
+            lines = ansi.strip_markdown(lines)
+        if highlighter is not None:
+            lines = highlighter(lines)
     if no_color:
         lines = _monochrome(lines)
     return Document(lines, max_sentences=max_sentences, max_chars=max_chars,
@@ -608,10 +636,13 @@ def _main(argv: Sequence[str] | None = None) -> int:
     # Built once whichever way the document is read; --no-config has none.
     from .pronounce import Lexicon
 
-    grammar, grammar_notices = grammar_for_input(args, cfg)
+    grammar, language, grammar_notices = grammar_for_input(args, cfg)
     warnings += grammar_notices
     pronunciations = Lexicon(cfg.pronunciations, cfg.shape_patterns,
                              cfg.sub_patterns, grammar, cfg.syntax)
+    highlighter, highlight_notices = highlighter_for_input(
+        args, cfg, grammar, language)
+    warnings += highlight_notices
     no_color = not args.color
     md_notices: list[str] = []
     if mdcat is not None:
@@ -646,6 +677,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             no_color=no_color,
             pronunciations=pronunciations,
             strip_markdown=cfg.markdown,
+            highlighter=highlighter,
         )
     if not doc.speakable_chunks:
         _err("the input contains nothing speakable (only rules, symbols or blanks)")

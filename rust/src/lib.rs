@@ -188,6 +188,19 @@ impl PyGrammar {
     fn field_names(&self) -> Vec<String> {
         self.inner.field_names()
     }
+
+    /// Every stretch of `text` the highlights `query` colours: `(start, end,
+    /// name)` in characters, `name` an index into `names`.
+    fn highlight(
+        &self,
+        py: Python<'_>,
+        text: &Bound<'_, PyString>,
+        query: &str,
+        names: Vec<String>,
+    ) -> PyResult<Vec<(usize, usize, usize)>> {
+        let text = text_of(text);
+        py.detach(|| self.inner.highlight(&text, query, &names)).map_err(PyValueError::new_err)
+    }
 }
 
 /// The syntax tree `grammar` makes of `text`, one node per line.

@@ -280,6 +280,12 @@ parameter's comma) and never to a rule's own words. A field left out of the word
 unsaid, so a `def`'s rule names `$body` to keep its body. An empty wording says the node as
 written and keeps every rule off it.
 
+A file read through a grammar is also coloured by it: keywords, strings, comments, function
+and type names, in the terminal's own colours, from the `highlights.scm` query the grammar
+package ships (or the one under `queries/<language>/` next to a Neovim `parser` directory).
+`highlight = no` under `[config]` or `[config.<ext>]`, or `--no-color`, leaves the file plain.
+Colouring needs no `[syntax]` rules: a grammar alone is enough.
+
 Each spoken word lights the word it came from, as a shape's does, and a line break between
 two words is kept, so a body keeps its lines. A `def` whose body runs past the chunk being
 read is said as far as the chunk goes. Not in any tree: whether `a | b` is two sets or two

@@ -138,6 +138,7 @@ class Config:
     follow_margin: int = 5
     media_keys: bool = True        # claim the system play/pause button
     markdown: bool = True          # strip Markdown syntax from plain input
+    highlight: bool = True         # colour a source file by its grammar
     language: str = ""             # the grammar's name; "" = from the suffix
     parsers: str = ""              # a directory of parser/<language>.so files
     # (written, spoken) pairs from [pronunciations], in file order
@@ -222,6 +223,7 @@ _FIELDS: tuple[_Field, ...] = (
     _Field("follow_margin", "int", lo=0),
     _Field("media_keys", "bool"),
     _Field("markdown", "bool"),
+    _Field("highlight", "bool"),
     _Field("language", "str"),
     _Field("parsers", "str"),
 )

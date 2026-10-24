@@ -18,13 +18,17 @@ from __future__ import annotations
 
 import importlib
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
+from importlib import resources
 from pathlib import Path
 
 from . import _core
+from .ansi import Run, Style
 
-__all__ = ["Grammar", "GrammarError", "LANGUAGES", "check_rules", "from_file",
-           "from_module", "grammar_for", "language_for", "outline"]
+__all__ = ["Grammar", "GrammarError", "LANGUAGES", "PALETTE", "check_rules",
+           "coloured", "from_file", "from_module", "grammar_for", "highlighter",
+           "highlights_for", "language_for", "outline"]
 
 Grammar = _core.Grammar
 
@@ -147,6 +151,103 @@ def check_rules(rules: Iterable[tuple[str, str]], grammar: Grammar,
                                     f"{name!r}")
                     break
     return problems
+
+
+#: How each kind of capture in a grammar's ``highlights.scm`` is drawn: a
+#: capture takes the first name here it starts with (``function.method`` is
+#: ``function``), and one no name fits is drawn as it is.  The colours are
+#: the terminal's own first eight, so they follow its theme.
+PALETTE: tuple[tuple[str, Style], ...] = (
+    ("keyword", Style(fg=5)),
+    ("string", Style(fg=2)),
+    ("escape", Style(fg=3)),
+    ("comment", Style(fg=8, italic=True)),
+    ("function", Style(fg=4)),
+    ("constructor", Style(fg=6)),
+    ("type", Style(fg=6)),
+    ("number", Style(fg=3)),
+    ("constant", Style(fg=3)),
+    ("attribute", Style(fg=3)),
+    ("tag", Style(fg=4)),
+)
+
+
+def highlights_for(language: str, parsers: str | Path = "") -> str | None:
+    """The text of the ``highlights.scm`` query for `language`: the one in
+    the ``tree-sitter-<language>`` wheel, else ``queries/<language>/`` next
+    to a Neovim ``parser`` directory; None when neither has one."""
+    try:
+        package = resources.files(f"tree_sitter_{language}")
+        query = package / "queries" / "highlights.scm"
+        if query.is_file():
+            return query.read_text(encoding="utf-8")
+    except (ImportError, TypeError, OSError):
+        pass
+    if str(parsers).strip():
+        query = Path(parsers).expanduser().parent / "queries" / language / "highlights.scm"
+        if query.is_file():
+            return query.read_text(encoding="utf-8")
+    return None
+
+
+def coloured(lines: Sequence[Sequence[Run]], spans: Iterable[tuple[int, int, int]],
+             palette: Sequence[tuple[str, Style]] = PALETTE) -> list[list[Run]]:
+    """`lines` with the `spans` drawn in: each ``(start, end, name)`` is a
+    stretch of the lines' text joined with newlines, in characters, and an
+    index into `palette`, whose colour and slant go onto the runs there
+    (what a run has besides, a link or bold, stays)."""
+    todo = sorted(spans)
+    out: list[list[Run]] = []
+    pos = 0
+    k = 0
+    for line in lines:
+        new: list[Run] = []
+        for run in line:
+            a, b = pos, pos + len(run.text)
+            at = a
+            while k < len(todo) and todo[k][1] <= at:
+                k += 1
+            j = k
+            while j < len(todo) and todo[j][0] < b:
+                s, e, name = todo[j]
+                s, e = max(s, at), min(e, b)
+                if at < s:
+                    new.append(Run(run.text[at - a:s - a], run.style))
+                paint = palette[name][1]
+                style = replace(run.style, fg=paint.fg, italic=run.style.italic or paint.italic,
+                                bold=run.style.bold or paint.bold)
+                new.append(Run(run.text[s - a:e - a], style))
+                at = e
+                if todo[j][1] <= b:
+                    j += 1
+                else:
+                    break
+            if at < b:
+                new.append(Run(run.text[at - a:], run.style))
+            pos = b
+        out.append([r for r in new if r.text] or list(line))
+        pos += 1                                   # the newline
+    return out
+
+
+def highlighter(grammar: Grammar, query: str
+                ) -> Callable[[Sequence[Sequence[Run]]], list[list[Run]]]:
+    """A function that colours parsed lines with `grammar` and its
+    highlights `query`, by `PALETTE`.
+
+    :raises GrammarError: when the query cannot be used with the grammar.
+    """
+    names = [name for name, _style in PALETTE]
+    try:
+        grammar.highlight("", query, names)
+    except ValueError as exc:
+        raise GrammarError(f"the highlights query cannot be used: {exc}") from exc
+
+    def colour(lines: Sequence[Sequence[Run]]) -> list[list[Run]]:
+        text = "\n".join("".join(r.text for r in line) for line in lines)
+        return coloured(lines, grammar.highlight(text, query, names))
+
+    return colour
 
 
 def outline(text: str, grammar: Grammar) -> str:

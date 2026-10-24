@@ -216,6 +216,46 @@ def test_check_rules_names_what_the_grammar_lacks(python):
     ]
 
 
+def test_the_wheel_ships_a_highlights_query():
+    query = syntax.highlights_for("python")
+    assert query and "@keyword" in query and "@comment" in query
+    assert syntax.highlights_for("nothing_at_all") is None
+
+
+def test_highlight_gives_each_stretch_its_capture(python):
+    text = "def f(x):\n    return 'a'  # c\n"
+    names = [name for name, _style in syntax.PALETTE]
+    spans = python.highlight(text, syntax.highlights_for("python"), names)
+    by_text = {text[s:e]: names[n] for s, e, n in spans}
+    assert by_text["def"] == "keyword" and by_text["return"] == "keyword"
+    assert by_text["f"] == "function"
+    assert by_text["'a'"] == "string"
+    assert by_text["# c"] == "comment"
+    assert "x" not in by_text                       # a variable: as it is
+
+
+def test_a_broken_query_is_a_grammar_error(python):
+    with pytest.raises(GrammarError, match="the highlights query cannot be used"):
+        syntax.highlighter(python, "(nothing_at_all) @keyword")
+
+
+def test_coloured_splits_the_runs_where_the_captures_are(python):
+    from readaloud import ansi
+
+    lines = ansi.parse("def f(x):\n    return 'a'  # c\n")
+    colour = syntax.highlighter(python, syntax.highlights_for("python"))
+    painted = colour(lines)
+    assert [(r.text, r.style.fg, r.style.italic) for r in painted[0]] == [
+        ("def", 5, False), (" ", None, False), ("f", 4, False),
+        ("(x):", None, False)]
+    assert [(r.text, r.style.fg, r.style.italic) for r in painted[1]] == [
+        ("    ", None, False), ("return", 5, False), (" ", None, False),
+        ("'a'", 2, False), ("  ", None, False), ("# c", 8, True)]
+    # the text is untouched
+    assert ["".join(r.text for r in line) for line in painted] == [
+        "".join(r.text for r in line) for line in lines]
+
+
 def test_a_neovim_parser_file_loads_when_there_is_one():
     candidates = [
         pathlib.Path.home() / ".local/share/nvim/lazy/nvim-treesitter/parser/python.so",

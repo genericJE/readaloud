@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use tree_sitter::ffi::TSLanguage;
 use tree_sitter::{Language, Node, Parser, Tree, LANGUAGE_VERSION, MIN_COMPATIBLE_LANGUAGE_VERSION};
+use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 use crate::shapes::{shared, swapped, Found, Piece};
 
@@ -105,6 +106,46 @@ impl Grammar {
         let mut parser = Parser::new();
         parser.set_language(&self.language).ok()?;
         parser.parse(text, None)
+    }
+
+    /// Every stretch of `text` the highlights `query` (the grammar's
+    /// `highlights.scm`) colours: `(start, end, name)` in characters, `name`
+    /// an index into `names`, the capture names recognised.  A capture takes
+    /// the name it starts with (`function.method` is `function`); one no
+    /// name fits is not coloured, and the innermost capture wins.  Err when
+    /// the query cannot be used with this grammar.
+    pub fn highlight(&self, text: &str, query: &str, names: &[String]) -> Result<Vec<(usize, usize, usize)>, String> {
+        let mut config = HighlightConfiguration::new(self.language.clone(), "readaloud", query, "", "")
+            .map_err(|e| e.to_string())?;
+        config.configure(names);
+        let mut highlighter = Highlighter::new();
+        let events = highlighter
+            .highlight(&config, text.as_bytes(), None, |_| None)
+            .map_err(|e| e.to_string())?;
+        // character offset of each byte that starts a character, plus the end
+        let mut char_at = vec![0; text.len() + 1];
+        for (c, (b, ch)) in text.char_indices().enumerate() {
+            for x in b..b + ch.len_utf8() {
+                char_at[x] = c;
+            }
+        }
+        char_at[text.len()] = text.chars().count();
+        let mut stack = Vec::new();
+        let mut out = Vec::new();
+        for event in events {
+            match event.map_err(|e| e.to_string())? {
+                HighlightEvent::HighlightStart(h) => stack.push(h.0),
+                HighlightEvent::HighlightEnd => {
+                    stack.pop();
+                }
+                HighlightEvent::Source { start, end } => {
+                    if let (Some(&name), true) = (stack.last(), start < end) {
+                        out.push((char_at[start], char_at[end], name));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 }
 
