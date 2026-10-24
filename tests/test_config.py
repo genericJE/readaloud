@@ -976,6 +976,66 @@ def test_a_repeated_type_header_is_read_as_one(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# [syntax]: saying a source file's tree
+# --------------------------------------------------------------------------- #
+
+
+SYNTAX = """\
+[syntax]
+function_definition = function $name $parameters $return_type
+function_definition/type = and returns type $0
+parameters = takes ${*|,=and}
+
+[syntax.py]
+typed_default_parameter = $name type $type with a default of $value
+type/binary_operator = $left or $right
+parameters = takes ${*|,=and|*=star}
+"""
+
+
+def test_syntax_rules_are_read_in_general_and_for_a_type(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf", SYNTAX))
+    assert warnings == []
+    assert cfg.syntax == (
+        ("function_definition", "function $name $parameters $return_type"),
+        ("function_definition/type", "and returns type $0"),
+        ("parameters", "takes ${*|,=and}"))
+    (py,) = cfg.types
+    assert py.syntax == (
+        ("typed_default_parameter", "$name type $type with a default of $value"),
+        ("type/binary_operator", "$left or $right"),
+        ("parameters", "takes ${*|,=and|*=star}"))
+    # the type's rules come after the general ones, so the type's win
+    assert cfg.for_suffix(".py").syntax == cfg.syntax + py.syntax
+    assert config.Config().syntax == ()
+
+
+def test_each_syntax_problem_says_what_is_wrong(tmp_path):
+    for line, problem in [
+        ("nothing", "'nothing' has no \"=\"; write it as: kind = wording"),
+        ("a/b/c = x", "'a/b/c' is not a node kind: a rule is kind = wording, "
+                      "or parent/kind = wording"),
+        ("def = $1", "def: '$1': a rule names a node's fields, $0 for the node "
+                     "as written, or $* for its parts"),
+        ("def = ${name|slash}", "def: '${name|slash}': write a replacement as "
+                                "|text=word, such as ${*|,=and}"),
+        ("def = --", "def: '--' has nothing to say; leave it empty to say the "
+                     "node as written"),
+    ]:
+        cfg, warnings = config.load(write(tmp_path / "c.conf", f"[syntax]\n{line}\n"))
+        assert cfg.syntax == (), line
+        assert warnings == [f"{tmp_path / 'c.conf'}: [syntax] line 2: {problem}"]
+
+
+def test_an_empty_syntax_wording_and_a_repeat_are_read(tmp_path):
+    path = write(tmp_path / "c.conf", "[syntax.py]\nstring =\ndef = a\ndef = b\n")
+    cfg, warnings = config.load(path)
+    assert cfg.types[0].syntax == (("string", ""), ("def", "b"))
+    assert warnings == [f"{path}: [syntax.py] line 4: 'def' is also on line 3; "
+                        f"line 4 wins"]
+
+
+# --------------------------------------------------------------------------- #
 # template
 # --------------------------------------------------------------------------- #
 

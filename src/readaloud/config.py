@@ -31,9 +31,11 @@ a part is ``name = pattern``, a piece any pattern below it or any shape can
 use as ``%{name}``.  A named shape, ``param: /pattern/ = wording``, is never
 found on its own: the shapes below it use it as ``%{param}`` in a pattern and
 as ``${group|param}`` in a wording, which says each of its matches in that
-group.  Each section may also have one for a file type, ``[shapes.py]``
-and the like, which `Config.for_file` lays over the general one for a file
-with that extension.  readaloud has no shape and no part of its own: a file
+group.  ``[syntax]`` lines, ``kind = wording``, say a node of a source
+file's syntax tree (`readaloud.syntax`) by its kind, the wording naming the
+node's fields.  Each section may also have one for a file type,
+``[shapes.py]`` and the like, which `Config.for_file` lays over the general
+one for a file with that extension.  readaloud has no shape and no part of its own: a file
 without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
 `TEMPLATE_PRONUNCIATIONS` are what the shipped file holds.
 
@@ -66,6 +68,7 @@ __all__ = [
     "PRONUNCIATIONS",
     "PARTS",
     "SHAPES",
+    "SYNTAX",
     "TEMPLATE_PARTS",
     "TEMPLATE_PRONUNCIATIONS",
     "TEMPLATE_SHAPES",
@@ -93,8 +96,11 @@ SHAPES = "shapes"
 #: The section of named pieces of pattern the shapes are built from.
 PARTS = "parts"
 
+#: The section of rules saying a source file's syntax tree, node kind by kind.
+SYNTAX = "syntax"
+
 #: The sections this module reads itself, rather than configparser.
-_LIFTED = (PRONUNCIATIONS, SHAPES, PARTS)
+_LIFTED = (PRONUNCIATIONS, SHAPES, PARTS, SYNTAX)
 
 #: A part used in a pattern: %{name}.
 _PART_RE = re.compile(r"%\{(\w+)\}")
@@ -112,6 +118,7 @@ class FileType:
     shapes: tuple[tuple[str, str], ...] = ()
     named_shapes: tuple[tuple[str, str, str], ...] = ()
     parts: tuple[tuple[str, str], ...] = ()
+    syntax: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass
@@ -141,6 +148,8 @@ class Config:
     named_shapes: tuple[tuple[str, str, str], ...] = ()
     # (name, pattern as written) of each [parts] line, in file order
     parts: tuple[tuple[str, str], ...] = ()
+    # (node kind, wording) of each [syntax] line, in file order
+    syntax: tuple[tuple[str, str], ...] = ()
     # what [config.py], [parts.py], [shapes.py] and [pronunciations.py] add
     # for a file of that type, one per suffix, in file order
     types: tuple[FileType, ...] = ()
@@ -155,8 +164,8 @@ class Config:
     def for_suffix(self, suffix: str) -> Config:
         """This config with the sections for `suffix` (``.py``) laid over
         it: their settings replace the general ones, their shapes are tried
-        first, and their pronunciations, parts and named shapes come after
-        the general ones, so the type's win."""
+        first, and their pronunciations, parts, named shapes and syntax
+        rules come after the general ones, so the type's win."""
         typed = next((t for t in self.types if t.suffix == suffix.lower()),
                      None)
         if typed is None:
@@ -167,6 +176,7 @@ class Config:
             shapes=typed.shapes + self.shapes,
             named_shapes=self.named_shapes + typed.named_shapes,
             parts=self.parts + typed.parts,
+            syntax=self.syntax + typed.syntax,
             types=())
 
     @property
@@ -223,7 +233,7 @@ _BY_NAME = {f.name: f for f in _FIELDS}
 # [config] keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
                            - {"pronunciations", "shapes", "named_shapes",
-                              "parts", "types"})
+                              "parts", "syntax", "types"})
 
 
 def _default_of(name: str) -> object:
@@ -387,6 +397,12 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             notes.append(f"[{SHAPES}] and [{PARTS}] could not be used "
                          f"({exc!r})")
         try:
+            rules, rule_problems = _parse_syntax(lifted.get(SYNTAX, []))
+            problems += rule_problems
+        except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
+            rules = ()
+            notes.append(f"[{SYNTAX}] could not be used ({exc!r})")
+        try:
             typed = _parse_types(lifted, parts, named, problems)
         except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
             typed = {}
@@ -398,6 +414,7 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
         cfg.shapes = shapes
         cfg.named_shapes = named
         cfg.parts = parts
+        cfg.syntax = rules
         warnings += [f"{target}: {note}" for note in notes]
 
         parser, parse_warnings = _parse(ini, target)
@@ -992,9 +1009,89 @@ def _parse_types(lifted: dict[str, list[tuple[int, str]]],
         shapes, own_named, found = _parse_shapes(
             lines(SHAPES), parts + own_parts, named)
         problems += relabelled(found, SHAPES)
+        rules, found = _parse_syntax(lines(SYNTAX))
+        problems += relabelled(found, SYNTAX)
         out[suffix] = {"pronunciations": pairs, "parts": own_parts,
-                       "shapes": shapes, "named_shapes": own_named}
+                       "shapes": shapes, "named_shapes": own_named,
+                       "syntax": rules}
     return out
+
+
+#: A syntax rule's key: a node kind, or a parent kind and a kind.
+_RULE_KEY_RE = re.compile(r"(?:[A-Za-z_]\w*/)?[A-Za-z_]\w*")
+#: A reference in a rule's wording: $$, $field, ${field|from=to}, $0 (the
+#: node as written) or $* (the node's parts in order).
+_RULE_REFERENCE_RE = re.compile(r"\$\$|\$\{([^}|]*)((?:\|[^}|]*)*)\}|\$(\w+|\*)")
+
+
+def _parse_syntax(lines: list[tuple[int, str]]
+                  ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
+    """Return ``(rules, problems)`` for the ``[syntax]`` lines.
+
+    A rule is ``kind = wording``, or ``parent/kind = wording`` for a node
+    only under a parent of that kind; `rules` is ``(key, wording)`` per
+    usable line, in file order.  The wording names the node's fields as
+    ``$name``, says the node as written as ``$0`` and its parts in order as
+    ``$*``, with ``|from=to`` replacements as a shape's wording has them;
+    an empty wording says the node as written.  Whether a kind or a field
+    exists is the grammar's to say, when it is loaded.  The same key twice
+    is a problem, and the later line wins.
+    """
+    usable: dict[str, tuple[int, str]] = {}
+    problems: list[str] = []
+    for n, raw in lines:
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        at = f"[{SYNTAX}] line {n}: "
+        sides = _sides(line)
+        if sides is None:
+            problems.append(f'{at}{_shown(line)} has no "="; write it as: '
+                            f"kind = wording")
+            continue
+        key, wording = sides
+        wording = _normalise(wording)
+        if not _RULE_KEY_RE.fullmatch(key):
+            problems.append(f"{at}{_shown(key)} is not a node kind: a rule "
+                            f"is kind = wording, or parent/kind = wording")
+            continue
+        problem = _rule_problem(wording)
+        if problem:
+            problems.append(f"{at}{key}: {problem}")
+            continue
+        if key in usable:
+            problems.append(f"{at}{key!r} is also on line {usable[key][0]}; "
+                            f"line {n} wins")
+            del usable[key]
+        usable[key] = (n, wording)
+    return (tuple((key, wording) for key, (_n, wording) in usable.items()),
+            _capped(problems, SYNTAX))
+
+
+def _rule_problem(wording: str) -> str | None:
+    """Why a syntax rule's `wording` cannot be used, or None."""
+    for ch in wording:
+        if unicodedata.category(ch) == "Cc" or ch == "\ufffd":
+            return f"{_shown(wording)} has a character it cannot say"
+    found = [m for m in _RULE_REFERENCE_RE.finditer(wording)
+             if m.group(0) != "$$"]
+    for m in found:
+        name = m.group(1) if m.group(1) is not None else m.group(3)
+        if name.isdigit() and name != "0":
+            return (f"{_shown(m.group(0))}: a rule names a node's fields, "
+                    f"$0 for the node as written, or $* for its parts")
+        if not (name == "*" or _PART_NAME_RE.fullmatch(name) or name == "0"):
+            return f"{_shown(m.group(0))} names no field"
+        for swap in filter(None, (m.group(2) or "").split("|")):
+            if "=" not in swap or swap.startswith("="):
+                return (f"{_shown(m.group(0))}: write a replacement as "
+                        f"|text=word, such as ${{*|,=and}}")
+    if _LINK_RE.search(wording):
+        return "[text](...) is not supported; write it the way it sounds"
+    if wording and not found and not any(ch.isalnum() for ch in wording):
+        return (f"{_shown(wording)} has nothing to say; leave it empty to "
+                f"say the node as written")
+    return None
 
 
 def _capped(problems: list[str], section: str) -> list[str]:
