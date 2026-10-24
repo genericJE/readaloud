@@ -76,10 +76,13 @@ a daemon thread).
 
 ## Cutting a release
 
-Bump `version` in `pyproject.toml` and `__version__` in `src/readaloud/__init__.py`, run
-`uv lock`, commit, then push a `vX.Y.Z` tag. The `release` workflow builds the bundle on a
-`macos-14` runner, compiling `readaloud._core` with the pinned Rust, and attaches it. Then update three lines in the tap's
-`Formula/readaloud.rb`: `url`, `version`, `sha256`.
+Add the release to `CHANGELOG.md`, bump `version` in `pyproject.toml` and `__version__`
+in `src/readaloud/__init__.py`, run `uv lock`, commit, then push a `vX.Y.Z` tag. The
+`release` workflow builds the bundle on a `macos-14` runner, compiling `readaloud._core`
+with the pinned Rust (the tree-sitter runtime's C is compiled there too) and installing
+the `mediakeys` and `grammars` extras, and attaches it. Then update three lines in the
+tap's `Formula/readaloud.rb`: `url`, `version`, `sha256`, and put the changelog entry on
+the GitHub release.
 
 The runner's macOS version is load-bearing. mlx publishes one wheel per macOS generation
 and `uv` picks the newest the build host can run, so the build machine's macOS becomes the

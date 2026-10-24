@@ -5,10 +5,12 @@ holds, and how readaloud reports a problem with it.
 
 Most flags can also be preferences in `~/.readaloud.conf`; the ones that pick the input or
 the output (`-f`, `-md`, `--start`, `--save`) cannot. A `[pronunciations]` section in the
-same file tells readaloud how to say particular words, and the `[shapes]` and `[parts]`
-sections how it says a file with its line number or a host with its port (see
-[Pronunciations](pronunciations.md)). The first run writes a copy of the file readaloud
-ships, shown in full [below](#the-file-a-first-run-writes), and says so on stderr once:
+same file tells readaloud how to say particular words, the `[shapes]` and `[parts]`
+sections how it says a file with its line number or a host with its port, and a
+`[syntax]` section how it says a source file's syntax tree (see
+[Pronunciations](pronunciations.md)); any of them can apply to one file type only (see
+[File types](#file-types)). The first run writes a copy of the file readaloud ships, shown
+in full [below](#the-file-a-first-run-writes), and says so on stderr once:
 
 ```
 readaloud: created /Users/you/.readaloud.conf -- your defaults live there now

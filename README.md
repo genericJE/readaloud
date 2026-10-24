@@ -30,9 +30,15 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
   rather than being interpolated.
 - **Says words the way you do.** A `[pronunciations]` section in the config file sets how
   a word or phrase is said, and comes filled in with the words Kokoro gets wrong:
-  `main.py` is "main dot pie", and `id` is "eye dee" rather than Freud's id. A file
-  reference is read as one, so `settings.py:281-283` is "settings dot pie lines 281 to
-  283", and a port stays a port. See [Pronunciations](docs/pronunciations.md).
+  `main.py` is "main dot pie", and `id` is "eye dee" rather than Freud's id. A `[shapes]`
+  section reads a shape of text as one, so `settings.py:281-283` is "settings dot pie
+  lines 281 to 283" and `localhost:8080` is "local host port 8080", with each spoken
+  word lighting the word it came from. See [Pronunciations](docs/pronunciations.md).
+- **Reads source code through its grammar.** A `.py` file is parsed with
+  [tree-sitter][tree-sitter] and said node by node the way you describe it, so
+  `def foo(bar: int) -> str:` can be "function foo takes bar type int and returns type
+  string", coloured like an editor would. Other languages are a package away. See
+  [Syntax](docs/pronunciations.md#syntax).
 - **Never blocks.** A background thread loads the model and keeps the current chunk plus
   a couple more synthesized in a bounded cache. The document is on screen and scrollable
   before the voice has finished loading, and playback carries on wherever you scroll.
@@ -197,5 +203,6 @@ If anything here ends up being useful to you and you feel like saying thanks, my
 
 [kokoro]: https://huggingface.co/hexgrad/Kokoro-82M
 [mdcat]: https://github.com/BIRSAx2/mdcat
+[tree-sitter]: https://tree-sitter.github.io/
 [mlx-audio]: https://github.com/Blaizzy/mlx-audio
 [uv]: https://docs.astral.sh/uv/

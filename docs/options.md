@@ -7,7 +7,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `TEXT...` | | text to read, joined with spaces |
-| `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin) |
+| `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin); its suffix picks the config's sections for that file type, and its grammar (`.py`), see [Configuration](configuration.md#file-types) |
 | `-md`, `--markdown [FILE]` | | read `FILE` (or the `-f` file, `TEXT` or stdin) as Markdown: drawn by mdcat, tables read one cell at a time (needs mdcat) |
 | `-v`, `--voice NAME` | `af_heart` | Kokoro voice (see below) |
 | `-s`, `--speed X` | `1.0` | speech rate multiplier, 0.5 to 3.0 in the TUI |
@@ -19,7 +19,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--save FILE.wav` | | render everything to a WAV and exit |
 | `--lang CODE` | from the voice | Kokoro language code (`a`, `b`, `j`, …) |
 | `--repo ID` | `mlx-community/Kokoro-82M-4bit` | model repo |
-| `--color` / `--no-color` | colour on | render the input's colours, or force monochrome |
+| `--color` / `--no-color` | colour on | render the input's colours, and a source file's by its grammar, or force monochrome |
 | `--media-keys` / `--no-media-keys` | on | take over the system play/pause button, or leave it alone |
 | `--config PATH` | `~/.readaloud.conf` | read defaults from `PATH` instead |
 | `--no-config` | | ignore the config file; built-in defaults only |
