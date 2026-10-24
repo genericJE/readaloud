@@ -1,8 +1,5 @@
 # Changelog
 
-Each release of readaloud, newest first. Versions follow `MAJOR.MINOR.PATCH`: a major
-bump means a config file written for the previous version needs a change.
-
 ## 2.0.0 (2026-10-24)
 
 ### Config file: one change to make
