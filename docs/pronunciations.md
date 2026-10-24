@@ -233,7 +233,9 @@ for macOS, Linux and Windows, installed next to readaloud:
 uv tool install readaloud --with tree-sitter-python
 ```
 
-Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
+The Homebrew install ships the Python grammar already (the `grammars` extra); for another
+language, `brew`'s readaloud needs that language's package installed into its own Python,
+or a `parsers` directory. Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
 instead and install nothing. The grammar is picked by the file's suffix (`.py` is `python`,
 `.rs` is `rust`, and so on; the `language` setting under `[config.<ext>]` overrides it),
 and only a named file (`-f app.py`) has one: piped text has no suffix. Without a grammar,

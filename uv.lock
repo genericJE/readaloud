@@ -909,6 +909,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+grammars = [
+    { name = "tree-sitter-python" },
+]
 mediakeys = [
     { name = "pyobjc-framework-cocoa" },
     { name = "pyobjc-framework-mediaplayer" },
@@ -934,8 +937,9 @@ requires-dist = [
     { name = "pyobjc-framework-mediaplayer", marker = "extra == 'mediakeys'", specifier = ">=10.0" },
     { name = "sounddevice", specifier = ">=0.5.6" },
     { name = "spacy" },
+    { name = "tree-sitter-python", marker = "extra == 'grammars'", specifier = ">=0.25" },
 ]
-provides-extras = ["mediakeys"]
+provides-extras = ["mediakeys", "grammars"]
 
 [package.metadata.requires-dev]
 dev = [

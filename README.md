@@ -56,10 +56,12 @@ From a checkout instead, which needs [`uv`][uv]:
 ```bash
 git clone https://github.com/genericJE/readaloud
 cd readaloud
-uv tool install --editable '.[mediakeys]'
+uv tool install --editable '.[mediakeys,grammars]'
 ```
 
-The `[mediakeys]` extra is what makes the system play/pause button work; drop it for a
+The `[grammars]` extra adds the Python grammar that reads a `.py` file through its syntax
+tree (see [Syntax](docs/pronunciations.md#syntax)); the Homebrew install has it. The
+`[mediakeys]` extra is what makes the system play/pause button work; drop it for a
 smaller install. To run without installing: `uv run readaloud -f notes.md`. See
 [Development](docs/development.md) for what that pulls in.
 

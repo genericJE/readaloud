@@ -45,8 +45,10 @@ cp -R "$PYROOT/." "$STAGE/"          # operate on the real interpreter in ~/.loc
 # --extra mediakeys is deliberate: a Homebrew install is meant to be complete,
 # and without it the bundle ships zero PyObjC packages, so the headphone
 # play/pause button silently does nothing for everyone who installs this way.
+# --extra grammars ships the Python grammar the same way, so a .py file is
+# read through its tree and coloured without a pip install.
 uv export --directory "$REPO" --frozen --no-dev --no-emit-project \
-          --extra mediakeys --format requirements-txt -o "$WORK/req.txt"
+          --extra mediakeys --extra grammars --format requirements-txt -o "$WORK/req.txt"
 uv pip install --python "$STAGE/bin/python$PYVER" --break-system-packages \
                --link-mode=copy -r "$WORK/req.txt"
 # 2b. readaloud itself, as one wheel built against the bundle's own interpreter:

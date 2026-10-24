@@ -30,6 +30,12 @@ mediakeys = [
     "pyobjc-framework-Cocoa>=10.0",
     "pyobjc-framework-MediaPlayer>=10.0",
 ]
+# The Python grammar, so a .py file is read through its syntax tree and
+# coloured out of the box (docs/pronunciations.md, "Syntax").  Any other
+# language is its own tree-sitter-<language> package, installed next to it.
+grammars = [
+    "tree-sitter-python>=0.25",
+]
 
 [project.scripts]
 readaloud = "readaloud.cli:main"
