@@ -2,30 +2,47 @@
 
 ## 2.0.0 (2026-10-24)
 
-### Config file: one change to make
+The computational half of readaloud is now Rust, and a source file is read through its
+syntax tree and coloured like an editor would.
 
-- The settings section is `[config]`, not `[readaloud]`. A file that still says
-  `[readaloud]` is warned about and its settings fall back to their defaults until the
-  header is renamed. Everything else in an existing file reads as before.
+### A Rust core
 
-### Reading code
+- Everything that is computation moved out of Python into a compiled extension,
+  `readaloud._core`, built with PyO3 and maturin: terminal cell widths (wide CJK and
+  emoji), the pronunciation engine, word and sentence splitting and chunking, the
+  escape-sequence parser with its Markdown cleanup, and the alignment of Kokoro's
+  timestamps onto the spoken words. The Python that remains is the interface: the
+  config file, the document model, the TUI, playback.
+- Each port is checked against the Python it replaced, on random input as well as the
+  known cases, so a file reads exactly as it did. The Unicode tables are generated from
+  Python's own database, so the two sides never disagree about a character.
+- The Homebrew bundle ships the extension built on the macOS 14 runner with the pinned
+  Rust; nothing is compiled on your machine.
 
-- **Source files are read through their grammar.** A `[syntax.py]` section says a
-  Python file's syntax tree node by node the way you describe it, so
-  `def foo(bar: int, baz: str='') -> str:` can be "function foo takes bar type int and
-  baz type string with a default of empty string and returns type string", a `|` in a
-  type annotation "or" and one between sets whatever you choose. readaloud ships the
-  tree-sitter runtime and loads a language's grammar at run time: the Homebrew install
-  has Python's; any other language is its `tree-sitter-<language>` package installed
-  next to readaloud, or a Neovim `parser/` directory. See
-  [Syntax](docs/pronunciations.md#syntax).
-- **Source files are coloured** by the grammar's own highlights query, in the terminal's
-  colours. `highlight = no` or `--no-color` leaves them plain.
+### Source code, read and coloured through its grammar
+
+- **A `.py` file is parsed with tree-sitter** and said node by node the way you describe
+  it in a `[syntax.py]` section: `def foo(bar: int, baz: str='') -> str:` can be
+  "function foo takes bar type int and baz type string with a default of empty string
+  and returns type string", a `|` in a type annotation "or" and one between sets
+  "pipe", `foo().bar` "foo dot bar", `__init__` "dunder init". A rule names a node's
+  fields (`$name`, `$parameters`), the node in full (`$0`) or its parts (`$*`), and may
+  be confined to a context (`type/binary_operator`) or a field
+  (`function_definition.return_type`). Comments, strings and docstrings are untouched
+  unless a rule names them. See [Syntax](docs/pronunciations.md#syntax).
+- **The file is coloured** by the grammar's own highlights query, in the terminal's
+  colours: keywords, strings, comments, function and type names. `highlight = no` or
+  `--no-color` leaves it plain.
+- **Grammars are plug-ins.** readaloud ships the tree-sitter runtime and no grammar; a
+  language's grammar is loaded at run time from its `tree-sitter-<language>` package
+  (prebuilt wheels, no compiler) or from a Neovim `parser/` directory. The Homebrew
+  install has Python's; `uv tool install readaloud --with tree-sitter-rust` adds Rust.
+- **Each spoken word lights the word it came from:** "takes" lights the first
+  parameter, "or" the type after the `|`, and a body of code keeps its lines.
 - **A section can apply to one file type**: `[config.py]`, `[parts.py]`, `[shapes.py]`,
-  `[pronunciations.py]` and `[syntax.py]` lay over the general ones when the file read
-  has that suffix. See [File types](docs/configuration.md#file-types).
-- **`markdown = no`** reads a plain file as written, so code keeps its `#`, `*args` and
-  `__dunders__`.
+  `[pronunciations.py]` and `[syntax.py]` lay over the general ones for a file with
+  that suffix, and `markdown = no` reads it as written, so code keeps its `#`, `*args`
+  and underscores. See [File types](docs/configuration.md#file-types).
 
 ### Shapes
 
@@ -37,21 +54,21 @@
 - **Named shapes** (`param: /pattern/ = wording`) let a wording say a list of any
   length: `${params|param|,=and}` says every match of `param` in the group, with "and"
   for each comma. A shape may span 48 words and several lines.
-- **Each spoken word lights the word it came from**: `$file` lights the file name,
-  "takes" the first parameter, punctuation stays with its word. A wording used to be
-  shared out a word per slot.
-- What a shape or a rule says goes through the pronunciation entries *and* the patterns
-  once more, so `/__(\w+)__/ = dunder $1` reaches a name a `def` rule said.
+- What a shape or a rule says goes through the pronunciation entries and the patterns
+  once more, so `.py = dot pie` and `/__(\w+)__/ = dunder $1` apply inside them.
+
+### Config file: one change to make
+
+- The settings section is `[config]`, not `[readaloud]`. A file that still says
+  `[readaloud]` is warned about and its settings fall back to their defaults until the
+  header is renamed. Everything else in an existing file reads as before.
+- The file a first run writes, and `--write-config`, is `readaloud.conf` shipped as it
+  is, with one-line comments and the pronunciations in groups.
 
 ### Other changes
 
-- The computation moved to a Rust extension, `readaloud._core`: terminal widths, the
-  pronunciation engine, word and sentence splitting, the escape-sequence parser and the
-  timing of spoken words. Each port is checked against the Python it replaced.
 - `follow_margin` defaults to 5 rows: the spoken word stays about six rows from the top
   in follow mode, with the text below it in view.
-- The file a first run writes, and `--write-config`, is `readaloud.conf` shipped as it
-  is, with one-line comments and the pronunciations in groups.
 - The README no longer suggests `mdcat --ansi notes.md | readaloud`: a piped table reads
   line by line; `-md` reads it cell by cell.
 - `tests/fixtures/edge-cases.md` gathers the text that is hardest to read well, for
