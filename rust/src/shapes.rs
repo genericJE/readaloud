@@ -53,12 +53,27 @@ pub struct Shapes {
 }
 
 /// A shape found: where it starts and ends (characters), what it says, and
-/// whether it says the text as written.
+/// whether it says the text as written.  `pieces` is what each word slot the
+/// shape covers says, in order: each word of the wording goes to the slot it
+/// came from, so a slot may say nothing (an empty piece).  Empty when the
+/// text is said as written.
 pub struct Found {
     pub start: usize,
     pub end: usize,
     pub say: String,
     pub as_written: bool,
+    pub pieces: Vec<String>,
+}
+
+/// A piece of an expanded wording and where in the matched text it came
+/// from: a byte offset, which is each character's own when `verbatim`, and
+/// the end of the group or match it belongs to, past which it looks for no
+/// word to light.
+struct Piece {
+    text: String,
+    src: usize,
+    verbatim: bool,
+    until: usize,
 }
 
 /// Why `pattern` cannot be a shape, or the names of its groups.
@@ -116,6 +131,7 @@ impl Shapes {
 /// underscores, and a group that did not take part says nothing.
 /// `${name|from=to}` is that group with every `from` in it said as the word
 /// `to` (with spaces round it); several `|from=to` may follow one another.
+#[cfg(test)]
 pub fn expand(template: &str, caps: &Captures) -> String {
     expand_in(template, caps, &Subs::new(), 0)
 }
@@ -126,32 +142,53 @@ pub fn expand(template: &str, caps: &Captures) -> String {
 /// Only the first such name counts, an unknown one is ignored, and past
 /// `MAX_DEPTH` named shapes calling on named shapes the name is ignored too.
 pub fn expand_in(template: &str, caps: &Captures, subs: &Subs, depth: usize) -> String {
-    let group = |name: &str| -> String {
-        let m = match name.parse::<usize>() {
+    expand_pieces(template, caps, subs, depth, 0).into_iter().map(|p| p.text).collect()
+}
+
+/// `expand_in` as pieces that know where they came from.  A group's text
+/// comes from where it matched; the wording's own words come from the text
+/// between the groups round them, so "function" in `function $fn` comes
+/// from the `def ` before the name.  `base` is where the text `caps`
+/// matched starts in the text the shape matched.
+fn expand_pieces(template: &str, caps: &Captures, subs: &Subs, depth: usize, base: usize) -> Vec<Piece> {
+    let whole = caps.get(0).unwrap();
+    // where a byte of the text `caps` matched lies in the matched text
+    let at = |b: usize| base + b - whole.start();
+    let group = |name: &str| -> Option<regex::Match> {
+        match name.parse::<usize>() {
             Ok(i) => caps.get(i),
             Err(_) => caps.name(name),
-        };
-        m.map_or_else(String::new, |m| m.as_str().to_string())
+        }
     };
     let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    let mut out = String::new();
+    let mut out: Vec<Piece> = Vec::new();
+    // the wording's own words: from where the last group said ended, up to
+    // the end of the match
+    let own = |out: &mut Vec<Piece>, text: &str, src: usize| {
+        if !text.is_empty() {
+            out.push(Piece { text: text.to_string(), src, verbatim: false, until: at(whole.end()) });
+        }
+    };
+    let mut prev_end = at(whole.start());
     let mut rest = template;
-    while let Some(at) = rest.find('$') {
-        out.push_str(&rest[..at]);
-        let after = &rest[at + 1..];
+    while let Some(dollar) = rest.find('$') {
+        own(&mut out, &rest[..dollar], prev_end);
+        let after = &rest[dollar + 1..];
         if let Some(tail) = after.strip_prefix('$') {
-            out.push('$');
+            own(&mut out, "$", prev_end);
             rest = tail;
         } else if let Some(inner) = after.strip_prefix('{') {
             let Some(close) = inner.find('}') else {
-                out.push('$');
+                own(&mut out, "$", prev_end);
                 rest = after;
                 continue;
             };
             // as in the regex crate, anything up to the } is a name, and a
             // name no group has says nothing
             let mut pieces = inner[..close].split('|');
-            let text = group(pieces.next().unwrap_or(""));
+            let (text, start) = group(pieces.next().unwrap_or(""))
+                .map_or(("", prev_end), |m| (m.as_str(), at(m.start())));
+            let until = start + text.len();
             let mut swaps: Vec<(&str, &str)> = Vec::new();
             let mut name = None;
             for piece in pieces {
@@ -164,54 +201,128 @@ pub fn expand_in(template: &str, caps: &Captures, subs: &Subs, depth: usize) -> 
             let sub = name.filter(|_| depth < MAX_DEPTH).and_then(|n| subs.get(n));
             let mut last = 0;
             if let Some(sub) = sub {
-                for m in sub.regex.captures_iter(&text) {
-                    let whole = m.get(0).unwrap();
-                    if whole.is_empty() {
+                for m in sub.regex.captures_iter(text) {
+                    let found = m.get(0).unwrap();
+                    if found.is_empty() {
                         continue;
                     }
-                    swapped(&text[last..whole.start()], &swaps, &mut out);
-                    let said = if sub.say.is_empty() {
-                        whole.as_str().to_string()
+                    swapped(&text[last..found.start()], &swaps, start + last, until, &mut out);
+                    let from = start + found.start();
+                    let to = start + found.end();
+                    out.push(Piece { text: " ".into(), src: from, verbatim: false, until: to });
+                    if sub.say.is_empty() {
+                        out.push(Piece { text: found.as_str().to_string(), src: from, verbatim: true, until: to });
                     } else {
-                        expand_in(&sub.say, &m, subs, depth + 1)
-                    };
-                    out.push_str(&format!(" {said} "));
-                    last = whole.end();
+                        out.extend(expand_pieces(&sub.say, &m, subs, depth + 1, from));
+                    }
+                    out.push(Piece { text: " ".into(), src: from, verbatim: false, until: to });
+                    last = found.end();
                 }
             }
-            swapped(&text[last..], &swaps, &mut out);
+            swapped(&text[last..], &swaps, start + last, until, &mut out);
+            prev_end = until;
             rest = &inner[close + 1..];
         } else {
             let n = after.find(|c: char| !word(c)).unwrap_or(after.len());
             if n == 0 {
-                out.push('$');
-            } else {
-                out.push_str(&group(&after[..n]));
+                own(&mut out, "$", prev_end);
+            } else if let Some(m) = group(&after[..n]) {
+                out.push(Piece { text: m.as_str().to_string(), src: at(m.start()), verbatim: true, until: at(m.end()) });
+                prev_end = at(m.end());
             }
             rest = &after[n..];
         }
     }
-    out.push_str(rest);
+    own(&mut out, rest, prev_end);
     out
 }
 
-/// `text` onto `out` with every `from` of `swaps` said as ` to `: one pass,
-/// so a replacement is never replaced again, and the first that fits wins.
-fn swapped(text: &str, swaps: &[(&str, &str)], out: &mut String) {
+/// `text`, which starts at byte `at` of the matched text in a group that
+/// ends at `until`, onto `out` with every `from` of `swaps` said as ` to `:
+/// one pass, so a replacement is never replaced again, and the first that
+/// fits wins.
+fn swapped(text: &str, swaps: &[(&str, &str)], at: usize, until: usize, out: &mut Vec<Piece>) {
     let mut i = 0;
+    let mut kept = 0;
     while i < text.len() {
         match swaps.iter().find(|(from, _)| text[i..].starts_with(from)) {
             Some((from, to)) => {
-                out.push_str(&format!(" {to} "));
+                if kept < i {
+                    out.push(Piece { text: text[kept..i].to_string(), src: at + kept, verbatim: true, until });
+                }
+                out.push(Piece { text: format!(" {to} "), src: at + i, verbatim: false, until });
                 i += from.len();
+                kept = i;
             }
-            None => {
-                let c = text[i..].chars().next().unwrap();
-                out.push(c);
-                i += c.len_utf8();
+            None => i += text[i..].chars().next().unwrap().len_utf8(),
+        }
+    }
+    if kept < text.len() {
+        out.push(Piece { text: text[kept..].to_string(), src: at + kept, verbatim: true, until });
+    }
+}
+
+/// What each of the `covered` slots (character spans in the text the shape
+/// matched, which starts at character `start`) says: the words of `pieces`
+/// in order, each at the slot its source lies in, or else the next slot of
+/// its group, so "takes" from the `(` before `self` lights `self` and "or"
+/// from a `|` lights the type after it; a group with no slot of its own, a
+/// default `=''`, goes with the slot before it.  A word never goes back to
+/// an earlier slot than the word before it, so the wording keeps its order;
+/// a slot no word reaches says nothing.
+fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(usize, usize)]) -> Vec<String> {
+    // byte offset in the matched text -> character offset in the chunk
+    let mut char_at: Vec<usize> = vec![0; matched.len() + 1];
+    for (c, (b, ch)) in matched.char_indices().enumerate() {
+        for x in b..b + ch.len_utf8() {
+            char_at[x] = start + c;
+        }
+    }
+    char_at[matched.len()] = start + matched.chars().count();
+    let slot_of = |src: usize, until: usize| -> usize {
+        let x = char_at[src.min(matched.len())];
+        let limit = char_at[until.clamp(src, matched.len())];
+        covered
+            .iter()
+            .position(|&(a, b)| a <= x && x < b)
+            .or_else(|| covered.iter().position(|&(a, _)| x <= a && a < limit))
+            .or_else(|| covered.iter().rposition(|&(_, b)| b <= x))
+            .unwrap_or(0)
+    };
+    // the words, each with where it comes from and whether a space came
+    // before it
+    let mut words: Vec<(String, usize, usize, bool)> = Vec::new();
+    let mut spaced = true;
+    for piece in pieces {
+        let mut open = false;
+        for (b, c) in piece.text.char_indices() {
+            if crate::text::is_space(c) {
+                (open, spaced) = (false, true);
+            } else if open {
+                words.last_mut().unwrap().0.push(c);
+            } else {
+                let src = if piece.verbatim { piece.src + b } else { piece.src };
+                words.push((c.to_string(), src, piece.until, spaced));
+                (open, spaced) = (true, false);
             }
         }
     }
+    let mut said: Vec<String> = vec![String::new(); covered.len()];
+    let (mut slot, mut prev) = (0, None);
+    for (word, src, until, spaced) in &words {
+        // punctuation written up against a word stays with it: "$line,
+        // column" says the comma where it says the line
+        let sticks = !spaced && prev.is_some() && !word.chars().any(crate::text::is_word_char);
+        if !sticks {
+            slot = slot.max(slot_of(*src, *until));
+        }
+        if !said[slot].is_empty() && (*spaced || prev != Some(slot)) {
+            said[slot].push(' ');
+        }
+        said[slot].push_str(word);
+        prev = Some(slot);
+    }
+    said
 }
 
 /// Where each character starts in `text`, plus the end.
@@ -263,12 +374,16 @@ impl Shapes {
                 for &end in ends.iter().rev() {
                     let piece = &text[bytes[a]..bytes[end]];
                     let Some(caps) = shape.full.captures(piece) else { continue };
-                    let (say, as_written) = if shape.say.is_empty() {
-                        (piece.to_string(), true)
-                    } else {
-                        (crate::text::collapse(&expand_in(&shape.say, &caps, &self.subs, 0)), false)
-                    };
-                    out.push(Found { start: a, end, say, as_written });
+                    if shape.say.is_empty() {
+                        out.push(Found { start: a, end, say: piece.to_string(), as_written: true, pieces: Vec::new() });
+                        break 'shapes;
+                    }
+                    let expanded = expand_pieces(&shape.say, &caps, &self.subs, 0, 0);
+                    let say = crate::text::collapse(&expanded.iter().map(|p| p.text.as_str()).collect::<String>());
+                    let covered: Vec<(usize, usize)> =
+                        slots[i..].iter().copied().take_while(|&(s, _)| s < end).collect();
+                    let pieces = shared(&expanded, piece, a, &covered);
+                    out.push(Found { start: a, end, say, as_written: false, pieces });
                     break 'shapes;
                 }
             }
@@ -331,6 +446,41 @@ mod tests {
     fn said_def(text: &str) -> Vec<String> {
         let (shapes, subs) = def_shapes();
         Shapes::new(&shapes, &subs).found(text, &slots(text)).into_iter().map(|f| f.say).collect()
+    }
+
+    /// What each word slot of `text` says under the def shapes.
+    fn lit_def(text: &str) -> Vec<String> {
+        let (shapes, subs) = def_shapes();
+        let found = Shapes::new(&shapes, &subs).found(text, &slots(text));
+        found.into_iter().next().map(|f| f.pieces).unwrap_or_default()
+    }
+
+    #[test]
+    fn each_word_of_a_wording_lights_the_word_it_came_from() {
+        // "function" comes from the `def` before the name, "takes" from the
+        // `(` before self, so it lights self; `->` is no word, so "and
+        // returns a" goes to the word after it
+        // (the test slots split at white space only; the document's words
+        // leave the punctuation out, see tests/test_shapes.py)
+        assert_eq!(
+            lit_def("def foo(self, bar: int, baz: str='') -> str:"),
+            ["function", "foo takes self and", "bar type", "int and", "baz", "with a default of '' type str", "and returns a", "str"]
+        );
+    }
+
+    #[test]
+    fn a_slot_no_word_reaches_says_nothing_and_the_order_holds() {
+        let shapes = [(r"(?<a>\w+) (?<b>\w+) (?<c>\w+)", "$c then $a")];
+        let found = Shapes::new(&to_owned(&shapes), &[]).found("x y z", &slots("x y z"));
+        // "z" belongs to the last slot, so "x" cannot go back to the first
+        assert_eq!(found[0].pieces, ["", "", "z then x"]);
+        let shapes = [(r"(?<a>\w+) (?<b>\w+)", "$a: $b")];
+        let found = Shapes::new(&to_owned(&shapes), &[]).found("x y", &slots("x y"));
+        assert_eq!(found[0].pieces, ["x:", "y"]);
+    }
+
+    fn to_owned(shapes: &[(&str, &str)]) -> Vec<(String, String)> {
+        shapes.iter().map(|(p, s)| (p.to_string(), s.to_string())).collect()
     }
 
     #[test]

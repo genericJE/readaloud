@@ -157,8 +157,9 @@ def test_a_shape_may_span_words():
         "see a dot pie line 12 now")
     assert said("see a.py(12) now", pairs, shapes)[0] == (
         "see a dot pie line 12 now")
+    # the wording says nothing for "File", so that word says a space
     assert said('at File "x.py", line 3 in', pairs, shapes)[0] == (
-        "at x dot pie line 3 in")
+        "at  x dot pie line 3 in")
 
 
 def test_a_shape_starts_and_ends_where_words_do():
@@ -362,6 +363,40 @@ def test_a_named_shape_says_each_match_in_a_group(tmp_path):
     text, words = said_by(cfg, "def foo(bar: int, baz: str='') -> str:")
     assert text == SAID_DEF
     assert words == ["def", "foo", "bar", "int", "baz", "str", "str"]
+
+
+def test_each_spoken_word_lights_the_word_it_came_from(tmp_path):
+    cfg, _ = load(tmp_path, DEF)
+    # "takes" comes from the "(" before bar, "type" from the ":" before its
+    # type, "and" from the "," before baz; a default has no word of its own,
+    # so it goes with the word before it; "->" is no word, so "and returns"
+    # goes with the type after it
+    text, _ = said_by(cfg, "def foo(bar: int, baz: str='') -> str:")
+    doc = Document.from_text("def foo(bar: int, baz: str='') -> str:",
+                             pronunciations=Lexicon(cfg.pronunciations,
+                                                    cfg.shape_patterns,
+                                                    cfg.sub_patterns))
+    assert doc.chunks[0].word_texts == [
+        "function", "foo", "takes bar", "type int", "and baz",
+        "with a default of empty string type string", "and returns a string"]
+    assert text == " ".join(doc.chunks[0].word_texts)
+    doc = Document.from_text(
+        "def for_file(self, path: str | Path | None) -> Config:",
+        pronunciations=Lexicon(cfg.pronunciations, cfg.shape_patterns,
+                               cfg.sub_patterns))
+    assert doc.chunks[0].word_texts == [
+        "function", "for_file", "takes self", "and path", "type string",
+        "| Path", "| None", "and returns a Config"]
+
+
+def test_a_wording_out_of_the_text_order_keeps_its_order(tmp_path):
+    cfg, _ = load(tmp_path, "[shapes]\n/(?<f>[a-z]+) (?<n>\\d+)/ = $n then $f\n")
+    doc = Document.from_text("see a 12 now", pronunciations=Lexicon(
+        (), cfg.shape_patterns))
+    # "a" cannot go back to the word before "12", so "a" says nothing
+    assert doc.chunks[0].word_texts == ["see", " ", "12 then a", "now"]
+    assert doc.chunks[0].text == "see  12 then a now"
+    # (that slot says one space, which stands in for the "a " it covered)
 
 
 def test_a_def_spread_over_lines(tmp_path):

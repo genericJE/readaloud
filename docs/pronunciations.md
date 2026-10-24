@@ -153,6 +153,12 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
   the query. A URL without a port is left as written. The scheme is said through `$scheme`; Kokoro
   is silent for `https` on its own, so the shipped pronunciations spell it out
   (`https = H T T P S`). Take `$scheme ` out of the wording to leave it unsaid.
+- **Each spoken word lights the word it came from.** `$file` lights the file name and
+  `$line` the number; a word of the wording's own lights the next word of the text after
+  the group before it, so the "takes" of `function $fn takes $params` lights the first
+  parameter, and punctuation written up against a group (`$line, column`) stays with it.
+  A word the wording leaves unsaid lights nothing. A wording that says the groups out of
+  the text's order can only light the later words, so keep the text's order where you can.
 - **What it says goes through your pronunciations.** The `.py` of `settings.py:498`
   stays "dot pie" and `localhost` stays "local host", because a shape's wording is read
   by your entries once more before it is said.

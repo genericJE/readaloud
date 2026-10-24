@@ -256,8 +256,9 @@ impl Lexicon {
             // the first name that ends after p: a match may not reach into it
             let k = name_ends.partition_point(|&e| e <= p);
             let name_at = names.get(k).map_or(chars.len(), |n| n.0);
-            // its rank, what to say, and whether it is a guard
-            let mut best: Option<(Rank, String, bool)> = None;
+            // its rank, what to say (a shape says a piece per word slot),
+            // and whether it is a guard
+            let mut best: Option<(Rank, Vec<Found>, bool)> = None;
             if literal_at == Some(p) {
                 for &i in &candidates[ci].1 {
                     let lit = &self.literals[i];
@@ -267,7 +268,7 @@ impl Lexicon {
                     }
                     let rank = (end, lit.exact, 1, lit.rank);
                     if best.as_ref().is_none_or(|b| rank > b.0) {
-                        best = Some((rank, lit.say.clone(), lit.say == lit.key));
+                        best = Some((rank, vec![(p, end, lit.say.clone())], lit.say == lit.key));
                     }
                 }
                 ci += 1;
@@ -282,28 +283,32 @@ impl Lexicon {
                     // the second pass must leave alone too
                     let written: String = chars[p..m.end].iter().collect();
                     best = Some(if m.say == written {
-                        (rank, written, true)
+                        (rank, vec![(p, m.end, written)], true)
                     } else {
-                        (rank, self.respoken(&m.say), false)
+                        (rank, vec![(p, m.end, self.respoken(&m.say))], false)
                     });
                 }
             }
             if shape_at == Some(p) {
-                let (_, end, say, guard) = &shaped[si];
+                let (_, end, pieces, guard) = &shaped[si];
                 let rank = (*end, false, 0, 0);
                 if name_at >= *end && best.as_ref().is_none_or(|b| rank > b.0) {
-                    best = Some((rank, say.clone(), *guard));
+                    best = Some((rank, pieces.clone(), *guard));
                 }
                 si += 1;
             }
             match best {
                 None => cursors.pass(p + 1),
-                Some(((end, _, _, _), say, guard)) => {
+                Some(((end, _, _, _), pieces, guard)) => {
                     // a guard, or text already said this way: claimed, not
                     // changed
-                    let written: String = chars[p..end].iter().collect();
-                    if !guard && written != say {
-                        found.push((p, end, say));
+                    if !guard {
+                        for (s, e, say) in pieces {
+                            let written: String = chars[s..e].iter().collect();
+                            if written != say {
+                                found.push((s, e, say));
+                            }
+                        }
                     }
                     pos = end;
                     cursors.pass(pos);
@@ -326,9 +331,11 @@ impl Lexicon {
         found
     }
 
-    /// `(start, end, say, guard)` of every shape found at the word slots, in
-    /// order.  `say` has been through the literal entries.
-    fn shaped(&self, chars: &[char], slots: &[(usize, usize)]) -> Vec<(usize, usize, String, bool)> {
+    /// `(start, end, pieces, guard)` of every shape found at the word slots,
+    /// in order.  `pieces` is a match per word slot the shape covers, each
+    /// running up to the next slot and saying its share of the wording,
+    /// which has been through the literal entries.
+    fn shaped(&self, chars: &[char], slots: &[(usize, usize)]) -> Vec<(usize, usize, Vec<Found>, bool)> {
         if self.shape_count() == 0 {
             return Vec::new();
         }
@@ -339,15 +346,37 @@ impl Lexicon {
         let mut out = Vec::new();
         for found in self.shapes.found(&text, &slots) {
             if found.as_written {
-                out.push((found.start, found.end, found.say, true));
+                out.push((found.start, found.end, vec![(found.start, found.end, found.say)], true));
                 continue;
             }
-            let say = self.respoken(&found.say);
-            if say.chars().any(is_word_char) {
-                out.push((found.start, found.end, say, false));
+            let mut says: Vec<String> = found.pieces.iter().map(|p| self.respoken(p)).collect();
+            if !says.iter().any(|s| s.chars().any(is_word_char)) {
+                continue;
             }
+            // a slot with nothing to say says a space, and one piece never
+            // runs into the next: respell puts a space only between letters
+            for k in 0..says.len() {
+                if says[k].is_empty() {
+                    says[k].push(' ');
+                } else if k > 0
+                    && !says[k - 1].ends_with(' ')
+                    && !(alnum(says[k - 1].chars().last()) && alnum(says[k].chars().next()))
+                {
+                    says[k - 1].push(' ');
+                }
+            }
+            let first = slots.partition_point(|&(s, _)| s < found.start);
+            let mut pieces = Vec::new();
+            let mut at = found.start;
+            for (k, say) in says.into_iter().enumerate() {
+                let next = slots.get(first + k + 1).map_or(found.end, |s| s.0).min(found.end);
+                let end = if k + 1 == found.pieces.len() { found.end } else { next };
+                pieces.push((at, end, say));
+                at = end;
+            }
+            out.push((found.start, found.end, pieces, false));
         }
-        out.sort();
+        out.sort_by_key(|s| (s.0, s.1));
         out
     }
 
@@ -633,7 +662,9 @@ fn share(say: &[char], k: usize) -> (Vec<(usize, usize)>, usize) {
         return (spans, 0);
     }
     let mut spans: Vec<(usize, usize)> = if m > 0 { pieces[..m - 1].to_vec() } else { Vec::new() };
-    let (mut p, q) = if m > 0 { pieces[m - 1] } else { (say.len(), say.len()) };
+    // with no word at all (a shape's slot that says nothing), the spaces
+    // there are shared out before any padding
+    let (mut p, q) = if m > 0 { pieces[m - 1] } else { (0, say.len()) };
     let c = k - spans.len();
     if q - p >= c {
         let (width, extra) = ((q - p) / c, (q - p) % c);
