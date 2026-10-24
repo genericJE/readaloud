@@ -23,6 +23,7 @@ use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::shapes::{Shapes, Subs};
+use crate::syntax::Syntax;
 use crate::text::{collapse, is_hump, is_space, is_upper, is_word_char, lower, same_folded};
 
 /// The gutter mdcat draws down a blockquote, which may follow a line break
@@ -65,6 +66,8 @@ pub struct Lexicon {
     symbols: HashMap<String, String>,
     /// the config file's shapes
     shapes: Shapes,
+    /// a source file's grammar and the rules that say its tree
+    syntax: Option<Syntax>,
 }
 
 /// A candidate's rank: the longest match wins, then a key with a capital,
@@ -118,6 +121,7 @@ impl Lexicon {
         pairs: &[(String, String, bool)],
         shapes: &[(String, String)],
         subs: &[(String, String, String)],
+        syntax: Option<Syntax>,
     ) -> Self {
         let mut lex = Lexicon {
             literals: Vec::new(),
@@ -129,6 +133,7 @@ impl Lexicon {
             folded_leads: HashMap::new(),
             symbols: HashMap::new(),
             shapes: Shapes::new(shapes, subs),
+            syntax,
         };
         for (rank, (written, spoken, is_pattern)) in pairs.iter().enumerate() {
             let say = collapse(spoken);
@@ -197,20 +202,34 @@ impl Lexicon {
         self.shapes.len()
     }
 
+    /// Whether `find` wants the word slots: there are shapes, or a grammar.
+    pub fn uses_slots(&self) -> bool {
+        self.shapes.len() > 0 || self.syntax.is_some()
+    }
+
+    /// Parse `text`, the whole document, with the grammar, for the chunks
+    /// `find` is then given with their place in it.  False without a
+    /// grammar, or when it could not parse.
+    pub fn parse(&self, text: &str) -> bool {
+        self.syntax.as_ref().is_some_and(|s| s.parse(text))
+    }
+
     /// Every `(start, end, say)` to respell in `text`: sorted, never empty and
     /// never overlapping.
     ///
     /// `symbols` lists `(start, end, symbol)` for each slot that says a symbol
     /// by its name.  No match may reach into a name; a literal whose key is
     /// the symbol replaces the whole name instead.  `slots` are the chunk's
-    /// word slots, the only places a shape is looked for.
+    /// word slots, the only places a shape is looked for.  `at` is where
+    /// `text` starts in the text `parse` was given, for the grammar's rules.
     pub fn find(
         &self,
         text: &str,
         symbols: &[(usize, usize, String)],
         slots: &[(usize, usize)],
+        at: Option<usize>,
     ) -> Vec<Found> {
-        self.scan(text, symbols, slots, true)
+        self.scan(text, symbols, slots, at, true)
     }
 
     /// `find` with or without the patterns and shapes: the second pass uses
@@ -220,9 +239,10 @@ impl Lexicon {
         text: &str,
         symbols: &[(usize, usize, String)],
         slots: &[(usize, usize)],
+        at: Option<usize>,
         everything: bool,
     ) -> Vec<Found> {
-        if self.literals.is_empty() && (!everything || self.len() + self.shape_count() == 0) {
+        if self.literals.is_empty() && (!everything || (self.len() == 0 && !self.uses_slots())) {
             return Vec::new();
         }
         let chars: Vec<char> = text.chars().collect();
@@ -235,7 +255,7 @@ impl Lexicon {
         let no_patterns: &[Pattern] = &[];
         let mut cursors =
             Cursors::new(if everything { &self.patterns } else { no_patterns }, text, self.shapes.subs());
-        let shaped = if everything { self.shaped(&chars, slots) } else { Vec::new() };
+        let shaped = if everything { self.shaped(&chars, slots, at) } else { Vec::new() };
         let mut si = 0;
         let mut found: Vec<Found> = Vec::new();
         let mut pos = 0;
@@ -289,9 +309,10 @@ impl Lexicon {
                     });
                 }
             }
-            if shape_at == Some(p) {
-                let (_, end, pieces, guard) = &shaped[si];
-                let rank = (*end, false, 0, 0);
+            // every shape and node starting here; a node outranks a shape
+            while si < shaped.len() && shaped[si].0 == p {
+                let (_, end, pieces, guard, tier) = &shaped[si];
+                let rank = (*end, false, 0, *tier);
                 if name_at >= *end && best.as_ref().is_none_or(|b| rank > b.0) {
                     best = Some((rank, pieces.clone(), *guard));
                 }
@@ -331,52 +352,74 @@ impl Lexicon {
         found
     }
 
-    /// `(start, end, pieces, guard)` of every shape found at the word slots,
-    /// in order.  `pieces` is a match per word slot the shape covers, each
-    /// running up to the next slot and saying its share of the wording,
-    /// which has been through the literal entries.
-    fn shaped(&self, chars: &[char], slots: &[(usize, usize)]) -> Vec<(usize, usize, Vec<Found>, bool)> {
-        if self.shape_count() == 0 {
+    /// `(start, end, pieces, guard, tier)` of every shape found at the word
+    /// slots and every node the grammar's rules say, in order.  `pieces` is
+    /// a match per word slot it covers, each running up to the next slot and
+    /// saying its share of the wording, which has been through the literal
+    /// entries.  The tier is 1 for a node, 0 for a shape.
+    fn shaped(&self, chars: &[char], slots: &[(usize, usize)], at: Option<usize>) -> Vec<(usize, usize, Vec<Found>, bool, usize)> {
+        if !self.uses_slots() {
             return Vec::new();
         }
         let mut slots: Vec<(usize, usize)> =
             slots.iter().copied().filter(|&(a, b)| a < b && b <= chars.len()).collect();
         slots.sort_unstable();
         let text: String = chars.iter().collect();
+        let mut all: Vec<(crate::shapes::Found, usize)> =
+            self.shapes.found(&text, &slots).into_iter().map(|f| (f, 0)).collect();
+        if let (Some(syntax), Some(at)) = (&self.syntax, at) {
+            all.extend(syntax.found(&text, at, &slots).into_iter().map(|f| (f, 1)));
+        }
         let mut out = Vec::new();
-        for found in self.shapes.found(&text, &slots) {
+        for (found, tier) in all {
             if found.as_written {
-                out.push((found.start, found.end, vec![(found.start, found.end, found.say)], true));
+                out.push((found.start, found.end, vec![(found.start, found.end, found.say)], true, tier));
                 continue;
             }
             let mut says: Vec<String> = found.pieces.iter().map(|p| self.respoken(p)).collect();
             if !says.iter().any(|s| s.chars().any(is_word_char)) {
                 continue;
             }
-            // a slot with nothing to say says a space, and one piece never
-            // runs into the next: respell puts a space only between letters
+            // the first slot the match reaches into; each piece runs from
+            // its slot's start (the first from the match's) to the next one's
+            let first = slots.partition_point(|&(_, e)| e <= found.start);
+            // a slot with nothing to say says a space; a piece that opens
+            // with a space (its first word had one before it in the wording)
+            // is kept apart from the one before by a space, or by the line
+            // break the text had between the two slots, so a body of code
+            // keeps its lines while "Sequence[" and "str]" stay together
+            // (respell itself puts a space only between letters)
             for k in 0..says.len() {
                 if says[k].is_empty() {
                     says[k].push(' ');
-                } else if k > 0
-                    && !says[k - 1].ends_with(' ')
-                    && !(alnum(says[k - 1].chars().last()) && alnum(says[k].chars().next()))
-                {
-                    says[k - 1].push(' ');
+                }
+                let lead = k + 1 < says.len() && says[k + 1].starts_with(' ') && says[k + 1].len() > 1;
+                if lead {
+                    says[k + 1].remove(0);
+                }
+                let gap: &[char] = match (slots.get(first + k), slots.get(first + k + 1)) {
+                    (Some(&(_, e)), Some(&(s, _))) if e <= s && s <= found.end => &chars[e..s],
+                    _ => &[],
+                };
+                if gap.contains(&'\n') {
+                    if !says[k].ends_with('\n') {
+                        says[k].push('\n');
+                    }
+                } else if lead && !says[k].ends_with(' ') {
+                    says[k].push(' ');
                 }
             }
-            let first = slots.partition_point(|&(s, _)| s < found.start);
             let mut pieces = Vec::new();
-            let mut at = found.start;
+            let mut from = found.start;
             for (k, say) in says.into_iter().enumerate() {
-                let next = slots.get(first + k + 1).map_or(found.end, |s| s.0).min(found.end);
+                let next = slots.get(first + k + 1).map_or(found.end, |s| s.0).clamp(from, found.end);
                 let end = if k + 1 == found.pieces.len() { found.end } else { next };
-                pieces.push((at, end, say));
-                at = end;
+                pieces.push((from, end, say));
+                from = end;
             }
-            out.push((found.start, found.end, pieces, false));
+            out.push((found.start, found.end, pieces, false, tier));
         }
-        out.sort_by_key(|s| (s.0, s.1));
+        out.sort_by_key(|s| (s.0, std::cmp::Reverse(s.4), s.1));
         out
     }
 
@@ -386,7 +429,7 @@ impl Lexicon {
         if self.literals.is_empty() || n == 0 {
             return say.to_string();
         }
-        let found = self.scan(say, &[], &[], false);
+        let found = self.scan(say, &[], &[], None, false);
         if found.is_empty() {
             return say.to_string();
         }
@@ -783,12 +826,12 @@ mod tests {
                 (k.to_string(), s.to_string(), pattern)
             })
             .collect();
-        Lexicon::new(&pairs, &[], &[])
+        Lexicon::new(&pairs, &[], &[], None)
     }
 
     fn said(l: &Lexicon, text: &str) -> String {
         let n = text.chars().count();
-        let found = l.find(text, &[], &[]);
+        let found = l.find(text, &[], &[], None);
         respell(text, &[(0, n)], &found).unwrap().0
     }
 
@@ -803,14 +846,14 @@ mod tests {
     fn a_pattern_wording_may_use_a_sub_shape() {
         let pairs = vec![(r"/\[(?<items>[^\]]+)\]/".to_string(), "list of ${items|item|,=and}".to_string(), true)];
         let subs = vec![("item".to_string(), r"\d+".to_string(), "number $0".to_string())];
-        let l = Lexicon::new(&pairs, &[], &subs);
+        let l = Lexicon::new(&pairs, &[], &subs, None);
         assert_eq!(said(&l, "[1, 2]"), "list of number 1 and number 2");
     }
 
     #[test]
     fn a_literal_is_found_by_its_break_rules() {
         let l = lex(&[("id", "ID")]);
-        let f = |t: &str| l.find(t, &[], &[]).iter().map(|m| (m.0, m.1)).collect::<Vec<_>>();
+        let f = |t: &str| l.find(t, &[], &[], None).iter().map(|m| (m.0, m.1)).collect::<Vec<_>>();
         assert_eq!(f("user.id userId idle"), vec![(5, 7), (12, 14)]);
     }
 

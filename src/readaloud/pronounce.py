@@ -130,21 +130,37 @@ class Lexicon:
     none by default.  A shape is only looked for at the word slots handed to
     :meth:`find`.  `subshapes` are the named shapes, (name, pattern,
     wording): never found on their own, they say each of their matches in
-    a group whose wording calls on them as ``${group|name}``.
+    a group whose wording calls on them as ``${group|name}``.  `grammar`
+    (a `readaloud.syntax.Grammar`) and `rules`, (node kind, wording), say a
+    source file's syntax tree, once :meth:`parse` has been given the file.
     """
 
     def __init__(self, pairs: Iterable[tuple[str, str]] = (),
                  shapes: Iterable[tuple[str, str]] = (),
-                 subshapes: Iterable[tuple[str, str, str]] = ()) -> None:
+                 subshapes: Iterable[tuple[str, str, str]] = (),
+                 grammar=None, rules: Iterable[tuple[str, str]] = ()) -> None:
         self._core = _core.Lexicon(
             [(written, spoken, is_pattern(written)) for written, spoken in pairs],
             [(pattern, say) for pattern, say in shapes],
-            [(name, pattern, say) for name, pattern, say in subshapes])
+            [(name, pattern, say) for name, pattern, say in subshapes],
+            grammar, [(kind, say) for kind, say in rules])
 
     @property
     def shapes(self) -> int:
         """How many shapes are on."""
         return self._core.shape_count()
+
+    @property
+    def uses_slots(self) -> bool:
+        """Whether :meth:`find` wants the word slots: there are shapes, or
+        a grammar."""
+        return self._core.uses_slots()
+
+    def parse(self, text: str) -> bool:
+        """Parse `text`, the whole document, with the grammar, for the chunks
+        :meth:`find` is then given with their place in it (`at`).  False
+        without a grammar, or when it could not parse."""
+        return self._core.parse(text)
 
     def __bool__(self) -> bool:
         return len(self._core) > 0 or self.shapes > 0
@@ -153,7 +169,7 @@ class Lexicon:
         return len(self._core)
 
     def find(self, text: str, symbols: Sequence[tuple[int, int, str]] = (),
-             slots: Sequence[tuple[int, int]] = ()
+             slots: Sequence[tuple[int, int]] = (), at: int | None = None
              ) -> list[tuple[int, int, str]]:
         """Every ``(start, end, say)`` to respell in `text`.
 
@@ -167,8 +183,10 @@ class Lexicon:
 
         `slots` are the ``(start, end)`` of the word slots in `text`; a shape
         is matched against a whole slot, so without slots there is none.
+        `at` is where `text` starts in the text :meth:`parse` was given,
+        without which the grammar's rules say nothing.
         """
-        return self._core.find(text, list(symbols), list(slots))
+        return self._core.find(text, list(symbols), list(slots), at)
 
 
 def respell(text: str, slots: Sequence[tuple[int, int]],

@@ -229,6 +229,35 @@ def input_file(args: argparse.Namespace) -> str | None:
     return getattr(args, "file", None)
 
 
+def grammar_for_input(args: argparse.Namespace, cfg):
+    """The grammar the config's ``[syntax]`` rules read the input file with,
+    and the notices on the way: ``(grammar or None, notices)``.
+
+    Only a named file with a type (``-f x.py``) has a grammar, found by its
+    suffix or the ``language`` setting; without one, or with rules the
+    grammar does not have, the notices say so and the file is read without.
+    """
+    from . import config as config_mod
+    from . import syntax
+
+    path = input_file(args)
+    if not cfg.syntax or not path or path == "-":
+        return None, []
+    suffix = Path(path).suffix
+    language = syntax.language_for(suffix, cfg.language)
+    at = f"{config_path(args)}: "
+    if language is None:
+        return None, [f"{at}[{config_mod.SYNTAX}{suffix.lower()}]: no grammar "
+                      f"is known for {suffix} files; set language under "
+                      f"[{config_mod.SECTION}{suffix.lower()}]"]
+    try:
+        grammar = syntax.grammar_for(language, cfg.parsers)
+    except syntax.GrammarError as exc:
+        return None, [f"{at}{exc}"]
+    section = f"{config_mod.SYNTAX}{suffix.lower()}"
+    return grammar, [f"{at}{p}" for p in syntax.check_rules(cfg.syntax, grammar, section)]
+
+
 def document_name(args: argparse.Namespace) -> str:
     """What to call this document -- Control Center shows it as the "artist".
 
@@ -579,8 +608,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
     # Built once whichever way the document is read; --no-config has none.
     from .pronounce import Lexicon
 
+    grammar, grammar_notices = grammar_for_input(args, cfg)
+    warnings += grammar_notices
     pronunciations = Lexicon(cfg.pronunciations, cfg.shape_patterns,
-                             cfg.sub_patterns)
+                             cfg.sub_patterns, grammar, cfg.syntax)
     no_color = not args.color
     md_notices: list[str] = []
     if mdcat is not None:

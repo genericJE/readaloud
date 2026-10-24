@@ -17,12 +17,14 @@ what to install; nothing here is needed to read text.
 from __future__ import annotations
 
 import importlib
+import re
+from collections.abc import Iterable
 from pathlib import Path
 
 from . import _core
 
-__all__ = ["Grammar", "GrammarError", "LANGUAGES", "from_file", "from_module",
-           "grammar_for", "language_for", "outline"]
+__all__ = ["Grammar", "GrammarError", "LANGUAGES", "check_rules", "from_file",
+           "from_module", "grammar_for", "language_for", "outline"]
 
 Grammar = _core.Grammar
 
@@ -113,6 +115,38 @@ def from_file(path: str | Path, language: str) -> Grammar:
         return Grammar.load(str(path), language)
     except ValueError as exc:
         raise GrammarError(str(exc)) from exc
+
+
+_REFERENCE_RE = re.compile(r"\$\$|\$\{([^}|]*)(?:\|[^}|]*)*\}|\$(\w+|\*)")
+
+
+def check_rules(rules: Iterable[tuple[str, str]], grammar: Grammar,
+                section: str = "syntax") -> list[str]:
+    """What `grammar` makes of the ``[syntax]`` `rules`, ``(key, wording)``:
+    a problem per rule whose node kind, parent kind or field the grammar does
+    not have, each starting ``[section]``.  Such a rule is never met, so it
+    costs nothing but the warning."""
+    kinds = set(grammar.node_kinds())
+    fields = set(grammar.field_names())
+    problems = []
+    for key, wording in rules:
+        kind, dot, field = key.partition(".")
+        names = [(k, True) for k in kind.split("/")] + ([(field, False)] if dot else [])
+        for name, is_kind in names:
+            if is_kind and name not in kinds:
+                problems.append(f"[{section}] {key}: no node is a {name!r}")
+                break
+            if not is_kind and name not in fields:
+                problems.append(f"[{section}] {key}: no node has a field {name!r}")
+                break
+        else:
+            for m in _REFERENCE_RE.finditer(wording):
+                name = m.group(1) if m.group(1) is not None else m.group(2)
+                if name and name not in ("0", "*") and name not in fields:
+                    problems.append(f"[{section}] {key}: no node has a field "
+                                    f"{name!r}")
+                    break
+    return problems
 
 
 def outline(text: str, grammar: Grammar) -> str:

@@ -187,6 +187,9 @@ class Chunk:
     #: the last spoken cell of its table row, after which the reader pauses a
     #: beat longer; a row with nothing to say has none
     row_end: bool = False
+    #: where ``text`` starts in the whole document joined with newlines;
+    #: None for a cell, whose text is put together differently
+    flat_start: int | None = None
 
     @property
     def line_span(self) -> tuple[int, int]:
@@ -832,6 +835,7 @@ def build_chunks(plain: Sequence[str], words: Sequence[Word],
                 line_end=line_end,
                 speakable=bool(picked),
                 word_texts=texts,
+                flat_start=a,
                 kind=kind,
             ))
     return chunks
@@ -1176,6 +1180,11 @@ class Document:
         for spans in taken.values():
             spans.sort()
         added: dict[int, list[tuple[int, Word]]] = {}
+        # the slots go along only for a lexicon with shapes or a grammar,
+        # which is all they are for; a grammar reads the whole document once
+        # and is then told where each chunk lies in it
+        uses_slots = getattr(lexicon, "uses_slots", False)
+        parsed = uses_slots and lexicon.parse("\n".join(self.plain))
         for chunk in self.chunks:
             if not (chunk.speakable and chunk.words and len(chunk.words)
                     == len(chunk.offsets) == len(chunk.word_texts)):
@@ -1187,10 +1196,9 @@ class Document:
                 symbols = [(a, b, self.words[w].text) for (a, b), w, t
                            in zip(slots, chunk.words, chunk.word_texts)
                            if t != self.words[w].text]
-                # the slots go along only for a lexicon with shapes, which
-                # is all they are for
-                matches = (lexicon.find(chunk.text, symbols, slots)
-                           if getattr(lexicon, "shapes", 0)
+                at = chunk.flat_start if parsed else None
+                matches = (lexicon.find(chunk.text, symbols, slots, at)
+                           if uses_slots
                            else lexicon.find(chunk.text, symbols))
                 if not matches:
                     continue

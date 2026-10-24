@@ -1017,8 +1017,9 @@ def _parse_types(lifted: dict[str, list[tuple[int, str]]],
     return out
 
 
-#: A syntax rule's key: a node kind, or a parent kind and a kind.
-_RULE_KEY_RE = re.compile(r"(?:[A-Za-z_]\w*/)?[A-Za-z_]\w*")
+#: A syntax rule's key: a node kind, an ancestor's kind and a kind, or a
+#: kind and the field of it the node is.
+_RULE_KEY_RE = re.compile(r"[A-Za-z_]\w*(?:[/.][A-Za-z_]\w*)?")
 #: A reference in a rule's wording: $$, $field, ${field|from=to}, $0 (the
 #: node as written) or $* (the node's parts in order).
 _RULE_REFERENCE_RE = re.compile(r"\$\$|\$\{([^}|]*)((?:\|[^}|]*)*)\}|\$(\w+|\*)")
@@ -1028,9 +1029,10 @@ def _parse_syntax(lines: list[tuple[int, str]]
                   ) -> tuple[tuple[tuple[str, str], ...], list[str]]:
     """Return ``(rules, problems)`` for the ``[syntax]`` lines.
 
-    A rule is ``kind = wording``, or ``parent/kind = wording`` for a node
-    only under a parent of that kind; `rules` is ``(key, wording)`` per
-    usable line, in file order.  The wording names the node's fields as
+    A rule is ``kind = wording``; ``ancestor/kind = wording`` for such a
+    node only under a node of the first kind; or ``kind.field = wording``
+    for whatever node is that field of such a node.  `rules` is ``(key,
+    wording)`` per usable line, in file order.  The wording names the node's fields as
     ``$name``, says the node as written as ``$0`` and its parts in order as
     ``$*``, with ``|from=to`` replacements as a shape's wording has them;
     an empty wording says the node as written.  Whether a kind or a field
@@ -1053,7 +1055,8 @@ def _parse_syntax(lines: list[tuple[int, str]]
         wording = _normalise(wording)
         if not _RULE_KEY_RE.fullmatch(key):
             problems.append(f"{at}{_shown(key)} is not a node kind: a rule "
-                            f"is kind = wording, or parent/kind = wording")
+                            f"is kind = wording, ancestor/kind = wording, "
+                            f"or kind.field = wording")
             continue
         problem = _rule_problem(wording)
         if problem:

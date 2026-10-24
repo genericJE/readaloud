@@ -402,7 +402,9 @@ def test_a_wording_out_of_the_text_order_keeps_its_order(tmp_path):
 def test_a_def_spread_over_lines(tmp_path):
     cfg, _ = load(tmp_path, DEF)
     signature = "def foo(\n    bar: int,\n    baz: str = '',\n) -> str:"
-    assert said_by(cfg, signature)[0] == SAID_DEF
+    # the line breaks between the words stay, a pause per line
+    assert said_by(cfg, signature)[0] == SAID_DEF.replace(" takes", "\ntakes").replace(
+        " and", "\nand")
 
 
 def test_a_named_shape_is_not_found_on_its_own(tmp_path):

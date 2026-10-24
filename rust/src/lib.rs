@@ -5,6 +5,7 @@
 //! the Python side counts them.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -78,13 +79,16 @@ struct PyLexicon {
 impl PyLexicon {
     /// `pairs` are `(written, spoken, is_pattern)` in file order; `shapes`
     /// are `(pattern, wording)` in file order, and `subs` the named shapes,
-    /// `(name, pattern, wording)`.
+    /// `(name, pattern, wording)`.  `grammar` and `rules`, `(kind, wording)`,
+    /// say a source file's tree once `parse` has been given the file.
     #[new]
-    #[pyo3(signature = (pairs = Vec::new(), shapes = Vec::new(), subs = Vec::new()))]
+    #[pyo3(signature = (pairs = Vec::new(), shapes = Vec::new(), subs = Vec::new(), grammar = None, rules = Vec::new()))]
     fn new(
         pairs: Vec<(Bound<'_, PyString>, Bound<'_, PyString>, bool)>,
         shapes: Vec<(Bound<'_, PyString>, Bound<'_, PyString>)>,
         subs: Vec<(Bound<'_, PyString>, Bound<'_, PyString>, Bound<'_, PyString>)>,
+        grammar: Option<PyRef<'_, PyGrammar>>,
+        rules: Vec<(Bound<'_, PyString>, Bound<'_, PyString>)>,
     ) -> Self {
         let pairs: Vec<(String, String, bool)> =
             pairs.iter().map(|(w, s, p)| (text_of(w), text_of(s), *p)).collect();
@@ -92,7 +96,21 @@ impl PyLexicon {
             shapes.iter().map(|(pattern, say)| (text_of(pattern), text_of(say))).collect();
         let subs: Vec<(String, String, String)> =
             subs.iter().map(|(n, p, s)| (text_of(n), text_of(p), text_of(s))).collect();
-        PyLexicon { inner: pronounce::Lexicon::new(&pairs, &shapes, &subs) }
+        let rules: Vec<(String, String)> = rules.iter().map(|(k, w)| (text_of(k), text_of(w))).collect();
+        let syntax = grammar.map(|g| syntax::Syntax::new(g.inner.clone(), &rules));
+        PyLexicon { inner: pronounce::Lexicon::new(&pairs, &shapes, &subs, syntax) }
+    }
+
+    /// Whether `find` wants the word slots: there are shapes, or a grammar.
+    fn uses_slots(&self) -> bool {
+        self.inner.uses_slots()
+    }
+
+    /// Parse `text`, the whole document, with the grammar; False without one
+    /// or when it could not parse.
+    fn parse(&self, py: Python<'_>, text: &Bound<'_, PyString>) -> bool {
+        let text = text_of(text);
+        py.detach(|| self.inner.parse(&text))
     }
 
     fn __len__(&self) -> usize {
@@ -104,25 +122,26 @@ impl PyLexicon {
         self.inner.shape_count()
     }
 
-    #[pyo3(signature = (text, symbols = Vec::new(), slots = Vec::new()))]
+    #[pyo3(signature = (text, symbols = Vec::new(), slots = Vec::new(), at = None))]
     fn find(
         &self,
         py: Python<'_>,
         text: &Bound<'_, PyString>,
         symbols: Vec<(usize, usize, Bound<'_, PyString>)>,
         slots: Vec<(usize, usize)>,
+        at: Option<usize>,
     ) -> Vec<pronounce::Found> {
         let text = text_of(text);
         let symbols: Vec<(usize, usize, String)> =
             symbols.iter().map(|(s, e, sym)| (*s, *e, text_of(sym))).collect();
-        py.detach(|| self.inner.find(&text, &symbols, &slots))
+        py.detach(|| self.inner.find(&text, &symbols, &slots, at))
     }
 }
 
 /// A language's grammar for `syntax_tree`.  `readaloud.syntax` wraps it.
 #[pyclass(name = "Grammar", frozen, module = "readaloud._core")]
 struct PyGrammar {
-    inner: syntax::Grammar,
+    inner: Arc<syntax::Grammar>,
     /// the capsule the grammar came from, kept alive with it
     _capsule: Option<Py<PyAny>>,
 }
@@ -144,7 +163,7 @@ impl PyGrammar {
         // SAFETY: the capsule holds a TSLanguage that is static data of the
         // grammar's module, and the capsule is kept alive with the grammar
         let inner = unsafe { syntax::Grammar::from_raw(pointer.as_ptr()) }.map_err(PyValueError::new_err)?;
-        Ok(PyGrammar { inner, _capsule: Some(capsule.clone().into_any().unbind()) })
+        Ok(PyGrammar { inner: Arc::new(inner), _capsule: Some(capsule.clone().into_any().unbind()) })
     }
 
     /// From the shared library `path`, which exports `tree_sitter_<name>`,
@@ -152,7 +171,7 @@ impl PyGrammar {
     #[staticmethod]
     fn load(path: PathBuf, name: &str) -> PyResult<Self> {
         let inner = syntax::Grammar::load(&path, name).map_err(PyValueError::new_err)?;
-        Ok(PyGrammar { inner, _capsule: None })
+        Ok(PyGrammar { inner: Arc::new(inner), _capsule: None })
     }
 
     #[getter]

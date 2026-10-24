@@ -8,11 +8,15 @@
 //! returns it.  Either way the runtime checks the grammar's ABI version
 //! before it parses with it, as Neovim does.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use tree_sitter::ffi::TSLanguage;
-use tree_sitter::{Language, Parser, Tree, LANGUAGE_VERSION, MIN_COMPATIBLE_LANGUAGE_VERSION};
+use tree_sitter::{Language, Node, Parser, Tree, LANGUAGE_VERSION, MIN_COMPATIBLE_LANGUAGE_VERSION};
+
+use crate::shapes::{shared, swapped, Found, Piece};
 
 /// A language's grammar, ready to parse with.
 pub struct Grammar {
@@ -153,6 +157,284 @@ pub fn outline(tree: &Tree, text: &str) -> String {
             }
             depth -= 1;
         }
+    }
+}
+
+/// How deep a tree is followed before a node is said as written.
+const MAX_DEPTH: usize = 256;
+
+/// The `[syntax]` rules: a node kind, `ancestor/kind` for such a node
+/// anywhere under a node of the first kind, or `kind.field` for whatever
+/// node is that field of such a node, and how to say it.  A later rule for
+/// the same key replaces an earlier one.
+pub struct Rules {
+    by_key: HashMap<String, String>,
+}
+
+impl Rules {
+    pub fn new(rules: &[(String, String)]) -> Self {
+        let by_key = rules.iter().map(|(k, w)| (k.clone(), crate::text::collapse(w))).collect();
+        Rules { by_key }
+    }
+
+    /// The wording for `node`: `kind.field` for the field it is of its
+    /// parent, else `ancestor/kind` for its nearest ancestor that has one,
+    /// else its own kind's.  Empty says the node as written.
+    fn wording(&self, node: Node) -> Option<&str> {
+        if let Some(parent) = node.parent() {
+            let mut cursor = parent.walk();
+            let field = parent
+                .children(&mut cursor)
+                .position(|c| c == node)
+                .and_then(|i| parent.field_name_for_child(i as u32));
+            if let Some(field) = field {
+                if let Some(w) = self.by_key.get(&format!("{}.{}", parent.kind(), field)) {
+                    return Some(w);
+                }
+            }
+        }
+        let mut up = node.parent();
+        while let Some(ancestor) = up {
+            if let Some(w) = self.by_key.get(&format!("{}/{}", ancestor.kind(), node.kind())) {
+                return Some(w);
+            }
+            up = ancestor.parent();
+        }
+        self.by_key.get(node.kind()).map(String::as_str)
+    }
+}
+
+/// A text parsed whole, so a chunk of it can be said from the tree.
+struct Parsed {
+    text: String,
+    tree: Tree,
+    /// character offset -> byte offset, plus the end
+    byte_of: Vec<usize>,
+    /// byte offset -> character offset, at character starts and the end
+    char_of: HashMap<usize, usize>,
+}
+
+/// A grammar and the rules that say its nodes, over one parsed text.
+pub struct Syntax {
+    grammar: Arc<Grammar>,
+    rules: Rules,
+    parsed: Mutex<Option<Parsed>>,
+}
+
+impl Syntax {
+    pub fn new(grammar: Arc<Grammar>, rules: &[(String, String)]) -> Self {
+        Syntax { grammar, rules: Rules::new(rules), parsed: Mutex::new(None) }
+    }
+
+    /// Parse `text`, the whole document, for the chunks of it `found` is
+    /// asked about.  False when the grammar could not parse it.
+    pub fn parse(&self, text: &str) -> bool {
+        let Some(tree) = self.grammar.parse(text) else { return false };
+        let mut byte_of = Vec::new();
+        let mut char_of = HashMap::new();
+        for (c, (b, _)) in text.char_indices().enumerate() {
+            byte_of.push(b);
+            char_of.insert(b, c);
+        }
+        char_of.insert(text.len(), byte_of.len());
+        byte_of.push(text.len());
+        *self.parsed.lock().unwrap() = Some(Parsed { text: text.to_string(), tree, byte_of, char_of });
+        true
+    }
+
+    /// Every node a rule says that starts within the chunk `text`, which
+    /// starts at character `at` of the parsed text, as shapes are found:
+    /// in chunk characters, with a piece per word slot of `slots` it covers.
+    /// A node that runs past the chunk (a `def` with its body) is said as
+    /// far as the chunk goes; the nodes inside one that began in an earlier
+    /// chunk are said on their own.  Nothing unless `parse` was given a text
+    /// the chunk is a slice of.
+    pub fn found(&self, text: &str, at: usize, slots: &[(usize, usize)]) -> Vec<Found> {
+        let guard = self.parsed.lock().unwrap();
+        let Some(parsed) = guard.as_ref() else { return Vec::new() };
+        let (Some(&lo), Some(&hi)) = (parsed.byte_of.get(at), parsed.byte_of.get(at + text.chars().count())) else {
+            return Vec::new();
+        };
+        if parsed.text.get(lo..hi) != Some(text) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut stack = vec![parsed.tree.root_node()];
+        while let Some(node) = stack.pop() {
+            if node.end_byte() <= lo || node.start_byte() >= hi {
+                continue;
+            }
+            let starts_here = lo <= node.start_byte() && node.start_byte() < hi;
+            if starts_here && node.start_byte() < node.end_byte() {
+                if let Some(wording) = self.rules.wording(node) {
+                    out.push(self.said(parsed, node, wording, at, slots, hi));
+                    continue;
+                }
+            }
+            let mut cursor = node.walk();
+            let children: Vec<Node> = node.children(&mut cursor).collect();
+            stack.extend(children.into_iter().rev());
+        }
+        out.sort_by_key(|f| (f.start, f.end));
+        out
+    }
+
+    /// `node` said by `wording`, as a shape is found, up to byte `hi` of the
+    /// parsed text where the chunk ends: what the wording says for text past
+    /// it is left out.
+    fn said(&self, p: &Parsed, node: Node, wording: &str, at: usize, slots: &[(usize, usize)], hi: usize) -> Found {
+        let stop = node.end_byte().min(hi);
+        let matched = &p.text[node.start_byte()..stop];
+        let start = p.char_of[&node.start_byte()] - at;
+        let end = p.char_of[&stop] - at;
+        if wording.is_empty() {
+            return Found { start, end, say: matched.to_string(), as_written: true, pieces: Vec::new() };
+        }
+        let mut pieces = Vec::new();
+        self.expand(p, node, wording, node.start_byte(), 0, &mut pieces);
+        let limit = stop - node.start_byte();
+        pieces.retain_mut(|piece| {
+            if piece.src >= limit {
+                return false;
+            }
+            if piece.verbatim && piece.src + piece.text.len() > limit {
+                piece.text.truncate(limit - piece.src);
+            }
+            piece.until = piece.until.min(limit);
+            true
+        });
+        let say = crate::text::collapse(&pieces.iter().map(|x| x.text.as_str()).collect::<String>());
+        let covered: Vec<(usize, usize)> =
+            slots.iter().copied().filter(|&(a, b)| a < end && b > start).collect();
+        let shares = shared(&pieces, matched, start, &covered);
+        Found { start, end, say, as_written: false, pieces: shares }
+    }
+
+    /// `node` onto `out`: by its rule, or else its parts in order, the named
+    /// ones by their rules and the rest as written, through `swaps`.  Byte
+    /// offsets are from `base`, where the node a rule is saying starts.
+    fn say_node(&self, p: &Parsed, node: Node, base: usize, depth: usize, out: &mut Vec<Piece>, swaps: &[(&str, &str)]) {
+        if depth > MAX_DEPTH {
+            swapped(&p.text[node.byte_range()], swaps, node.start_byte() - base, node.end_byte() - base, out);
+            return;
+        }
+        match self.rules.wording(node) {
+            Some("") => swapped(&p.text[node.byte_range()], swaps, node.start_byte() - base, node.end_byte() - base, out),
+            Some(wording) => self.expand(p, node, wording, base, depth, out),
+            None => self.say_parts(p, node, base, depth, out, false, swaps),
+        }
+    }
+
+    /// `node`'s children in order, with the text between them as written;
+    /// only the named children when `named_only`, comments and the like
+    /// left out, and then nothing before the first or after the last.  The
+    /// `swaps` touch the text said as written at this level, not the
+    /// children's, which have rules of their own.  A word said for the text
+    /// between two children (a comma as "and") may light any child after it.
+    fn say_parts(&self, p: &Parsed, node: Node, base: usize, depth: usize, out: &mut Vec<Piece>, named_only: bool, swaps: &[(&str, &str)]) {
+        let verbatim = |out: &mut Vec<Piece>, a: usize, b: usize| {
+            if a < b {
+                swapped(&p.text[a..b], swaps, a - base, node.end_byte() - base, out);
+            }
+        };
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.children(&mut cursor).collect();
+        let part = |c: &Node| !named_only || (c.is_named() && !c.is_extra());
+        let Some(first) = children.iter().find(|c| part(c)) else {
+            if !named_only {
+                verbatim(out, node.start_byte(), node.end_byte());
+            }
+            return;
+        };
+        let mut prev = if named_only { first.start_byte() } else { node.start_byte() };
+        for child in &children {
+            if part(child) {
+                verbatim(out, prev, child.start_byte());
+                if child.is_named() {
+                    self.say_node(p, *child, base, depth + 1, out, &[]);
+                } else {
+                    verbatim(out, child.start_byte(), child.end_byte());
+                }
+                prev = child.end_byte();
+            } else if named_only && child.is_extra() && child.start_byte() >= prev {
+                // a comment among the parts: the text before it stays, it goes
+                verbatim(out, prev, child.start_byte());
+                prev = child.end_byte();
+            }
+        }
+        if !named_only {
+            verbatim(out, prev, node.end_byte());
+        }
+    }
+
+    /// `wording` for `node` onto `out`: `$field` says the children of that
+    /// field, `$0` the node in full, `$*` its named children with the text
+    /// between them.  The `|from=to` replacements of a reference touch the
+    /// text said as written at that level, between the parts and a field's
+    /// own, never inside a part, which has rules of its own.  The wording's
+    /// own words come from the text after the last field said.
+    fn expand(&self, p: &Parsed, node: Node, wording: &str, base: usize, depth: usize, out: &mut Vec<Piece>) {
+        let own = |out: &mut Vec<Piece>, text: &str, src: usize| {
+            if !text.is_empty() {
+                out.push(Piece { text: text.to_string(), src, verbatim: false, until: node.end_byte() - base });
+            }
+        };
+        let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '*';
+        let mut prev_end = node.start_byte() - base;
+        let mut rest = wording;
+        while let Some(dollar) = rest.find('$') {
+            own(out, &rest[..dollar], prev_end);
+            let after = &rest[dollar + 1..];
+            let (name, swaps, tail): (&str, Vec<(&str, &str)>, &str) = if let Some(tail) = after.strip_prefix('$') {
+                own(out, "$", prev_end);
+                rest = tail;
+                continue;
+            } else if let Some(inner) = after.strip_prefix('{') {
+                let Some(close) = inner.find('}') else {
+                    own(out, "$", prev_end);
+                    rest = after;
+                    continue;
+                };
+                let mut pieces = inner[..close].split('|');
+                let name = pieces.next().unwrap_or("");
+                let swaps = pieces
+                    .filter_map(|f| f.split_once('='))
+                    .filter(|(from, _)| !from.is_empty())
+                    .collect();
+                (name, swaps, &inner[close + 1..])
+            } else {
+                let n = after.find(|c: char| !word(c)).unwrap_or(after.len());
+                if n == 0 {
+                    own(out, "$", prev_end);
+                    rest = after;
+                    continue;
+                }
+                (&after[..n], Vec::new(), &after[n..])
+            };
+            let mut said: Vec<Piece> = Vec::new();
+            match name {
+                "0" => self.say_parts(p, node, base, depth, &mut said, false, &swaps),
+                "*" => self.say_parts(p, node, base, depth, &mut said, true, &swaps),
+                field => {
+                    let mut cursor = node.walk();
+                    let children: Vec<Node> = node.children_by_field_name(field, &mut cursor).collect();
+                    let mut prev = None;
+                    for child in children {
+                        if let Some(prev) = prev {
+                            swapped(&p.text[prev..child.start_byte()], &swaps, prev - base, node.end_byte() - base, &mut said);
+                        }
+                        self.say_node(p, child, base, depth + 1, &mut said, &swaps);
+                        prev = Some(child.end_byte());
+                    }
+                }
+            }
+            if let Some(last) = said.last() {
+                prev_end = last.until;
+            }
+            out.extend(said);
+            rest = tail;
+        }
+        own(out, rest, prev_end);
     }
 }
 

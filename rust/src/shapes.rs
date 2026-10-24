@@ -69,11 +69,11 @@ pub struct Found {
 /// from: a byte offset, which is each character's own when `verbatim`, and
 /// the end of the group or match it belongs to, past which it looks for no
 /// word to light.
-struct Piece {
-    text: String,
-    src: usize,
-    verbatim: bool,
-    until: usize,
+pub(crate) struct Piece {
+    pub(crate) text: String,
+    pub(crate) src: usize,
+    pub(crate) verbatim: bool,
+    pub(crate) until: usize,
 }
 
 /// Why `pattern` cannot be a shape, or the names of its groups.
@@ -241,7 +241,7 @@ fn expand_pieces(template: &str, caps: &Captures, subs: &Subs, depth: usize, bas
 /// ends at `until`, onto `out` with every `from` of `swaps` said as ` to `:
 /// one pass, so a replacement is never replaced again, and the first that
 /// fits wins.
-fn swapped(text: &str, swaps: &[(&str, &str)], at: usize, until: usize, out: &mut Vec<Piece>) {
+pub(crate) fn swapped(text: &str, swaps: &[(&str, &str)], at: usize, until: usize, out: &mut Vec<Piece>) {
     let mut i = 0;
     let mut kept = 0;
     while i < text.len() {
@@ -270,7 +270,7 @@ fn swapped(text: &str, swaps: &[(&str, &str)], at: usize, until: usize, out: &mu
 /// default `=''`, goes with the slot before it.  A word never goes back to
 /// an earlier slot than the word before it, so the wording keeps its order;
 /// a slot no word reaches says nothing.
-fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(usize, usize)]) -> Vec<String> {
+pub(crate) fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(usize, usize)]) -> Vec<String> {
     // byte offset in the matched text -> character offset in the chunk
     let mut char_at: Vec<usize> = vec![0; matched.len() + 1];
     for (c, (b, ch)) in matched.char_indices().enumerate() {
@@ -307,6 +307,9 @@ fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(usize, usiz
             }
         }
     }
+    // A slot's text opens with a space when its first word had one before
+    // it, so that "foo()" and "dot bar()" are kept apart and `"` and `x.y`
+    // are not; the caller takes that space as the sign to put one in.
     let mut said: Vec<String> = vec![String::new(); covered.len()];
     let (mut slot, mut prev) = (0, None);
     for (word, src, until, spaced) in &words {
@@ -317,6 +320,8 @@ fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(usize, usiz
             slot = slot.max(slot_of(*src, *until));
         }
         if !said[slot].is_empty() && (*spaced || prev != Some(slot)) {
+            said[slot].push(' ');
+        } else if said[slot].is_empty() && *spaced && prev.is_some() {
             said[slot].push(' ');
         }
         said[slot].push_str(word);

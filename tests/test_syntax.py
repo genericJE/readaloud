@@ -109,6 +109,113 @@ def test_grammar_for_tries_the_wheel_and_then_the_parsers_directory(tmp_path):
     assert f"; cannot load {tmp_path / 'nothing_at_all.so'}" in str(err.value)
 
 
+RULES = [
+    ("function_definition", "function $name $parameters $return_type $body"),
+    ("function_definition.return_type", "and returns type $0"),
+    ("parameters", "takes ${*|,=and}"),
+    ("typed_parameter", "${*|:=type}"),
+    ("typed_default_parameter", "$name type $type with a default of $value"),
+    ("type/binary_operator", "$left or $right"),
+    ("list_splat_pattern", "${0|*=star}"),
+]
+PAIRS = [("str", "string"), ("''", "empty string")]
+
+
+def read(text: str, python, rules=RULES, pairs=PAIRS):
+    """Each speakable chunk's text and ``(word on screen, what it says)``."""
+    from readaloud.document import Document
+    from readaloud.pronounce import Lexicon
+
+    doc = Document.from_text(text, pronunciations=Lexicon(pairs, (), (), python, rules))
+    assert doc.respell_failures == 0
+    return [(c.text, list(zip([doc.words[w].text for w in c.words], c.word_texts)))
+            for c in doc.chunks if c.speakable]
+
+
+def test_rules_say_a_def_and_light_the_words_they_came_from(python):
+    (chunk,) = read("def foo(bar: int, baz: str='') -> str:\n    pass\n", python)
+    # the line break before the body is kept
+    assert chunk[0] == ("function foo takes bar type int and baz type string "
+                        "with a default of empty string and returns type string\npass")
+    assert chunk[1] == [
+        ("def", "function"), ("foo", "foo"), ("bar", "takes bar"),
+        ("int", "type int"), ("baz", "and baz"),
+        ("str", "type string with a default of empty string"),
+        ("str", "and returns type string"), ("pass", "pass")]
+
+
+def test_an_ancestor_rule_reaches_every_node_under_it(python):
+    # both binary_operators of "str | Path | None" are under the type
+    (chunk,) = read("def for_file(self, path: str | Path | None) -> Config:\n"
+                    "    return self\n", python)
+    assert chunk[0] == ("function for_file takes self and path type string or "
+                        "Path or None and returns type Config\nreturn self")
+    assert chunk[1][2:8] == [
+        ("self", "takes self"), ("path", "and path"), ("str", "type string"),
+        ("Path", "or Path"), ("None", "or None"),
+        ("Config", "and returns type Config")]
+
+
+def test_the_whole_file_is_parsed_so_a_method_in_a_class_is_found(python):
+    chunks = read("class A:\n    x = 1\n\n    def m(self, *args) -> None:\n"
+                  "        pass\n\nr1 = a | b\n", python)
+    assert [c[0] for c in chunks] == [
+        "class A:\n    x = 1",
+        "    function m takes self and star args and returns type None\npass",
+        "r1 = a | b"]                          # an operator, not a type: as is
+
+
+def test_a_def_whose_body_runs_past_the_chunk_is_said_as_far_as_it_goes(python):
+    body = "".join(f"    x{i} = {i}\n" for i in range(60))      # well past 380 chars
+    chunks = read("def f(a: int) -> str:\n" + body + "\n\nclass B:\n    pass\n", python)
+    first = chunks[0][0]
+    assert first.startswith("function f takes a type int and returns type string\nx0 = 0\nx1 = 1\n")
+    assert "function" not in "".join(c[0] for c in chunks[1:])
+    assert chunks[-1][0] == "class B:\n    pass"
+
+
+def test_replacements_stay_at_their_level_and_comments_are_no_parts(python):
+    (chunk,) = read("def f(a: dict[str, int],  # which\n      b=2) -> None:\n    pass\n",
+                    python, RULES + [("default_parameter", "$name defaulting to $value")])
+    # the comma inside dict[...] is not a parameter's comma, and the comment
+    # is not a parameter (its line break stays, a pause)
+    assert chunk[0] == ("function f takes a type dict[string, int] and\nb defaulting "
+                        "to 2 and returns type None\npass")
+
+
+def test_a_wording_word_is_kept_apart_from_punctuation_but_text_is_not(python):
+    rules = [("attribute", "$object dot $attribute")]
+    (chunk,) = read('x = foo().bar().value\ny = f(a, "x.y")\nz = Sequence[str]\n',
+                    python, rules)
+    # "dot" gets its spaces; the string and the brackets keep their text as is
+    assert chunk[0] == ('x = foo() dot bar() dot value\ny = f(a, "x.y")\n'
+                        'z = Sequence[string]')
+    assert ("value", "dot value") in chunk[1] and ("x.y", "x.y") in chunk[1]
+
+
+def test_an_empty_rule_says_the_node_as_written_and_claims_it(python):
+    (chunk,) = read("def f(a='x'):\n    pass\n", python, [("string", "")],
+                    pairs=[("x", "ex"), ("f", "eff")])
+    # the string is left alone, while the entry for f still applies
+    assert chunk[0] == "def eff(a='x'):\n    pass"
+
+
+def test_check_rules_names_what_the_grammar_lacks(python):
+    problems = syntax.check_rules([
+        ("function_definition", "function $name $parameters"),
+        ("typed_param", "x"),
+        ("type/binop", "y"),
+        ("function_definition.returns", "z"),
+        ("parameters", "takes ${*|,=and} $nothing $0"),
+    ], python, "syntax.py")
+    assert problems == [
+        "[syntax.py] typed_param: no node is a 'typed_param'",
+        "[syntax.py] type/binop: no node is a 'binop'",
+        "[syntax.py] function_definition.returns: no node has a field 'returns'",
+        "[syntax.py] parameters: no node has a field 'nothing'",
+    ]
+
+
 def test_a_neovim_parser_file_loads_when_there_is_one():
     candidates = [
         pathlib.Path.home() / ".local/share/nvim/lazy/nvim-treesitter/parser/python.so",

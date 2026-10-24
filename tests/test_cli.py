@@ -885,8 +885,58 @@ def test_a_type_shape_reads_a_python_def(tmp_path, monkeypatch, stub_voices):
                      "--save", str(tmp_path / "out.wav"), "-f",
                      str(source)]) == cli.EXIT_OK
     assert [c.text for c in RecordingEngine.chunks] == [
-        "function foo takes bar type int and baz with a default of empty "
-        "string type string and returns a string"]
+        "function foo\ntakes bar type int\nand baz with a default of empty "
+        "string type string\nand returns a string"]
+
+
+SYNTAX_CONF = TYPE_CONF.replace("[shapes.py]", "[syntax.py]\n"
+    "function_definition = function $name $parameters $return_type\n"
+    "function_definition.return_type = and returns type $0\n"
+    "parameters = takes ${*|,=and}\n"
+    "typed_parameter = ${*|:=type}\n"
+    "typed_default_parameter = $name type $type with a default of $value\n"
+    "\n[shapes.py]")
+
+
+def test_syntax_rules_read_a_python_file_through_its_grammar(
+        tmp_path, monkeypatch, stub_voices):
+    pytest.importorskip("tree_sitter_python")
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    source = tmp_path / "x.py"
+    source.write_text(SIGNATURE, encoding="utf-8")
+    assert cli.main(["--config", str(write_conf(tmp_path, SYNTAX_CONF)),
+                     "--save", str(tmp_path / "out.wav"), "-f",
+                     str(source)]) == cli.EXIT_OK
+    # the rules win over the regex shapes for the same def
+    assert [c.text for c in RecordingEngine.chunks] == [
+        "function foo\ntakes bar type int\nand baz type string with a default "
+        "of empty string\nand returns type string"]
+
+
+def test_a_file_with_no_known_grammar_is_read_without_one(tmp_path, launched):
+    conf = write_conf(tmp_path, "[syntax.xyz]\nfunction_definition = f $name\n")
+    (tmp_path / "x.xyz").write_text("def f(): pass\n", encoding="utf-8")
+    assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.xyz")]) == 0
+    assert launched["notices"] == [
+        "config: [syntax.xyz]: no grammar is known for .xyz files; set "
+        "language under [config.xyz]"]
+    assert launched["doc"].chunks[0].text == "def f(): pass"
+
+
+def test_a_missing_grammar_and_an_unknown_kind_are_notices(tmp_path, launched):
+    pytest.importorskip("tree_sitter_python")
+    conf = write_conf(tmp_path, "[config.py]\nlanguage = nothing_at_all\n"
+                                "[syntax.py]\ndef_statement = f $name\n")
+    (tmp_path / "x.py").write_text("def f(): pass\n", encoding="utf-8")
+    assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
+    assert launched["notices"] == [
+        "config: no grammar for nothing_at_all: install the "
+        "tree-sitter-nothing-at-all package next to readaloud (uv tool "
+        "install readaloud --with tree-sitter-nothing-at-all)"]
+    conf = write_conf(tmp_path, "[syntax.py]\ndef_statement = f $name\n")
+    assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
+    assert launched["notices"] == [
+        "config: [syntax.py] def_statement: no node is a 'def_statement'"]
 
 
 def test_a_type_problem_reaches_the_status_bar_with_its_label(

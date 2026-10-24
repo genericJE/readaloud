@@ -983,7 +983,7 @@ def test_a_repeated_type_header_is_read_as_one(tmp_path):
 SYNTAX = """\
 [syntax]
 function_definition = function $name $parameters $return_type
-function_definition/type = and returns type $0
+function_definition.return_type = and returns type $0
 parameters = takes ${*|,=and}
 
 [syntax.py]
@@ -998,7 +998,7 @@ def test_syntax_rules_are_read_in_general_and_for_a_type(tmp_path):
     assert warnings == []
     assert cfg.syntax == (
         ("function_definition", "function $name $parameters $return_type"),
-        ("function_definition/type", "and returns type $0"),
+        ("function_definition.return_type", "and returns type $0"),
         ("parameters", "takes ${*|,=and}"))
     (py,) = cfg.types
     assert py.syntax == (
@@ -1014,7 +1014,7 @@ def test_each_syntax_problem_says_what_is_wrong(tmp_path):
     for line, problem in [
         ("nothing", "'nothing' has no \"=\"; write it as: kind = wording"),
         ("a/b/c = x", "'a/b/c' is not a node kind: a rule is kind = wording, "
-                      "or parent/kind = wording"),
+                      "ancestor/kind = wording, or kind.field = wording"),
         ("def = $1", "def: '$1': a rule names a node's fields, $0 for the node "
                      "as written, or $* for its parts"),
         ("def = ${name|slash}", "def: '${name|slash}': write a replacement as "
