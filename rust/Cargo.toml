@@ -19,6 +19,10 @@ pyo3 = "0.30"
 regex = "1"
 regex-syntax = "0.8"
 unicode-normalization = "0.1"
+# The tree-sitter runtime alone: a language's grammar is loaded at run time
+# (syntax.rs), from the tree-sitter-<language> wheel or a parser/<language>.so.
+tree-sitter = "0.25"
+libloading = "0.8"
 
 [profile.release]
 # On macOS the linker records the absolute path of every object it consumed

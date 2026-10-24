@@ -64,7 +64,7 @@ cache-keys = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "tree-sitter-python>=0.25"]   # the grammar the syntax tests use
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

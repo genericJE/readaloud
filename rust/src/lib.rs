@@ -4,14 +4,17 @@
 //! plain Rust over `&[char]` and `&str`, with offsets in code points, the way
 //! the Python side counts them.
 
-use pyo3::exceptions::PyValueError;
+use std::path::PathBuf;
+
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyString;
+use pyo3::types::{PyCapsule, PyCapsuleMethods, PyString};
 
 mod align;
 mod ansi;
 mod pronounce;
 mod shapes;
+mod syntax;
 mod tables;
 mod text;
 mod width;
@@ -114,6 +117,68 @@ impl PyLexicon {
             symbols.iter().map(|(s, e, sym)| (*s, *e, text_of(sym))).collect();
         py.detach(|| self.inner.find(&text, &symbols, &slots))
     }
+}
+
+/// A language's grammar for `syntax_tree`.  `readaloud.syntax` wraps it.
+#[pyclass(name = "Grammar", frozen, module = "readaloud._core")]
+struct PyGrammar {
+    inner: syntax::Grammar,
+    /// the capsule the grammar came from, kept alive with it
+    _capsule: Option<Py<PyAny>>,
+}
+
+#[pymethods]
+impl PyGrammar {
+    /// From the `tree_sitter.Language` capsule that
+    /// `tree_sitter_<language>.language()` returns.
+    #[staticmethod]
+    fn from_capsule(capsule: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let wrong = || {
+            PyTypeError::new_err(
+                "a grammar is the tree_sitter.Language capsule that tree_sitter_<language>.language() returns",
+            )
+        };
+        let capsule = capsule.cast::<PyCapsule>().map_err(|_| wrong())?;
+        // the pointer, if the capsule is valid and carries that name
+        let pointer = capsule.pointer_checked(Some(c"tree_sitter.Language")).map_err(|_| wrong())?;
+        // SAFETY: the capsule holds a TSLanguage that is static data of the
+        // grammar's module, and the capsule is kept alive with the grammar
+        let inner = unsafe { syntax::Grammar::from_raw(pointer.as_ptr()) }.map_err(PyValueError::new_err)?;
+        Ok(PyGrammar { inner, _capsule: Some(capsule.clone().into_any().unbind()) })
+    }
+
+    /// From the shared library `path`, which exports `tree_sitter_<name>`,
+    /// as a Neovim `parser/<name>.so` does.
+    #[staticmethod]
+    fn load(path: PathBuf, name: &str) -> PyResult<Self> {
+        let inner = syntax::Grammar::load(&path, name).map_err(PyValueError::new_err)?;
+        Ok(PyGrammar { inner, _capsule: None })
+    }
+
+    #[getter]
+    fn abi_version(&self) -> usize {
+        self.inner.abi_version()
+    }
+
+    /// The kinds of node the grammar makes, named ones first.
+    fn node_kinds(&self) -> Vec<String> {
+        self.inner.node_kinds()
+    }
+
+    /// The names of the fields the grammar's nodes have.
+    fn field_names(&self) -> Vec<String> {
+        self.inner.field_names()
+    }
+}
+
+/// The syntax tree `grammar` makes of `text`, one node per line.
+#[pyfunction]
+fn syntax_tree(py: Python<'_>, text: &Bound<'_, PyString>, grammar: &PyGrammar) -> PyResult<String> {
+    let text = text_of(text);
+    py.detach(|| {
+        let tree = grammar.inner.parse(&text).ok_or_else(|| PyValueError::new_err("the grammar could not parse"))?;
+        Ok(syntax::outline(&tree, &text))
+    })
 }
 
 /// `text` with every match said its way: `(text, offsets, word_texts)`.
@@ -381,5 +446,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(word_spans, m)?)?;
     m.add_function(wrap_pyfunction!(even_timings, m)?)?;
     m.add_function(wrap_pyfunction!(sanitize, m)?)?;
+    m.add_class::<PyGrammar>()?;
+    m.add_function(wrap_pyfunction!(syntax_tree, m)?)?;
     Ok(())
 }
