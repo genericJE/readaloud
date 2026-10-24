@@ -166,9 +166,10 @@ With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 2
 `user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b". The whole file, with every
 part, shape and pronunciation, is in [Configuration](docs/configuration.md#the-file-a-first-run-writes).
 
-A section can also apply to one file type only, such as `[shapes.py]` and
-`[config.py]` for a Python file: [Configuration](docs/configuration.md#file-types) reads a
-`def` line as "function foo takes bar type int and returns a string".
+A section can also apply to one file type only, such as `[config.py]` and `[syntax.py]`
+for a Python file, which reads the file through a real parser (install
+`tree-sitter-python` next to readaloud) and says a `def` line as "function foo takes bar
+type int and returns type string": see [Syntax](docs/pronunciations.md#syntax).
 
 Precedence is `explicit flag > ~/.readaloud.conf > built-in default`, key by key. The file
 is read forgivingly: a value that makes no sense keeps its default, one that is out of

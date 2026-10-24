@@ -65,6 +65,9 @@ They are laid over the general sections rather than replacing them:
   replaces the general one.
 - **`[parts.py]`** may use the general parts, and a part of the same name replaces the
   general one for the type's shapes. The type's shapes may use the general named shapes.
+- **`[syntax.py]`** reads the file through its grammar (see
+  [Syntax](pronunciations.md#syntax)); a type's rules come after the general `[syntax]`
+  ones, so the type's win.
 
 A problem in one of them is reported with its section, as in `[shapes.py] line 12: ...`.
 This reads Python source as written and says a function signature, on one line or

@@ -218,6 +218,73 @@ paragraph, which is cut at about 380 characters. Shapes like these belong to one
 so they usually go in `[shapes.py]`, `[parts.py]` and `[pronunciations.py]`, which apply only
 to a `.py` file (see [file types](configuration.md#file-types)).
 
+## Syntax
+
+For source code, a shape is the wrong tool: a parameter list can hold commas inside
+`dict[str, int]`, a comment, a decorator, any number of lines. A `[syntax.py]` section
+reads a `.py` file through a real parser instead, and says the parts of its syntax tree
+the way you describe them, node kind by node kind.
+
+readaloud ships the parser engine ([tree-sitter](https://tree-sitter.github.io/)) and no
+grammar. A language's grammar comes from the `tree-sitter-<language>` package, prebuilt
+for macOS, Linux and Windows, installed next to readaloud:
+
+```bash
+uv tool install readaloud --with tree-sitter-python
+```
+
+Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
+instead and install nothing. The grammar is picked by the file's suffix (`.py` is `python`,
+`.rs` is `rust`, and so on; the `language` setting under `[config.<ext>]` overrides it),
+and only a named file (`-f app.py`) has one: piped text has no suffix. Without a grammar,
+or with a rule the grammar has no node or field for, the status bar says so and the file is
+read without the rules.
+
+```ini
+[config.py]
+markdown = no
+
+[syntax.py]
+function_definition = function $name $parameters $return_type $body
+function_definition.return_type = and returns type $0
+parameters = takes ${*|,=and}
+typed_parameter = ${*|:=type}
+typed_default_parameter = $name type $type with a default of $value
+type/binary_operator = $left or $right
+list_splat_pattern = ${0|*=star}
+
+[pronunciations.py]
+str = string
+```
+
+With these, `def for_file(self, path: str | Path | None) -> Config:` is said "function
+for_file takes self and path type string or Path or None and returns type Config", with
+`def` lit for "function", `self` for "takes self", `Path` for "or Path" and `Config` for
+"and returns type Config"; `r1 = a | b` is left as it is, since that `|` is not under a
+type. A rule's key is:
+
+- **`kind`**: every node of that kind. `readaloud.syntax.outline` (or Neovim's
+  `:InspectTree`) shows the kinds and fields a grammar makes of a piece of text.
+- **`ancestor/kind`**: such a node anywhere under a node of the first kind, which is how
+  "or" is confined to the `|` of a type annotation.
+- **`kind.field`**: whatever node is that field of such a node, such as a `def`'s
+  `return_type`.
+
+The wording names the node's fields as `$name` or `${name}`: the field's node, said by its
+own rule if it has one, else as written with the rules inside it applied. `$0` is the node
+in full the same way, and `$*` its named parts in order with the text between them, so
+`${*|,=and}` says a list with "and" for each comma; comments among the parts are left out.
+`|from=to` replacements apply to the text said as written at that level, between the parts
+and a field's own, never inside a part (the comma of a `dict[str, int]` is not a
+parameter's comma) and never to a rule's own words. A field left out of the wording is left
+unsaid, so a `def`'s rule names `$body` to keep its body. An empty wording says the node as
+written and keeps every rule off it.
+
+Each spoken word lights the word it came from, as a shape's does, and a line break between
+two words is kept, so a body keeps its lines. A `def` whose body runs past the chunk being
+read is said as far as the chunk goes. Not in any tree: whether `a | b` is two sets or two
+integers; that takes a type checker, not a parser.
+
 ### Parts
 
 The shapes are built from parts: named pieces of pattern under `[parts]`, which a shape,
