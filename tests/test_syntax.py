@@ -193,6 +193,14 @@ def test_a_wording_word_is_kept_apart_from_punctuation_but_text_is_not(python):
     assert ("value", "dot value") in chunk[1] and ("x.y", "x.y") in chunk[1]
 
 
+def test_what_a_rule_says_goes_through_the_patterns_once(python):
+    pairs = PAIRS + [(r"/__(\w+)__/", "dunder $1")]
+    (chunk,) = read("def __init__(self):\n    self.__dict__ = __name__\n", python,
+                    RULES + [("attribute", "$object dot $attribute")], pairs)
+    assert chunk[0] == ("function dunder init takes self\n"
+                        "self dot dunder dict = dunder name")
+
+
 def test_an_empty_rule_says_the_node_as_written_and_claims_it(python):
     (chunk,) = read("def f(a='x'):\n    pass\n", python, [("string", "")],
                     pairs=[("x", "ex"), ("f", "eff")])

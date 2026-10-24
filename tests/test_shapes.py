@@ -208,6 +208,15 @@ def test_the_second_pass_is_the_literal_entries_only():
     assert said("a", pairs=pairs, shapes=())[0] == "b"
 
 
+def test_a_shape_goes_through_the_patterns_once():
+    # the pattern reaches into what the shape said as written; the pattern's
+    # own output is then final
+    pairs = [(r"/(\d+)/", "number $1"), (r"/number/", "numero")]
+    shapes = [(r"(?<f>\S+\.py):(?<n>\d+)", "$f at $n")]
+    assert said("see a.py:3 now", pairs=pairs, shapes=shapes)[0] == (
+        "see a.py at number 3 now")
+
+
 # ---------------------------------------------------------------------------
 # the config file
 # ---------------------------------------------------------------------------

@@ -161,7 +161,7 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
   the text's order can only light the later words, so keep the text's order where you can.
 - **What it says goes through your pronunciations.** The `.py` of `settings.py:498`
   stays "dot pie" and `localhost` stays "local host", because a shape's wording is read
-  by your entries once more before it is said.
+  by your entries, patterns included, once more before it is said.
 - **An empty wording says the text as written.** That is not the same as no line: the
   shape still claims the text, so a pattern such as `/:(\d+)/` cannot reach into a time.
 - **Your entries win.** An entry for the same text (`settings.py:498 = the settings`)
@@ -286,8 +286,10 @@ package ships (or the one under `queries/<language>/` next to a Neovim `parser` 
 `highlight = no` under `[config]` or `[config.<ext>]`, or `--no-color`, leaves the file plain.
 Colouring needs no `[syntax]` rules: a grammar alone is enough.
 
-Each spoken word lights the word it came from, as a shape's does, and a line break between
-two words is kept, so a body keeps its lines. A `def` whose body runs past the chunk being
+What a rule says goes through your entries and patterns once more, like a shape's wording:
+a pattern `/__(\w+)__/ = dunder $1` under `[pronunciations]` turns the `__init__` a `def`
+rule says into "dunder init". Each spoken word lights the word it came from, as a shape's
+does, and a line break between two words is kept, so a body keeps its lines. A `def` whose body runs past the chunk being
 read is said as far as the chunk goes. Not in any tree: whether `a | b` is two sets or two
 integers; that takes a type checker, not a parser.
 
@@ -337,9 +339,10 @@ the left, and on the right say how to read what it matched, naming its groups:
 /(\w+\.py) --help/ = $1 help    # main.py --help says "main dot pie help"
 ```
 
-Like a shape's wording, what a pattern says goes through your pronunciations once more,
-which is why the second example says "dot pie". What those entries say is final, so
-nothing is read more than twice. A pattern takes its turn with the other entries, left to
+Like a shape's wording, what a pattern says goes through your entries once more, which is
+why the second example says "dot pie"; the entries alone, not the patterns, so a pattern
+never reads its own output. What those entries say is final, so nothing is read more than
+twice. A pattern takes its turn with the other entries, left to
 right, and a shape is only ever a whole word, so a pattern can still reach where a shape
 does not.
 

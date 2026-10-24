@@ -10,10 +10,12 @@
 //!
 //! A word slot can also have a shape (see `shapes.rs`): a file and its line,
 //! a host and its port.  A shape is tried on whole slots only, and loses to
-//! any entry of the same length.  What a shape or a pattern says goes once
-//! more through the literal entries, so `.py = dot pie` applies inside
-//! `$file line $line`; the literal entries' own output is final, so that
-//! second pass cannot loop.
+//! any entry of the same length.  What a shape, or a rule of a source file's
+//! grammar, says goes once more through the entries and the patterns, so
+//! `.py = dot pie` applies inside `$file line $line` and a pattern reaches a
+//! name a rule said as written; what a pattern says goes once more through
+//! the literal entries alone, and the literal entries' own output is final,
+//! so that second pass cannot loop.
 //!
 //! Every position and span counts characters, never bytes.
 
@@ -229,20 +231,26 @@ impl Lexicon {
         slots: &[(usize, usize)],
         at: Option<usize>,
     ) -> Vec<Found> {
-        self.scan(text, symbols, slots, at, true)
+        self.scan(text, symbols, slots, at, true, true)
     }
 
-    /// `find` with or without the patterns and shapes: the second pass uses
-    /// the literal entries alone.
+    /// `find` with or without the `patterns` and the `structure` (the
+    /// shapes and the grammar's rules): the second pass over what a shape
+    /// or a rule says has the patterns but no structure, and the one over
+    /// what a pattern says has the literal entries alone.
     fn scan(
         &self,
         text: &str,
         symbols: &[(usize, usize, String)],
         slots: &[(usize, usize)],
         at: Option<usize>,
-        everything: bool,
+        patterns: bool,
+        structure: bool,
     ) -> Vec<Found> {
-        if self.literals.is_empty() && (!everything || (self.len() == 0 && !self.uses_slots())) {
+        if self.literals.is_empty()
+            && (!patterns || self.patterns.is_empty())
+            && (!structure || !self.uses_slots())
+        {
             return Vec::new();
         }
         let chars: Vec<char> = text.chars().collect();
@@ -254,8 +262,8 @@ impl Lexicon {
         let candidates = self.candidates(&chars);
         let no_patterns: &[Pattern] = &[];
         let mut cursors =
-            Cursors::new(if everything { &self.patterns } else { no_patterns }, text, self.shapes.subs());
-        let shaped = if everything { self.shaped(&chars, slots, at) } else { Vec::new() };
+            Cursors::new(if patterns { &self.patterns } else { no_patterns }, text, self.shapes.subs());
+        let shaped = if structure { self.shaped(&chars, slots, at) } else { Vec::new() };
         let mut si = 0;
         let mut found: Vec<Found> = Vec::new();
         let mut pos = 0;
@@ -305,7 +313,7 @@ impl Lexicon {
                     best = Some(if m.say == written {
                         (rank, vec![(p, m.end, written)], true)
                     } else {
-                        (rank, vec![(p, m.end, self.respoken(&m.say))], false)
+                        (rank, vec![(p, m.end, self.respoken(&m.say, false))], false)
                     });
                 }
             }
@@ -376,7 +384,7 @@ impl Lexicon {
                 out.push((found.start, found.end, vec![(found.start, found.end, found.say)], true, tier));
                 continue;
             }
-            let mut says: Vec<String> = found.pieces.iter().map(|p| self.respoken(p)).collect();
+            let mut says: Vec<String> = found.pieces.iter().map(|p| self.respoken(p, true)).collect();
             if !says.iter().any(|s| s.chars().any(is_word_char)) {
                 continue;
             }
@@ -423,13 +431,14 @@ impl Lexicon {
         out
     }
 
-    /// `say` with the literal entries applied, as one slot.
-    fn respoken(&self, say: &str) -> String {
+    /// `say` with the literal entries, and the `patterns` too if asked,
+    /// applied as one slot.
+    fn respoken(&self, say: &str, patterns: bool) -> String {
         let n = say.chars().count();
-        if self.literals.is_empty() || n == 0 {
+        if (self.literals.is_empty() && (!patterns || self.patterns.is_empty())) || n == 0 {
             return say.to_string();
         }
-        let found = self.scan(say, &[], &[], None, false);
+        let found = self.scan(say, &[], &[], None, patterns, false);
         if found.is_empty() {
             return say.to_string();
         }

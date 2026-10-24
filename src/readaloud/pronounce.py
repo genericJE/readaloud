@@ -68,8 +68,10 @@ word, and the first that fits wins.  It loses to any entry of the
 same length.  An empty wording says the word as written, which keeps a
 pattern off it.
 
-What a shape or a pattern says goes through the literal entries once more,
-so ``.py = dot pie`` still applies inside ``$file line $line``.  What the
+What a shape, or a rule of a source file's grammar, says goes through the
+entries and the patterns once more, so ``.py = dot pie`` still applies inside
+``$file line $line`` and a pattern reaches a name a rule said as written;
+what a pattern says goes through the literal entries once more.  What the
 literal entries say is final, so nothing is read more than twice.
 
 The work is done by :mod:`readaloud._core` (``rust/src/pronounce.rs`` and
