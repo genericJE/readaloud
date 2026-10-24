@@ -21,9 +21,59 @@ from pathlib import Path
 
 from . import _core
 
-__all__ = ["Grammar", "GrammarError", "from_file", "from_module", "outline"]
+__all__ = ["Grammar", "GrammarError", "LANGUAGES", "from_file", "from_module",
+           "grammar_for", "language_for", "outline"]
 
 Grammar = _core.Grammar
+
+#: The grammar a file suffix usually wants: the name after ``tree_sitter_``
+#: in the wheel's module, and of Neovim's ``parser/<name>.so``.  The
+#: ``language`` setting under ``[config.<ext>]`` overrides it.
+LANGUAGES = {
+    ".py": "python", ".pyi": "python", ".rs": "rust", ".js": "javascript",
+    ".mjs": "javascript", ".ts": "typescript", ".tsx": "tsx", ".go": "go",
+    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp",
+    ".java": "java", ".kt": "kotlin", ".rb": "ruby", ".php": "php",
+    ".swift": "swift", ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+    ".lua": "lua", ".toml": "toml", ".json": "json", ".yaml": "yaml",
+    ".yml": "yaml", ".html": "html", ".css": "css", ".md": "markdown",
+    ".sql": "sql", ".hs": "haskell", ".ex": "elixir", ".exs": "elixir",
+    ".zig": "zig", ".nix": "nix",
+}
+
+
+def language_for(suffix: str, override: str = "") -> str | None:
+    """The grammar's name for a file `suffix` (``.py``), `override` first,
+    or None when readaloud has no idea."""
+    if override.strip():
+        return override.strip().lower().replace("-", "_")
+    return LANGUAGES.get(suffix.lower())
+
+
+def grammar_for(language: str, parsers: str | Path = "") -> Grammar:
+    """The grammar called `language`: from the ``tree-sitter-<language>``
+    wheel, or else from ``<parsers>/<language>.so`` (``.dylib`` too) when a
+    `parsers` directory is given.
+
+    :raises GrammarError: with every place that was tried and why it failed.
+    """
+    try:
+        return from_module(language)
+    except GrammarError as from_wheel:
+        reasons = [str(from_wheel)]
+    if str(parsers).strip():
+        folder = Path(parsers).expanduser()
+        for name in (f"{language}.so", f"{language}.dylib"):
+            path = folder / name
+            if path.is_file():
+                try:
+                    return from_file(path, language)
+                except GrammarError as from_path:
+                    reasons.append(str(from_path))
+                    break
+        else:
+            reasons.append(f"no {language}.so in {folder}")
+    raise GrammarError("; ".join(reasons))
 
 
 class GrammarError(Exception):
