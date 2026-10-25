@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- With `format = code`, each line is read as a sentence of its own, so the pause falls
-  where the line ends rather than wherever the voice feels like it: "return self dot path
-  dot stem", pause, "method for_file takes self". A line that runs on (a bracket left open,
-  a trailing comma or operator, a `\`) is not. The screen and the highlight are unchanged.
-
 ## 2.1.0 (2026-10-25)
 
 The preferences are a directory of files, one per kind of input, picked by the file's
@@ -53,6 +46,10 @@ Python file is read through its grammar by the shipped `python.conf`.
   own, lit while they are spoken; before, their speech ran under the neighbouring word.
   A rule's opening words light the token before the node, so "and returns type" lights
   the `->` and "with a default of" the `=`.
+- With `format = code`, each line is read as a sentence of its own, so the pause falls
+  where the line ends rather than wherever the voice feels like it: "return self dot path
+  dot stem", pause, "method for_file takes self". A line that runs on (a bracket left open,
+  a trailing comma or operator, a `\`) is not. The screen and the highlight are unchanged.
 
 ## 2.0.0 (2026-10-24)
 
