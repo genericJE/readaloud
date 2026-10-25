@@ -32,7 +32,7 @@ import sys
 
 import pytest
 
-from readaloud import ansi, cli
+from readaloud import ansi, cli, config
 from readaloud.document import Table, TableCell
 
 VOICES = ["af_heart", "af_sarah", "am_adam", "bf_emma", "zf_xiaobei"]
@@ -344,69 +344,67 @@ TEAM_CELLS = ["Name", "Role", "Notes", "Alice", "Engineer", "short[1]", "Bob",
               "Designer with a very long title that wraps", "code here"]
 
 
-@pytest.mark.parametrize("argv, markdown, file, text", [
-    ([], None, None, []),
-    (["-md", "x.md"], "x.md", None, []),
-    (["--markdown", "x.md"], "x.md", None, []),
-    (["-md=x.md"], "x.md", None, []),
-    (["-f", "x.md", "-md"], True, "x.md", []),
-    (["-md", "-f", "x.md"], True, "x.md", []),
-    (["-md"], True, None, []),
-    (["-md", "-"], "-", None, []),
-    (["-md", "--", "| a | b |"], True, None, ["| a | b |"]),
-    (["-md", ""], "", None, []),
+MD_CONF = "[config.markdown]\nrenderer = mdcat\n"
+
+
+@pytest.fixture()
+def md_conf(tmp_path):
+    """A config that draws Markdown with mdcat, as the shipped markdown.conf does."""
+    return str(write_conf(tmp_path, MD_CONF))
+
+
+@pytest.mark.parametrize("argv, file, text, conf", [
+    ([], None, [], None),
+    (["-f", "x.md"], "x.md", [], None),
+    (["--conf", "md"], None, [], "md"),
+    (["--conf", "python", "-f", "x.txt"], "x.txt", [], "python"),
+    (["-f", "-"], "-", [], None),
+    (["--", "| a | b |"], None, ["| a | b |"], None),
 ])
-def test_md_parses_as_a_file_or_as_a_modifier(argv, markdown, file, text):
+def test_the_input_flags_parse(argv, file, text, conf):
     args = cli.build_parser().parse_args(argv)
-    assert args.markdown == markdown and type(args.markdown) is type(markdown)
-    assert args.file == file
-    assert args.text == text
+    assert (args.file, args.text, args.conf) == (file, text, conf)
 
 
-def test_md_is_in_the_help_and_its_examples(capsys):
+def test_md_is_gone_with_a_hint(capsys, monkeypatch):
+    def never(*a, **k):  # pragma: no cover - must never run
+        raise AssertionError("refused before anything is read")
+
+    monkeypatch.setattr(cli, "read_input", never)
+    for argv in (["-md", "notes.md"], ["--markdown"], ["-f", "x.md", "-md"]):
+        assert cli.main([*argv, "--no-config"]) == cli.EXIT_USAGE
+        err = capsys.readouterr().err
+        assert err.startswith("readaloud: -md is gone: ") and "--conf md" in err
+
+
+def test_conf_and_a_bare_file_are_in_the_help(capsys):
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["--help"])
     out = capsys.readouterr().out
-    assert "-md [FILE], --markdown [FILE]" in out
-    assert "needs mdcat" in out
-    assert "readaloud -md notes.md" in out
+    assert "--conf NAME" in out and "--conf md" in out
+    assert "lone TEXT" in out and "readaloud notes.md" in out
 
 
-@pytest.mark.parametrize("argv", [
-    ["-md", "a.md", "-f", "b.md"],
-    ["-f", "b.md", "-md", "a.md"],
-])
-def test_md_file_and_f_file_together_is_a_usage_error(
-        argv, monkeypatch, capsys, stub_voices):
+def test_markdown_without_mdcat_is_read_as_written_with_a_notice(
+        monkeypatch, tmp_path, launched, md_conf):
     def never(*a, **k):  # pragma: no cover - must never run
-        raise AssertionError("refused before mdcat or the input is touched")
-
-    monkeypatch.setattr("readaloud.markdown.find_mdcat", never)
-    monkeypatch.setattr(cli, "read_input", never)
-    assert cli.main([*argv, "--no-config"]) == cli.EXIT_USAGE
-    assert capsys.readouterr().err == \
-        "readaloud: use either -md FILE or -f FILE -md\n"
-
-
-def test_md_without_mdcat_is_one_line_and_leaves_stdin_alone(
-        monkeypatch, capsys, stub_voices, tmp_path):
-    def never(*a, **k):  # pragma: no cover - must never run
-        raise AssertionError("nothing is read or rendered without mdcat")
+        raise AssertionError("nothing is rendered without mdcat")
 
     monkeypatch.setattr("readaloud.markdown.find_mdcat", lambda: None)
     monkeypatch.setattr("readaloud.markdown.render_markdown", never)
-    monkeypatch.setattr("readaloud.ui.read_stdin_text", never)
-    for argv in (["-md"], ["-md", str(tmp_path / "notes.md")]):
-        assert cli.main([*argv, "--no-config"]) == cli.EXIT_ERROR
-        err = capsys.readouterr().err
-        assert err.count("\n") == 1 and "Traceback" not in err
-        assert "-md needs mdcat" in err and "brew install mdcat" in err
-        assert "readaloud -f FILE" in err
+    notes = tmp_path / "notes.md"
+    notes.write_text("# Title\n\nSome **bold** words.\n", encoding="utf-8")
+    assert cli.main(["--config", md_conf, str(notes)]) == 0
+    doc = launched["doc"]
+    assert doc.plain[0] == "Title"             # format = markdown: stripped
+    assert launched["notices"] == [
+        "config: renderer = mdcat, but mdcat is not installed (brew install "
+        "mdcat); the Markdown is read as written"]
 
 
-def test_reading_without_md_never_looks_for_mdcat(monkeypatch, launched):
+def test_reading_without_a_renderer_never_looks_for_mdcat(monkeypatch, launched):
     def never(*a, **k):  # pragma: no cover - must never run
-        raise AssertionError("mdcat is only for -md")
+        raise AssertionError("mdcat is only for renderer = mdcat")
 
     monkeypatch.setattr("readaloud.markdown.find_mdcat", never)
     monkeypatch.setattr("readaloud.markdown.render_markdown", never)
@@ -416,53 +414,63 @@ def test_reading_without_md_never_looks_for_mdcat(monkeypatch, launched):
     assert cell_texts(doc) == []
 
 
-@pytest.mark.parametrize("argv", [["-md"], ["-md", "{render}"]])
-def test_md_refuses_input_that_mdcat_already_rendered(
-        argv, tmp_path, monkeypatch, capsys, launched, fake_mdcat):
-    """Piped or saved to a file, the one line says what is wrong with the input
-    and nothing about a pipe that may not be there."""
+def test_input_mdcat_already_rendered_is_read_as_it_came(
+        tmp_path, monkeypatch, launched, fake_mdcat, md_conf):
+    """Piped or saved to a file: coloured text is never drawn a second time."""
     render = tmp_path / "notes.ansi"
     render.write_text(TEAM_ANSI, encoding="utf-8")
-    monkeypatch.setattr("readaloud.ui.read_stdin_text",
-                        lambda *a, **k: TEAM_ANSI)
-    argv = [a.replace("{render}", str(render)) for a in argv]
-    assert cli.main([*argv, "--no-config"]) == cli.EXIT_USAGE
-    assert capsys.readouterr().err == (
-        "readaloud: -md wants Markdown source, not mdcat's output: "
-        "readaloud -md notes.md\n")
-    assert fake_mdcat["render"] == [] and launched == {}
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: TEAM_ANSI)
+    for argv in (["--conf", "md"], ["--conf", "md", "-f", str(render)]):
+        assert cli.main(["--config", md_conf, *argv]) == 0
+        assert fake_mdcat["render"] == []
+        doc = launched["doc"]
+        assert doc.tables == [] and "Alice" in "".join(doc.plain)
+        assert any(r.style.fg is not None for line in doc.lines for r in line)
+        assert launched["notices"] == []
 
 
-def test_document_name_follows_the_md_file():
+def test_document_name_follows_the_file():
     parse = cli.build_parser().parse_args
-    assert cli.document_name(parse(["-md", "/tmp/notes.md"])) == "notes.md"
-    assert cli.document_name(parse(["-f", "/tmp/notes.md", "-md"])) == "notes.md"
-    assert cli.document_name(parse(["-md", "-"])) == "readaloud"
-    assert cli.document_name(parse(["-md", ""])) == "readaloud"
-    assert cli.document_name(parse(["-md"])) == "readaloud"
-    assert cli.document_name(parse(["-md", "--", "| a |"])) == "readaloud"
+    assert cli.document_name(parse(["-f", "/tmp/notes.md"])) == "notes.md"
+    assert cli.document_name(parse(["-f", "-"])) == "readaloud"
+    assert cli.document_name(parse(["--conf", "md"])) == "readaloud"
+    assert cli.document_name(parse(["--", "| a |"])) == "readaloud"
 
 
-def test_read_input_takes_the_md_file_like_f(tmp_path, monkeypatch):
+def test_read_input_takes_the_file_then_stdin_then_text(tmp_path, monkeypatch):
     f = tmp_path / "notes.md"
     f.write_text("from the file\n", encoding="utf-8")
     monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: "from stdin")
     parse = cli.build_parser().parse_args
 
-    assert cli.read_input(parse(["-md", str(f), "ignored"])) == "from the file\n"
-    assert cli.read_input(parse(["-f", str(f), "-md"])) == "from the file\n"
-    assert cli.read_input(parse(["-md", "-"])) == "from stdin"
-    assert cli.read_input(parse(["-md"])) == "from stdin"
-    assert cli.read_input(parse(["-md", "--", "some", "words"])) == "some words"
+    assert cli.read_input(parse(["-f", str(f), "ignored"])) == "from the file\n"
+    assert cli.read_input(parse(["-f", "-"])) == "from stdin"
+    assert cli.read_input(parse(["--conf", "md"])) == "from stdin"
+    assert cli.read_input(parse(["--", "some", "words"])) == "some words"
     with pytest.raises(OSError):
-        cli.read_input(parse(["-md", str(tmp_path / "missing.md")]))
+        cli.read_input(parse(["-f", str(tmp_path / "missing.md")]))
 
 
-def test_md_reads_the_file_with_tables_one_cell_at_a_time(
-        tmp_path, launched, fake_mdcat):
+def test_layers_for_input_follows_conf_then_the_suffix():
+    cfg = config.Config()
+    parse = cli.build_parser().parse_args
+    assert cli.layers_for_input(parse(["-f", "a.py"]), cfg) == ("code", "python")
+    assert cli.layers_for_input(parse(["-f", "a.PY"]), cfg) == ("code", "python")
+    assert cli.layers_for_input(parse(["-f", "a.txt"]), cfg) == ("plain",)
+    assert cli.layers_for_input(parse(["-f", "Makefile"]), cfg) == ()
+    assert cli.layers_for_input(parse(["-f", "-"]), cfg) == ()
+    assert cli.layers_for_input(parse([]), cfg) == ()
+    # --conf: an extension's layers, or a layer by name, whatever the input
+    assert cli.layers_for_input(parse(["--conf", "md"]), cfg) == ("markdown",)
+    assert cli.layers_for_input(parse(["--conf", ".py", "-f", "x.txt"]), cfg) == ("code", "python")
+    assert cli.layers_for_input(parse(["--conf", "Python"]), cfg) == ("python",)
+
+
+def test_a_markdown_file_is_drawn_by_mdcat_and_its_tables_read_by_cell(
+        tmp_path, launched, fake_mdcat, md_conf):
     notes = tmp_path / "notes.md"
     notes.write_text(TEAM_MD, encoding="utf-8")
-    assert cli.main(["-md", str(notes), "--no-config"]) == 0
+    assert cli.main([str(notes), "--config", md_conf]) == 0
 
     assert fake_mdcat["render"] == [(TEAM_MD, FAKE_MDCAT, 40)]
     doc = launched["doc"]
@@ -482,17 +490,19 @@ def test_md_reads_the_file_with_tables_one_cell_at_a_time(
 
 
 @pytest.mark.parametrize("argv, name", [
-    (["-f", "{notes}", "-md"], "notes.md"),
-    (["-md", "-"], "readaloud"),
-    (["-md"], "readaloud"),                      # cat notes.md | readaloud -md
-    (["-md", "--", TEAM_MD], "readaloud"),       # TEXT is the source
+    (["-f", "{notes}"], "notes.md"),
+    (["{notes}"], "notes.md"),                   # a lone TEXT naming a file
+    (["--conf", "md", "-f", "-"], "readaloud"),
+    (["--conf", "md"], "readaloud"),             # cat notes.md | readaloud --conf md
+    (["--conf", "md", "--", TEAM_MD], "readaloud"),   # TEXT is the source
+    (["--conf", "markdown"], "readaloud"),       # the layer by name
 ])
-def test_md_source_can_come_from_any_input(argv, name, tmp_path, launched,
-                                           fake_mdcat):
+def test_markdown_source_can_come_from_any_input(argv, name, tmp_path, launched,
+                                                 fake_mdcat, md_conf):
     notes = tmp_path / "notes.md"
     notes.write_text(TEAM_MD, encoding="utf-8")
     argv = [a.replace("{notes}", str(notes)) for a in argv]
-    assert cli.main(["--no-config", *argv]) == 0     # nothing after a "--"
+    assert cli.main(["--config", md_conf, *argv]) == 0     # nothing after a "--"
     assert [text for text, _mdcat, _cols in fake_mdcat["render"]] == [TEAM_MD]
     assert cell_texts(launched["doc"]) == TEAM_CELLS
     assert launched["doc_name"] == name
@@ -502,44 +512,28 @@ def never_stdin(*a, **k):  # pragma: no cover - must never run
     raise AssertionError("the file is the input, not stdin")
 
 
-@pytest.mark.parametrize("argv", [
-    ["{notes}", "-md"],
-    ["-md", "{notes}"],                          # -md FILE, as it always was
-])
-def test_md_reads_a_lone_text_that_names_a_file_as_that_file(
-        argv, tmp_path, monkeypatch, launched, fake_mdcat):
-    """A bare -md takes no value from a later token, so argparse leaves
-    `notes.md -md` with the file in TEXT.  It is the file: "notes dot md" is
-    never the document."""
+def test_a_lone_text_that_names_a_file_is_that_file_wherever_it_stands(
+        tmp_path, monkeypatch, launched, fake_mdcat, md_conf):
+    """"notes dot md" is never the document.  The flags round it do not
+    matter: --start and --save take their own values."""
     monkeypatch.setattr("readaloud.ui.read_stdin_text", never_stdin)
     notes = tmp_path / "notes.md"
     notes.write_text(TEAM_MD, encoding="utf-8")
-    argv = [a.replace("{notes}", str(notes)) for a in argv]
-    assert cli.main(["--no-config", *argv]) == 0
-    assert [text for text, _mdcat, _cols in fake_mdcat["render"]] == [TEAM_MD]
-    assert cell_texts(launched["doc"]) == TEAM_CELLS
-    assert launched["doc_name"] == "notes.md"
-
-
-def test_md_start_counts_the_cells_of_a_file_given_after_the_options(
-        tmp_path, monkeypatch, launched, fake_mdcat):
-    monkeypatch.setattr("readaloud.ui.read_stdin_text", never_stdin)
-    notes = tmp_path / "notes.md"
-    notes.write_text(TEAM_MD, encoding="utf-8")
-    assert cli.main(["--no-config", "-md", "--start", "3", str(notes)]) == 0
+    assert cli.main(["--config", md_conf, "--start", "3", str(notes)]) == 0
     assert [text for text, _mdcat, _cols in fake_mdcat["render"]] == [TEAM_MD]
     doc = launched["doc"]
     assert doc.chunks[launched["start_chunk"]].cell == (0, 0, 1)
+    assert launched["doc_name"] == "notes.md"
 
 
-def test_md_save_reads_a_file_given_after_the_options(
-        tmp_path, monkeypatch, capsys, stub_voices, fake_mdcat):
+def test_save_reads_a_file_given_after_the_options(
+        tmp_path, monkeypatch, capsys, stub_voices, fake_mdcat, md_conf):
     monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
     monkeypatch.setattr("readaloud.ui.read_stdin_text", never_stdin)
     notes = tmp_path / "notes.md"
     notes.write_text(TEAM_MD, encoding="utf-8")
     target = tmp_path / "out.wav"
-    assert cli.main(["--no-config", "-md", "--save", str(target),
+    assert cli.main(["--config", md_conf, "--save", str(target),
                      str(notes)]) == cli.EXIT_OK
     assert [text for text, _mdcat, _cols in fake_mdcat["render"]] == [TEAM_MD]
     assert [c.text for c in RecordingEngine.chunks if c.kind == "cell"] == \
@@ -548,14 +542,14 @@ def test_md_save_reads_a_file_given_after_the_options(
 
 
 @pytest.mark.parametrize("argv, source", [
-    (["-md", "--", "# Title"], "# Title"),
-    (["{missing}", "-md"], "{missing}"),
-    (["{dir}", "-md"], "{dir}"),
-    (["{notes}", "{notes}", "-md"], "{notes} {notes}"),
-    (["-f", "{notes}", "{notes}", "-md"], TEAM_MD),     # -f wins, as ever
+    (["--", "# Title"], "# Title"),
+    (["{missing}"], "{missing}"),
+    (["{dir}"], "{dir}"),
+    (["{notes}", "{notes}"], "{notes} {notes}"),
+    (["-f", "{notes}", "{notes}"], TEAM_MD),             # -f wins, as ever
 ], ids=["words", "missing", "directory", "two-files", "f-file"])
-def test_md_reads_any_other_text_as_the_source(
-        argv, source, tmp_path, monkeypatch, launched, fake_mdcat):
+def test_any_other_text_is_the_source(
+        argv, source, tmp_path, monkeypatch, launched, fake_mdcat, md_conf):
     """Only one TEXT naming an existing file is taken for it."""
     monkeypatch.setattr("readaloud.ui.read_stdin_text", never_stdin)
     notes = tmp_path / "notes.md"
@@ -568,27 +562,27 @@ def test_md_reads_any_other_text_as_the_source(
             s = s.replace(key, value)
         return s
 
-    assert cli.main(["--no-config", *map(fill, argv)]) == 0
+    assert cli.main(["--config", md_conf, "--conf", "md", *map(fill, argv)]) == 0
     assert [text for text, _mdcat, _cols in fake_mdcat["render"]] == \
         [fill(source)]
 
 
-def test_md_start_counts_cells(launched, fake_mdcat):
+def test_start_counts_cells(launched, fake_mdcat, md_conf):
     """``--start N`` and "chunk N/M" count cells: the heading, Name, Role."""
-    assert cli.main(["-md", "--start", "3", "--no-config"]) == 0
+    assert cli.main(["--conf", "md", "--start", "3", "--config", md_conf]) == 0
     doc = launched["doc"]
     assert doc.chunks[launched["start_chunk"]].cell == (0, 0, 1)
 
 
-def test_md_notices_take_their_turn_after_the_config_warnings(
+def test_mdcat_notices_take_their_turn_after_the_config_warnings(
         tmp_path, capsys, monkeypatch, launched, fake_mdcat):
     from test_integration import FakeEngine, FakePlayer, FakeScreen
 
     from readaloud.app import NOTICE_TTL, App
 
     conf = tmp_path / "readaloud.conf"
-    conf.write_text("[config]\nspeed = 9.0\n", encoding="utf-8")
-    assert cli.main(["-md", "--config", str(conf)]) == 0
+    conf.write_text("[config]\nspeed = 9.0\n" + MD_CONF, encoding="utf-8")
+    assert cli.main(["--conf", "md", "--config", str(conf)]) == 0
     notices = list(launched["notices"])
     assert notices[0].startswith("config: ") and "speed" in notices[0]
     assert notices[1:] == NOTICES
@@ -608,12 +602,12 @@ def test_md_notices_take_their_turn_after_the_config_warnings(
     assert shown == notices
 
 
-def test_md_no_color_drops_colour_and_keeps_the_tables(launched, fake_mdcat):
-    assert cli.main(["-md", "--no-config"]) == 0
+def test_no_color_drops_colour_and_keeps_the_tables(launched, fake_mdcat, md_conf):
+    assert cli.main(["--conf", "md", "--config", md_conf]) == 0
     assert any(r.style.fg is not None for line in launched["doc"].lines
                for r in line)
 
-    assert cli.main(["-md", "--no-color", "--no-config"]) == 0
+    assert cli.main(["--conf", "md", "--no-color", "--config", md_conf]) == 0
     doc = launched["doc"]
     assert all(r.style.fg is None and r.style.bg is None
                for line in doc.lines for r in line)
@@ -621,8 +615,7 @@ def test_md_no_color_drops_colour_and_keeps_the_tables(launched, fake_mdcat):
     assert cell_texts(doc) == TEAM_CELLS
 
 
-def test_md_mdcat_failure_is_one_line(monkeypatch, capsys, launched,
-                                      fake_mdcat):
+def test_mdcat_failure_is_one_line(monkeypatch, capsys, launched, fake_mdcat, md_conf):
     from readaloud import markdown
 
     # the line markdown.py makes of a panic
@@ -632,26 +625,26 @@ def test_md_mdcat_failure_is_one_line(monkeypatch, capsys, launched,
         raise markdown.MdcatError(crashed)
 
     monkeypatch.setattr("readaloud.markdown.render_markdown", fail)
-    assert cli.main(["-md", "--no-config"]) == cli.EXIT_ERROR
+    assert cli.main(["--conf", "md", "--config", md_conf]) == cli.EXIT_ERROR
     assert capsys.readouterr().err == f"readaloud: {crashed}\n"
     assert launched == {}
 
 
-def test_md_empty_and_missing_input_are_the_usual_messages(
-        tmp_path, monkeypatch, capsys, launched, fake_mdcat):
+def test_empty_and_missing_input_are_the_usual_messages(
+        tmp_path, monkeypatch, capsys, launched, fake_mdcat, md_conf):
     empty = tmp_path / "empty.md"
     empty.write_text("\n\n", encoding="utf-8")
-    assert cli.main(["-md", str(empty), "--no-config"]) == cli.EXIT_USAGE
+    assert cli.main([str(empty), "--config", md_conf]) == cli.EXIT_USAGE
     assert "the input is empty" in capsys.readouterr().err
 
     missing = tmp_path / "missing.md"
-    assert cli.main(["-md", str(missing), "--no-config"]) == cli.EXIT_ERROR
+    assert cli.main(["-f", str(missing), "--config", md_conf]) == cli.EXIT_ERROR
     assert f"could not read {missing}" in capsys.readouterr().err
 
     monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: "")
     assert cli.main(["--no-config"]) == cli.EXIT_USAGE
     err = capsys.readouterr().err
-    assert "no input" in err and "readaloud -md notes.md" in err
+    assert "no input" in err and "readaloud notes.md" in err and "--conf md" in err
     assert fake_mdcat["render"] == []
 
 
@@ -681,17 +674,17 @@ class RecordingEngine:
         pass
 
 
-def test_md_save_renders_at_80_columns_and_warns_on_stderr(
-        tmp_path, monkeypatch, capsys, stub_voices, fake_mdcat):
+def test_save_renders_at_80_columns_and_warns_on_stderr(
+        tmp_path, monkeypatch, capsys, stub_voices, fake_mdcat, md_conf):
     monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
     monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: TEAM_MD)
     target = tmp_path / "team.wav"
-    assert cli.main(["-md", "--save", str(target), "--no-config"]) == cli.EXIT_OK
+    assert cli.main(["--conf", "md", "--save", str(target), "--config", md_conf]) == cli.EXIT_OK
 
     assert [cols for _text, _mdcat, cols in fake_mdcat["render"]] == [80]
     assert fake_mdcat["width"] == 0          # the terminal is not asked
     out, err = capsys.readouterr()
-    assert out.startswith(f"wrote {target}") and "-md:" not in out
+    assert out.startswith(f"wrote {target}") and "readaloud:" not in out
     assert all(f"readaloud: {notice}\n" in err for notice in NOTICES)
     assert target.exists()
     assert [c.text for c in RecordingEngine.chunks if c.kind == "cell"] == \
@@ -781,13 +774,13 @@ def test_save_says_the_pronunciations_of_the_config_file(
     assert [c.text for c in RecordingEngine.chunks] == ["Look up foo.id."]
 
 
-def test_md_save_says_the_pronunciations_in_the_cells(
+def test_save_says_the_pronunciations_in_the_cells(
         tmp_path, monkeypatch, stub_voices, fake_mdcat):
     monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
     monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: TEAM_MD)
-    conf = write_conf(tmp_path, "[pronunciations]\nBob = Robert\n")
+    conf = write_conf(tmp_path, MD_CONF + "[pronunciations]\nBob = Robert\n")
     target = tmp_path / "team.wav"
-    assert cli.main(["-md", "--config", str(conf), "--save",
+    assert cli.main(["--conf", "md", "--config", str(conf), "--save",
                      str(target)]) == cli.EXIT_OK
     cells = [c.text for c in RecordingEngine.chunks if c.kind == "cell"]
     assert cells == [text.replace("Bob", "Robert") for text in TEAM_CELLS]
@@ -917,13 +910,13 @@ def test_a_flag_still_beats_a_type_setting(tmp_path, launched):
     assert launched["speed"] == 1.1
 
 
-def test_a_markdown_file_named_in_text_gets_its_type(
+def test_a_markdown_file_named_in_text_gets_its_layer(
         tmp_path, launched, fake_mdcat):
     conf = write_conf(tmp_path, "[config.markdown]\nspeed = 1.7\n")
     (tmp_path / "x.md").write_text(TEAM_MD, encoding="utf-8")
-    assert cli.main(["--config", str(conf), str(tmp_path / "x.md"),
-                     "-md"]) == 0
+    assert cli.main(["--config", str(conf), str(tmp_path / "x.md")]) == 0
     assert launched["speed"] == 1.7
+    assert fake_mdcat["render"] == []          # no renderer set: read as written
 
 
 def test_a_type_shape_reads_a_python_def(tmp_path, monkeypatch, stub_voices):
@@ -1057,13 +1050,13 @@ def test_chunks_a_pronunciation_fails_on_are_read_as_written_with_a_notice(
         "(a pronunciation could not be applied)"]
     assert capsys.readouterr() == ("", "")
 
-    # in the reader it takes its turn after the config warnings and -md's
-    conf = write_conf(tmp_path, "[pronunciations]\nid = ID\nBob Robert\n")
-    assert cli.main(["-md", "--config", str(conf)]) == 0
+    # in the reader it takes its turn after the config warnings and mdcat's
+    conf = write_conf(tmp_path, MD_CONF + "[pronunciations]\nid = ID\nBob Robert\n")
+    assert cli.main(["--conf", "md", "--config", str(conf)]) == 0
     doc = launched["doc"]
     assert doc.respell_failures == len(doc.speakable_chunks) == 11
     assert launched["notices"] == [
-        "config: [pronunciations] line 3: 'Bob Robert' has no \"=\"; "
+        "config: [pronunciations] line 5: 'Bob Robert' has no \"=\"; "
         "write it as: text = how to say it",
         *NOTICES,
         "pronunciations: 11 chunks are read as written "
@@ -1078,7 +1071,7 @@ def test_chunks_a_pronunciation_fails_on_are_read_as_written_with_a_notice(
     out, err = capsys.readouterr()
     assert out.startswith(f"wrote {target}") and "read as written" not in out
     assert err.split("\n")[:2] == [
-        f"readaloud: {conf}: [pronunciations] line 3: 'Bob Robert' has no "
+        f"readaloud: {conf}: [pronunciations] line 5: 'Bob Robert' has no "
         "\"=\"; write it as: text = how to say it",
         "readaloud: pronunciations: 1 chunk is read as written "
         "(a pronunciation could not be applied)"]

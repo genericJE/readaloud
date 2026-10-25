@@ -2,22 +2,24 @@
 
 Responsibilities, in order:
 
-1. parse arguments, then fill every flag the user did *not* pass from
-   ``~/.readaloud.conf`` (see `readaloud.config`);
+1. parse arguments, lay the input's config layers (its suffix's, or
+   ``--conf NAME``'s) over the general config, then fill every flag the user
+   did *not* pass from it (see `readaloud.config`);
 2. answer the "just tell me something" flags (``--list-voices``,
    ``--list-devices``) and exit;
-3. obtain the input text -- ``-f FILE`` (or ``-md FILE``), positional ``TEXT``,
-   or piped stdin -- draining stdin *completely* before anything else touches
-   fd 0;
+3. obtain the input text -- ``-f FILE`` or a lone TEXT naming a file,
+   positional ``TEXT``, or piped stdin -- draining stdin *completely* before
+   anything else touches fd 0;
 4. build the `Document`, which says the config file's pronunciations (see
-   `readaloud.pronounce`); with ``-md`` the input is Markdown source, rendered
-   by mdcat and read one table cell at a time (see `readaloud.markdown`);
+   `readaloud.pronounce`); with ``renderer = mdcat`` (``markdown.conf``) the
+   input is Markdown source, drawn by mdcat and read one table cell at a time
+   (see `readaloud.markdown`);
 5. either render the whole document to a WAV file (``--save``) or hand over to
    `readaloud.app.run`, which owns the curses session.
 
 Precedence is strictly::
 
-    explicit CLI flag  >  ~/.readaloud.conf  >  built-in default
+    explicit CLI flag  >  ~/.readaloud/  >  built-in default
 
 which is why every flag with a config counterpart parses with ``default=None``:
 an argparse default would make "did the user actually pass this?" unanswerable.
@@ -77,26 +79,24 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "examples:\n"
-            "  readaloud -md notes.md\n"
-            "  mdcat --ansi notes.md | readaloud\n"
-            "  readaloud -f README.md\n"
+            "  readaloud notes.md\n"
+            "  readaloud src/app.py\n"
+            "  cat notes.md | readaloud --conf md\n"
             "  readaloud 'the quick brown fox'\n"
-            "  readaloud -f notes.md --save notes.wav\n"
+            "  readaloud notes.md --save notes.wav\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("text", nargs="*", metavar="TEXT",
                    help="text to read (joined with spaces)")
     p.add_argument("-f", "--file", metavar="FILE",
-                   help="read from FILE instead of stdin/TEXT ('-' means stdin)")
-    # Takes the file like -f, or modifies -f, TEXT and stdin when given alone,
-    # so the value is True, a path, or None when the flag is absent.  Test it
-    # with `is not None`: `-md ''` is a (falsy) path.
-    p.add_argument("-md", "--markdown", nargs="?", const=True, default=None,
-                   metavar="FILE",
-                   help="read FILE (or the -f file, TEXT or stdin) as Markdown: "
-                        "show it with mdcat --ansi and read tables one cell at "
-                        "a time (needs mdcat)")
+                   help="read from FILE instead of stdin/TEXT ('-' means stdin); "
+                        "a lone TEXT that names a file is read as that file too")
+    p.add_argument("--conf", default=None, metavar="NAME",
+                   help="read the input with the configs for a .NAME file "
+                        "(--conf md), or with the config NAME (--conf python), "
+                        "whatever the input is called; see [files] in "
+                        f"{_CONFIG_HINT}readaloud.conf")
     # Everything with a `~/.readaloud.conf` counterpart defaults to None and is
     # filled in by `_apply_config`; the help text shows the built-in default.
     p.add_argument("-v", "--voice", default=None, metavar="NAME",
@@ -224,14 +224,31 @@ def _apply_config(args: argparse.Namespace, cfg) -> None:
 
 
 def input_file(args: argparse.Namespace) -> str | None:
-    """The file named for the input: ``-md FILE``, else ``-f FILE`` ('-' is stdin).
-
-    A bare ``-md`` names no file; it only says how to read the others.
-    """
-    markdown = getattr(args, "markdown", None)
-    if isinstance(markdown, str):
-        return markdown
+    """The file named for the input, ``-f FILE`` ('-' is stdin), or None."""
     return getattr(args, "file", None)
+
+
+def name_the_file(args: argparse.Namespace) -> None:
+    """Take a lone TEXT that names an existing file for ``-f`` of that file:
+    ``readaloud notes.md`` reads the file.  Nobody wants a file's name read
+    out; two names, or one that is not a file, stay TEXT to be spoken."""
+    if (args.file is None and len(args.text) == 1
+            and os.path.isfile(args.text[0])):
+        args.file, args.text = args.text[0], []
+
+
+def layers_for_input(args: argparse.Namespace, cfg) -> tuple[str, ...]:
+    """The config layers that read the input: ``--conf NAME``'s, as the
+    ``[files]`` line for ``.NAME`` has them or else NAME itself, or the
+    input file's by its suffix; none for a pipe or TEXT."""
+    conf = getattr(args, "conf", None)
+    if conf:
+        name = conf.strip().lower()
+        return cfg.layers_for("." + name.lstrip(".")) or (name,)
+    path = input_file(args)
+    if path and path != "-":
+        return cfg.layers_for(Path(path).suffix)
+    return ()
 
 
 def print_tree(args: argparse.Namespace, cfg) -> int:
@@ -239,18 +256,17 @@ def print_tree(args: argparse.Namespace, cfg) -> int:
     grammar, one node per line, for writing ``[syntax]`` rules."""
     from . import syntax
 
-    if (args.file is None and not isinstance(args.markdown, str)
-            and len(args.text) == 1 and os.path.isfile(args.text[0])):
-        args.file, args.text = args.text[0], []
+    name_the_file(args)
     path = input_file(args)
     if not path or path == "-":
         _err("--tree needs a file: readaloud --tree app.py")
         return EXIT_USAGE
     suffix = Path(path).suffix
-    language = cfg.grammar_name(suffix)
+    layers = layers_for_input(args, cfg)
+    language = cfg.language.strip().lower() or (layers[-1] if layers else None)
     if language is None:
         _err(f"no grammar is known for {suffix or 'a file without a suffix'}; "
-             f"name one in [files], or set language")
+             f"name one in [files], set language, or pass --conf")
         return EXIT_ERROR
     try:
         grammar = syntax.grammar_for(language, cfg.parsers)
@@ -262,28 +278,29 @@ def print_tree(args: argparse.Namespace, cfg) -> int:
     return EXIT_OK
 
 
-def grammar_for_input(args: argparse.Namespace, cfg):
-    """The grammar the input file is read with, for the config's
-    ``[syntax]`` rules and for colouring it, and the notices on the way:
-    ``(grammar or None, language or None, notices)``.
+def grammar_for_input(args: argparse.Namespace, cfg, layers: Sequence[str]):
+    """The grammar the input is read with, for the config's ``[syntax]``
+    rules and for colouring it, and the notices on the way: ``(grammar or
+    None, language or None, notices)``.
 
-    Only a named file with a type (``-f x.py``) has a grammar, found by its
-    suffix or the ``language`` setting, and only when the config has rules
-    for it or wants it coloured; without a grammar, or with rules the
-    grammar does not have, the notices say so and the file is read without.
+    The grammar is the ``language`` setting, else the last of the input's
+    `layers` (``python`` of ``.py = code python``), and is looked for only
+    when the config has rules or wants colour; without one, or with rules
+    the grammar does not have, the notices say so and the input is read
+    without.
     """
     from . import config as config_mod
     from . import syntax
 
-    path = input_file(args)
-    if not (cfg.syntax or cfg.highlight) or not path or path == "-":
+    if not (cfg.syntax or cfg.highlight):
         return None, None, []
-    suffix = Path(path).suffix
-    language = cfg.grammar_name(suffix)
+    language = cfg.language.strip().lower() or (layers[-1] if layers else None)
     at = f"{config_path(args)}: "
     if language is None:
-        if not cfg.syntax:
-            return None, None, []          # nothing to colour it with: fine
+        path = input_file(args)
+        if not cfg.syntax or not path or path == "-":
+            return None, None, []          # nothing to say it with: fine
+        suffix = Path(path).suffix or "no"
         return None, None, [
             f"{at}[{config_mod.SYNTAX}]: no grammar is known for {suffix} "
             f"files; name one in [{config_mod.FILES}], or set language"]
@@ -367,7 +384,7 @@ def check_voice(voice: str, repo: str, lang: str) -> str | None:
 def read_input(args: argparse.Namespace) -> str:
     """Return the raw text to read, draining stdin when that is the source.
 
-    Raises `OSError` for an unreadable ``--file`` (or ``-md FILE``).
+    Raises `OSError` for an unreadable ``--file``.
     """
     from .ui import read_stdin_text
 
@@ -564,18 +581,18 @@ def _main(argv: Sequence[str] | None = None) -> int:
     from . import config as config_mod
 
     parser = build_parser()
-    args = parser.parse_args(argv)
+    given = list(argv if argv is not None else sys.argv[1:])
+    if "-md" in given or "--markdown" in given:
+        # the flag up to 2.0: Markdown is a config's business now
+        _err("-md is gone: readaloud notes.md reads a Markdown file through "
+             "markdown.conf, and a pipe with readaloud --conf md")
+        return EXIT_USAGE
+    args = parser.parse_args(given)
+    name_the_file(args)
 
-    if (args.markdown is True and args.file is None and len(args.text) == 1
-            and os.path.isfile(args.text[0])):
-        # `readaloud notes.md -md` and `-md --save x.wav notes.md` leave the
-        # file in TEXT, since a bare -md takes no value there.  Nobody wants a
-        # file's name rendered as Markdown, so read the file it names.
-        args.markdown, args.text = args.text[0], []
-
-    # ---- ~/.readaloud.conf ----------------------------------------------
-    # The file named for the input picks the sections for its type, before
-    # any setting is applied.
+    # ---- ~/.readaloud/ --------------------------------------------------
+    # The input's layers, by its suffix or --conf, are laid over the general
+    # config before any setting is applied.
     target = config_path(args)
     # Up to 2.0 the preferences were one file; the first run of a newer
     # readaloud splits it into the directory, once, and says so on stderr,
@@ -584,7 +601,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         for note in config_mod.migrate():
             _err(note)
     cfg, warnings = load_config(args)
-    cfg = cfg.for_file(input_file(args))
+    layers = layers_for_input(args, cfg)
+    cfg = cfg.for_layers(layers)
     _apply_config(args, cfg)
 
     # Anything that is not the TUI can print to stderr; the reader gets its
@@ -636,9 +654,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
             print(f"  {name}")
         return EXIT_OK
 
-    if isinstance(args.markdown, str) and args.file is not None:
-        _err("use either -md FILE or -f FILE -md")
-        return EXIT_USAGE
     if args.speed <= 0:
         _err("--speed must be greater than 0")
         return EXIT_USAGE
@@ -654,17 +669,18 @@ def _main(argv: Sequence[str] | None = None) -> int:
         _err(bad_voice)
         return EXIT_USAGE
 
-    # ---- -md needs mdcat ------------------------------------------------
-    # Looked up before the input is read, so a pipe is not drained for nothing.
+    # ---- renderer = mdcat -----------------------------------------------
+    # Looked up before the input is read; without mdcat the Markdown is read
+    # as written, with a word in the status bar.
     mdcat = None
-    if args.markdown is not None:
+    if cfg.renderer == "mdcat":
         from . import markdown as markdown_mod
 
         mdcat = markdown_mod.find_mdcat()
         if mdcat is None:
-            _err("-md needs mdcat to render Markdown (brew install mdcat); "
-                 "without it, readaloud -f FILE reads the file as plain Markdown")
-            return EXIT_ERROR
+            warnings.append(f"{target}: renderer = mdcat, but mdcat is not "
+                            f"installed (brew install mdcat); the Markdown is "
+                            f"read as written")
 
     # ---- input ----------------------------------------------------------
     try:
@@ -677,15 +693,15 @@ def _main(argv: Sequence[str] | None = None) -> int:
         if input_file(args) or args.text:
             _err("the input is empty")
         else:
-            _err("no input: pipe something in, pass TEXT, or use -f FILE")
-            _err("try 'readaloud --help', 'readaloud -md notes.md', or "
-                 "'mdcat --ansi notes.md | readaloud'")
+            _err("no input: pipe something in, pass TEXT, or name a FILE")
+            _err("try 'readaloud --help', 'readaloud notes.md', or "
+                 "'cat notes.md | readaloud --conf md'")
         return EXIT_USAGE
 
     # Built once whichever way the document is read; --no-config has none.
     from .pronounce import Lexicon
 
-    grammar, language, grammar_notices = grammar_for_input(args, cfg)
+    grammar, language, grammar_notices = grammar_for_input(args, cfg, layers)
     warnings += grammar_notices
     pronunciations = Lexicon(cfg.pronunciations, cfg.shape_patterns,
                              cfg.sub_patterns, grammar, cfg.syntax)
@@ -698,10 +714,8 @@ def _main(argv: Sequence[str] | None = None) -> int:
         from .ansi import has_ansi
 
         if has_ansi(data):
-            # a pipe or a saved render alike: nothing here assumes a pipe
-            _err("-md wants Markdown source, not mdcat's output: "
-                 "readaloud -md notes.md")
-            return EXIT_USAGE
+            mdcat = None            # drawn already: read it as it came
+    if mdcat is not None:
         # A WAV has no screen to fit, so it renders at mdcat's own width
         # rather than at whatever terminal --save happened to run in.
         columns = 80 if args.save else markdown_mod.render_width()
@@ -733,7 +747,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return EXIT_ERROR
 
     # What the document has to say about itself, after the config warnings:
-    # the tables -md reads line by line, and the chunks a pronunciation could
+    # the tables mdcat's render reads line by line, and the chunks a pronunciation could
     # not be applied to (only a bug does that, so it is worth a line).
     notices = list(md_notices)
     if doc.respell_failures:
