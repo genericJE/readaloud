@@ -7,8 +7,8 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `TEXT...` | | text to read, joined with spaces |
-| `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin); its suffix picks the config's sections for that file type, and its grammar (`.py`), see [Configuration](configuration.md#file-types) |
-| `-md`, `--markdown [FILE]` | | read `FILE` (or the `-f` file, `TEXT` or stdin) as Markdown: drawn by mdcat, tables read one cell at a time (needs mdcat) |
+| `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin); a lone `TEXT` that names a file is read as that file too. The file's extension picks its configs and grammar through `[files]`, see [File types](configuration.md#file-types) |
+| `--conf NAME` | | read the input with the configs for a `.NAME` file (`--conf md`), or with the config `NAME` (`--conf python`), whatever it is called: a pipe of Markdown, a `.txt` of Python |
 | `-v`, `--voice NAME` | `af_heart` | Kokoro voice (see below) |
 | `-s`, `--speed X` | `1.0` | speech rate multiplier, 0.5 to 3.0 in the TUI |
 | `--sentences N` | `4` | max sentences per chunk |
@@ -23,7 +23,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--media-keys` / `--no-media-keys` | on | take over the system play/pause button, or leave it alone |
 | `--config PATH` | `~/.readaloud/` | read the preferences from `PATH`, a directory or a single `.conf` file, instead |
 | `--no-config` | | ignore the preferences; built-in defaults only |
-| `--write-config` | | write the shipped files (`readaloud.conf`, `code.conf`, `python.conf`, overwriting) and exit |
+| `--write-config` | | write the shipped files (`readaloud.conf`, `markdown.conf`, `python.conf`, overwriting) and exit |
 | `--list-voices` | | print the voices for the chosen language |
 | `--tree` | | print the syntax tree of `FILE` through its grammar, the node kinds and fields a `[syntax]` rule can name, and exit (see [Syntax](pronunciations.md#syntax)) |
 | `--list-devices` | | print the audio output devices |

@@ -3,13 +3,23 @@
 ## Unreleased
 
 - **The preferences are a directory, `~/.readaloud/`**: `readaloud.conf` for what applies
-  to everything, `code.conf` for every source file, and a `<language>.conf` per language
+  to everything, `markdown.conf` for Markdown, and a `<language>.conf` per language
   (`python.conf`, `rust.conf`), named after the grammar, with plain `[config]`,
-  `[pronunciations]`, `[shapes]`, `[parts]` and `[syntax]` sections inside. Dropping a
-  `rust.conf` into the directory is the whole install. The first run of this version
-  moves an existing `~/.readaloud.conf` into the directory, section by section, and says
-  so. The three shipped files live in `src/readaloud/configs/`, where a language's file
-  can be shared.
+  `[pronunciations]`, `[shapes]`, `[parts]` and `[syntax]` sections inside. The first run
+  of this version moves an existing `~/.readaloud.conf` into the directory, section by
+  section, and says so. The three shipped files live in `src/readaloud/configs/`, where a
+  language's file can be shared.
+- **`[files]` in `readaloud.conf` says which configs read a file**, by its extension:
+  `.py .pyi = code python`, `.rs = code rust`, `.md = markdown`. Each name is a layer, the
+  `[config.code]`-style sections in `readaloud.conf` plus a `<name>.conf`, laid over one
+  another in that order; the last names the grammar. Adding Rust is one line and a
+  `rust.conf`. The `code` layer, every source file's `format = code` and the words for the
+  operators, lives in `readaloud.conf`.
+- **`-md` is gone.** `readaloud notes.md` reads the file: a lone argument that names a file
+  is that file, and `.md` gets `markdown.conf`, whose new `renderer = mdcat` draws it with
+  mdcat and reads its tables cell by cell, falling back to stripped text with a notice when
+  mdcat is not installed. A pipe or TEXT gets the same with `--conf md`; `--conf NAME`
+  reads any input with the configs of a `.NAME` file or the layer NAME.
 
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:

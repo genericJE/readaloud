@@ -7,21 +7,22 @@ The preferences are a directory of plain INI files:
 
 | File | Applies to |
 | --- | --- |
-| `~/.readaloud/readaloud.conf` | everything: the settings, the words Kokoro gets wrong, the shapes |
-| `~/.readaloud/code.conf` | every source file: `format = code`, the words for the operators |
+| `~/.readaloud/readaloud.conf` | everything: the settings, the words Kokoro gets wrong, the shapes; the `[files]` table; the `code` layer every source file shares |
+| `~/.readaloud/markdown.conf` | Markdown files: drawn by mdcat, tables read cell by cell |
 | `~/.readaloud/python.conf`, `rust.conf`, ... | that language's files alone, named after the grammar |
 
 Most flags can also be preferences; the ones that pick the input or the output (`-f`,
-`-md`, `--start`, `--save`) cannot. A `[pronunciations]` section tells readaloud how to
+`--conf`, `--start`, `--save`) cannot. A `[pronunciations]` section tells readaloud how to
 say particular words, the `[shapes]` and `[parts]` sections how it says a file with its
 line number or a host with its port, and a `[syntax]` section how it says a source file's
-syntax tree (see [Pronunciations](pronunciations.md)). The same sections in `code.conf`
-or a language's file apply to those files only (see [File types](#file-types)). The first
+syntax tree (see [Pronunciations](pronunciations.md)). The same sections in a language's
+file, or headed with a layer's name (`[config.code]`), apply to some files only (see
+[File types](#file-types)). The first
 run writes the three files readaloud ships, shown in full
 [below](#the-files-a-first-run-writes), and says so on stderr once:
 
 ```
-readaloud: created /Users/you/.readaloud/ -- your defaults live there now (readaloud.conf, code.conf, python.conf)
+readaloud: created /Users/you/.readaloud/ -- your defaults live there now (readaloud.conf, markdown.conf, python.conf)
 ```
 
 Precedence is `explicit flag > ~/.readaloud/ > built-in default`, key by key rather than
@@ -36,9 +37,9 @@ is there.
 Up to readaloud 2.0 the preferences were one file, `~/.readaloud.conf`. The first run of a
 newer readaloud moves it into the directory: the sections for a file type go to that
 language's file with the suffix taken off their headers (`[syntax.py]` becomes the
-`[syntax]` of `python.conf`, `[pronunciations.code]` the `[pronunciations]` of
-`code.conf`), the rest stays in `readaloud.conf`, a `markdown = no` becomes `format = code`, and the old
-file is deleted; stderr says what moved where. Any shipped file that was not among them is added beside them.
+`[syntax]` of `python.conf`), the rest stays in `readaloud.conf`, the `[x.code]` sections
+included, a `markdown = no` becomes `format = code`, and the old file is deleted; stderr
+says what moved where. Any shipped file that was not among them is added beside them.
 
 ## Every setting
 
@@ -60,68 +61,117 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `color` | `true` | Render the input's colours. `false` is `--no-color`. Takes true/false, yes/no, on/off, 1/0. |
 | `follow_lead` | `20` | Extra rows follow mode scrolls past the strict minimum (see below). |
 | `follow_margin` | `5` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
-| `format` | `markdown` | How plain input (a file, a string, a pipe without colours) is read. `markdown`: its Markdown syntax (`#`, `**`, `[text](url)`) is stripped before it is spoken and a fenced or indented block is read in one go. `code`: as written, indented lines cut into chunks of at most `chars` like any paragraph, and each operator (`==`, `<=`, `->`) lit while it is spoken. `plain`: as written, read as prose, for text whose `*asterisks*` are meant. Coloured input and `-md` are none of these. |
+| `format` | `markdown` | How plain input (a file, a string, a pipe without colours) is read. `markdown`: its Markdown syntax (`#`, `**`, `[text](url)`) is stripped before it is spoken and a fenced or indented block is read in one go. `code`: as written, indented lines cut into chunks of at most `chars` like any paragraph, and each operator (`==`, `<=`, `->`) lit while it is spoken. `plain`: as written, read as prose, for text whose `*asterisks*` are meant. Coloured input, and what `renderer = mdcat` draws, are none of these. |
 | `highlight` | `true` | Colour a source file by its grammar (see [Syntax](pronunciations.md#syntax)): keywords, strings, comments, names. `false` reads it in the terminal's plain colours; `--no-color` does too. |
-| `language` | empty | The grammar a source file is read with, where that differs from what its suffix says (`py` is `python`, `rs` is `rust`, and so on). Set it under `[config.<ext>]`. |
+| `language` | empty | The grammar a file is read with, where that differs from the last layer `[files]` gives it (`python` for `.py`). |
 | `parsers` | empty | A directory of `<language>.so` parser files, as Neovim's `:TSInstall` builds them, tried when no `tree-sitter-<language>` package is installed. |
+| `renderer` | `none` | `mdcat` draws plain input with mdcat before it is read, tables cell by cell (see [Markdown](markdown.md)); `markdown.conf` sets it for `.md` files. Without mdcat installed the input is read as written, with a notice. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |
 
 ## File types
 
-The sections of `readaloud.conf` apply to everything readaloud reads. The other files in
-`~/.readaloud/` hold the same sections (`[config]`, `[pronunciations]`, `[shapes]`,
-`[parts]`, `[syntax]`) for some files only:
+Which configs read a file is a table in `readaloud.conf`, `[files]`: an extension, or
+several, and the *layers* that read such a file, in order, each laid over the one before:
 
-- **`code.conf`** applies to every source file: one whose suffix has a grammar readaloud
-  knows (`.py`, `.rs`, `.js`, `.go`, `.c`, ... but not `.md` or `.html`, which are text).
-  That is where `format = code` and the words for operators belong (`== = is equal to`,
-  `-> = arrow`), since they hold for every language and would misfire in prose.
-- **`<language>.conf`** applies to that language's files, the language named after its
-  grammar: `python.conf` for `.py` and `.pyi`, `rust.conf` for `.rs`, `javascript.conf`
-  for `.js`, the same names the `tree-sitter-<language>` packages and Neovim's `parser/`
-  use. `readaloud --tree x.rs` says which grammar a suffix maps to; the `language`
-  setting changes it. Dropping a `rust.conf` into the directory is the whole install,
-  and the [shipped directory](https://github.com/genericJE/readaloud/tree/main/src/readaloud/configs)
-  has files to copy and a place to share yours.
+```ini
+[files]
+.py .pyi = code python
+.rs = code rust
+.md = markdown
+.txt = plain
+```
 
-A file counts when readaloud reads it by name, with `-f FILE`, `-md FILE` or `FILE -md`;
-piped input and text on the command line have no type, so only `readaloud.conf` applies
-to them. The files are laid over one another rather than replacing each other, in the
-order `readaloud.conf`, `code.conf`, `python.conf`, each winning over the one before:
+A layer is a name. Its sections are the ones headed with that name in any file
+(`[config.code]`, `[pronunciations.code]` in `readaloud.conf`) plus a `<name>.conf` in the
+directory (`python.conf`), both if both exist. The last layer of a line also names the
+grammar the file is parsed with (`python`, as in `tree-sitter-python` and Neovim's
+`parser/python.so`); the `language` setting overrides that. The shipped table maps the
+common languages; adding one is a line here and a `rust.conf` beside the others, and the
+[shipped directory](https://github.com/genericJE/readaloud/tree/main/src/readaloud/configs)
+has files to copy and a place to share yours. The shipped layers:
+
+- **`code`**, in `readaloud.conf`: `format = code` and the words for the operators (`== = is
+  equal to`, `-> = arrow`), which hold for every language and would misfire in prose.
+- **`plain`**, in `readaloud.conf`: `format = plain`, for `.txt`.
+- **`markdown`**, in `markdown.conf`: `format = markdown` and `renderer = mdcat`.
+- **`python`**, in `python.conf`: how a `def`, a decorator or an attribute is said.
+
+A file gets its layers when readaloud reads it by name, `readaloud app.py` or `-f app.py`;
+piped input and TEXT have no name, so only `readaloud.conf` applies to them, unless
+`--conf NAME` says otherwise: `--conf md` reads the input with the layers of a `.md` file,
+`--conf python` with that one layer, whatever the input is called. The layers are laid over
+one another in the line's order, each winning over the one before:
 
 - a **`[config]`** setting replaces the one before; a setting left out keeps the earlier
   value, and a flag still beats them all;
-- **`[shapes]`** of a later file are tried first, so a line that fits wins over an earlier
+- **`[shapes]`** of a later layer are tried first, so a line that fits wins over an earlier
   one;
 - a **`[pronunciations]`** entry for the same text replaces the earlier one;
-- **`[parts]`** and named shapes of an earlier file may be used by a later one, and a part
-  of the same name replaces the earlier one for the later file's shapes;
+- **`[parts]`** and named shapes of an earlier layer may be used by a later one, and a part
+  of the same name replaces the earlier one for the later layer's shapes;
 - **`[syntax]`** rules come after the earlier ones, so a later rule for the same kind wins.
 
 A problem is reported with its file and section, as in `python.conf: [shapes] line 12:
-...`. In a single `.conf` file (`--config one.conf`), the same sections can be written with
-the type in the header instead, `[pronunciations.code]` or `[syntax.py]`: that is how the
-one-file preferences of readaloud 2.0 were written, and what the first run of a newer
-readaloud splits into the directory.
+...` or `[pronunciations.code] line 7: ...`. In a single `.conf` file (`--config one.conf`)
+every layer is written with headers, `[syntax.python]` beside `[pronunciations.code]`.
 
 The shipped `python.conf` is the worked example: it says a function signature, on one line
 or spread over several, through the Python grammar (see
-[Syntax](pronunciations.md#syntax)), so `readaloud -f app.py` says
+[Syntax](pronunciations.md#syntax)), so `readaloud app.py` says
 `def foo(bar: int, baz: str='') -> str:` as "function foo takes bar type int and baz type
 string with a default of empty string and returns type string".
 
 ## The files a first run writes
 
 These are the files `~/.readaloud/` holds after the first run, and what `--write-config`
-writes. `readaloud.conf` leaves every setting at its default and fills in the parts, shapes
-and pronunciations; `code.conf` and `python.conf` are what they say on the tin. Delete any
-line, or any file, you do not want.
+writes. `readaloud.conf` leaves every setting at its default and fills in the `[files]`
+table, the parts, shapes and pronunciations, and the `code` and `plain` layers;
+`markdown.conf` and `python.conf` are what they say on the tin. Delete any line, or any
+file, you do not want.
 
 ### readaloud.conf
 
 ```ini
 [config]
 # settings; docs/configuration.md lists them all
+
+[files]
+# which configs read a file, by its extension: each lays over the one before and
+# the last names the grammar; a name is the [x.name] sections here plus name.conf
+.py .pyi = code python
+.rs = code rust
+.js .mjs = code javascript
+.ts = code typescript
+.tsx = code tsx
+.go = code go
+.c .h = code c
+.cc .cpp .hpp = code cpp
+.java = code java
+.kt = code kotlin
+.rb = code ruby
+.php = code php
+.swift = code swift
+.sh .bash .zsh = code bash
+.lua = code lua
+.toml = code toml
+.json = code json
+.yaml .yml = code yaml
+.css = code css
+.sql = code sql
+.hs = code haskell
+.ex .exs = code elixir
+.zig = code zig
+.nix = code nix
+.md = markdown
+.txt = plain
+
+[config.code]
+# source files: read as written, indented lines cut into chunks, operators lit
+format = code
+
+[config.plain]
+# text that is neither Markdown nor code: as written, read as prose
+format = plain
 
 [parts]
 # named pieces of pattern, used as %{name} by the shapes and by later parts
@@ -158,6 +208,35 @@ minute = [0-5]\d
 /(?<file>%{file}):(?<from>\d+)-(?<to>\d+)/ = $file lines $from to $to
 /(?<file>%{file}):(?<line>\d+)/ = $file line $line
 /(?<hour>%{hour}):(?<minute>%{minute})(?::(?<second>%{minute}))?/ =
+
+[pronunciations.code]
+# the operators of a source file, which the voice would otherwise skip
+# the operators, which the voice would otherwise skip; said in every language
+= = equals
+== = is equal to
+!= = not equals
+< = less than
+> = greater than
+<= = less than or equal to
+>= = greater than or equal to
+- = minus
+* = times
+/ = divided by
+// = floor divided by
+** = to the power of
+% = modulo
+& = bitwise and
+| = pipe
+|= = pipe equals
+~ = bitwise not
+^ = xor
+<< = shift left
+>> = shift right
++= = plus equals
+-= = minus equals
+*= = times equals
+/= = divided equals
+-> = arrow
 
 [pronunciations]
 # text = how to say it; lowercase matches any case, a capital only that case
@@ -299,56 +378,16 @@ dateutils = date utils
 || = or
 ```
 
-The file is meant to be hand-edited and is read forgivingly. A missing file is not an
-error, a value that makes no sense keeps its default, one that is out of range is
-clamped, and the rest of the file still applies. Anything odd is reported: on stderr for
-`--save`, `--write-config` and the `--list-*` flags, and in the
-[status bar](reading.md) for the reader, because a `print()` would land on top of the
-curses screen.
-
-```
-PLAY     af_heart  1.00x  chunk 1/12  follow on  |  config: speed: 'maybe' is not a number; using 1.0
-```
-
-### code.conf
+### markdown.conf
 
 ```ini
-# ~/.readaloud/code.conf: what holds for every source file, whatever the
-# language, between readaloud.conf and the language's own file.  A file is
-# source code when its suffix has a grammar readaloud knows: .py, .rs, .js,
-# .go, .c, ... but not .md or .html, which are text.
+# ~/.readaloud/markdown.conf: Markdown files (.md).  Drawn by mdcat when it is
+# installed, so a table is read one cell at a time; without mdcat the syntax
+# is stripped and the text read as prose.
 
 [config]
-# read as code: as written, indented lines cut into chunks, operators lit
-format = code
-
-[pronunciations]
-# the operators, which the voice would otherwise skip; said in every language
-= = equals
-== = is equal to
-!= = not equals
-< = less than
-> = greater than
-<= = less than or equal to
->= = greater than or equal to
-- = minus
-* = times
-/ = divided by
-// = floor divided by
-** = to the power of
-% = modulo
-& = bitwise and
-| = pipe
-|= = pipe equals
-~ = bitwise not
-^ = xor
-<< = shift left
->> = shift right
-+= = plus equals
--= = minus equals
-*= = times equals
-/= = divided equals
--> = arrow
+format = markdown
+renderer = mdcat
 ```
 
 ### python.conf
@@ -375,7 +414,7 @@ decorator = ${0|@=decorator}
 dotted_name = ${*|.=dot}
 
 [pronunciations]
-# what is Python's alone; the operators every language shares are in code.conf
+# what is Python's alone; the operators every language shares are readaloud.conf's [pronunciations.code]
 str = string
 := = walrus
 ```

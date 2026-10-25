@@ -7,11 +7,11 @@ a release.
 
 | Module | Job |
 | --- | --- |
-| `cli.py` | arguments, config precedence, reading the input, `--save`, and handing `-md` input to `markdown.py` |
+| `cli.py` | arguments, the input's config layers, config precedence, reading the input, `--save`, and handing Markdown to `markdown.py` when `renderer = mdcat` |
 | `ansi.py` | escape-sequence parser to styled `Run`s; Markdown cleanup for non-ANSI input |
 | `document.py` | words with character offsets, the sentence/paragraph chunker, and table cells |
 | `pronounce.py` | `[pronunciations]`: finding the text in a chunk and respelling it, so every word keeps its highlight |
-| `markdown.py` | `-md`: runs mdcat and maps each rendered table's cells back to the source |
+| `markdown.py` | `renderer = mdcat`: runs mdcat and maps each rendered table's cells back to the source |
 | `width.py` | how many terminal cells a character takes (wide CJK and emoji take two) |
 | `syntax.py` | source code as a syntax tree: the tree-sitter runtime with a language's grammar loaded at run time, from the `tree-sitter-<language>` wheel or a Neovim `parser/<language>.so` |
 | `_core` | the compiled half, built from `rust/`: the computation behind `width.py`, `pronounce.py`, `ansi.py`, `syntax.py`, and the words, sentences and chunks of `document.py` |
@@ -20,7 +20,7 @@ a release.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
-| `config.py` | `~/.readaloud/`: parsing the settings and the `[pronunciations]` lines, clamping, laying `code.conf` and a language's file over `readaloud.conf`; the files a first run writes are under `readaloud/configs/` |
+| `config.py` | `~/.readaloud/`: parsing the settings and the `[pronunciations]` lines, clamping, laying the layers `[files]` names over `readaloud.conf`; the files a first run writes are under `readaloud/configs/` |
 | `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## From a checkout

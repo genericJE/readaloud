@@ -8,7 +8,7 @@ you are hearing. Move around with `less` keys while it keeps talking, or click a
 to jump playback there. Nothing leaves the machine.
 
 ```
-readaloud -md notes.md
+readaloud notes.md
 ```
 
 
@@ -17,13 +17,13 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
 
 ## What it does
 
-- **Reads Markdown as mdcat draws it.** `readaloud -md notes.md` shows the file the way
+- **Reads Markdown as mdcat draws it.** `readaloud notes.md` shows the file the way
   [mdcat][mdcat] draws it and reads its tables one cell at a time, row by row, with the
   highlight on the cell even where it wraps beside its neighbours. See
-  [Markdown with `-md`](docs/markdown.md).
+  [Markdown](docs/markdown.md).
 - **Reads styled terminal output.** Piped ANSI (`bat`, `git log --color`) keeps its
-  colours, bold, italics and OSC-8 hyperlinks on screen. For Markdown, use `-md` above:
-  piped from a renderer, a table is read line by line instead of cell by cell. Raw Markdown gets its syntax
+  colours, bold, italics and OSC-8 hyperlinks on screen. For Markdown, name the file as
+  above: piped from a renderer, a table is read line by line instead of cell by cell. Raw Markdown gets its syntax
   characters stripped so `##` and `**` are not spoken out loud.
 - **Word-level highlighting.** misaki's per-token timestamps are aligned back onto the
   original characters, so the highlight tracks the audio to within a few milliseconds
@@ -71,8 +71,8 @@ tree (see [Syntax](docs/pronunciations.md#syntax)); the Homebrew install has it.
 smaller install. To run without installing: `uv run readaloud -f notes.md`. See
 [Development](docs/development.md) for what that pulls in.
 
-[mdcat][mdcat] is optional, and neither install brings it. `-md` runs it; everything else
-works without it.
+[mdcat][mdcat] is optional, and neither install brings it. A Markdown file is drawn with
+it when it is there; everything else works without it.
 
 ```bash
 brew install mdcat
@@ -82,7 +82,7 @@ brew install mdcat
 
 ```bash
 # the primary path for Markdown: drawn by mdcat, tables read one cell at a time
-readaloud -md notes.md
+readaloud notes.md
 
 # a file, no mdcat needed (most Markdown syntax is stripped before it is spoken, unless `format = code` or `plain`)
 readaloud -f README.md
@@ -101,11 +101,12 @@ readaloud -f notes.md --voice bf_emma --speed 1.2 --start 5
 readaloud -f notes.md --save notes.wav
 ```
 
-Read Markdown with `-md` rather than piping `mdcat --ansi notes.md | readaloud`. Piped
-output arrives as finished lines, so readaloud cannot tell a table's cells apart: it reads
-the table line by line, straight across its columns, and a cell that wraps gets mixed up
-with its neighbours ("writes the joined parser and the in tests March"). `-md` runs mdcat
-itself and reads every cell on its own, in order.
+Name the Markdown file rather than piping `mdcat --ansi notes.md | readaloud`. Piped output
+arrives as finished lines, so readaloud cannot tell a table's cells apart: it reads the
+table line by line, straight across its columns, and a cell that wraps gets mixed up with
+its neighbours ("writes the joined parser and the in tests March"). Given the file,
+readaloud runs mdcat itself (`renderer = mdcat` in `markdown.conf`) and reads every cell on
+its own, in order; for a pipe of Markdown source, `cat notes.md | readaloud --conf md`.
 
 Piping works even when stdout is redirected. `readaloud` reopens `/dev/tty` for both the
 keyboard and the screen, so `git log --oneline -20 | readaloud > log` draws the reader on
@@ -118,8 +119,8 @@ the terminal rather than into `log`.
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
-| `.` &middot; `→` | next chunk (in a table read with `-md`, the next cell) |
-| `,` &middot; `←` | previous chunk (in a table read with `-md`, the previous cell) |
+| `.` &middot; `→` | next chunk (in a table drawn by mdcat, the next cell) |
+| `,` &middot; `←` | previous chunk (in a table drawn by mdcat, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
 | `F` | jump to the spoken word and follow it from there |
 | `c` | jump to the spoken word and stay put, following or not as before |
@@ -133,16 +134,27 @@ mode and the headphone button.
 ## Configuration
 
 The first run writes `~/.readaloud/`, the three files readaloud ships: `readaloud.conf`
-with every setting at its default, the shapes that say a file with its line or a URL with
-its port, and the words Kokoro says wrongly; `code.conf` for every source file; and
-`python.conf` for Python. All of it is ordinary lines to edit or delete, and a `rust.conf`
-dropped beside them reads Rust the same way. A shortened `readaloud.conf`, with one
-setting changed:
+with every setting at its default, the `[files]` table that says which configs read which
+file by its extension, the shapes that say a file with its line or a URL with its port,
+and the words Kokoro says wrongly; `markdown.conf`, which draws a `.md` file with mdcat;
+and `python.conf` for Python. All of it is ordinary lines to edit or delete, and a
+`rust.conf` dropped beside them reads Rust the same way (`.rs = code rust` is in the
+table already). A shortened `readaloud.conf`, with one setting changed:
 
 ```ini
 [config]
 # settings; docs/configuration.md lists them all
 speed = 1.2
+
+[files]
+# which configs read a file, by its extension; the last names the grammar
+.py .pyi = code python
+.rs = code rust
+.md = markdown
+
+[config.code]
+# source files: read as written, indented lines cut into chunks, operators lit
+format = code
 
 [parts]
 # named pieces of pattern, used as %{name} by the shapes and by later parts
@@ -170,20 +182,26 @@ README.md = readme dot M D
 
 # what the punctuation of code is called
 != = not equals
+
+[pronunciations.code]
+# the operators of a source file, said in every language
+== = is equal to
+| = pipe
 ```
 
 With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 283",
 `user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b".
 
-`code.conf` turns the Markdown stripping off for source files and names the operators
-(`== = is equal to`, `| = pipe`); `python.conf` holds `[syntax]` rules that say a `.py`
-file node by node through its grammar, so `def for_file(self, path: str | None) ->
-Config:` is "function for_file takes self and path type string or None and returns type
-Config", `self.rate` is "self dot rate", and `a | b` between two sets stays "a pipe b".
-The three files in full, with every part, shape and pronunciation, are in
-[Configuration](docs/configuration.md#the-files-a-first-run-writes); how the files lay over
-one another is in [File types](docs/configuration.md#file-types). The Homebrew install has
-the Python grammar; another language is its `tree-sitter-<language>` package installed
+A `.py` file is read with the `code` layer (the `[config.code]` and `[pronunciations.code]`
+sections above: no Markdown stripping, the operators in words) and then `python.conf`,
+whose `[syntax]` rules say the file node by node through its grammar, so
+`def for_file(self, path: str | None) -> Config:` is "function for_file takes self and
+path type string or None and returns type Config", `self.rate` is "self dot rate", and
+`a | b` between two sets stays "a pipe b". `--conf py` reads anything that way, a pipe
+included. The three files in full are in
+[Configuration](docs/configuration.md#the-files-a-first-run-writes); how the layers lie
+over one another is in [File types](docs/configuration.md#file-types). The Homebrew install
+has the Python grammar; another language is its `tree-sitter-<language>` package installed
 next to readaloud, plus its `.conf`: see [Syntax](docs/pronunciations.md#syntax), and
 [`src/readaloud/configs/`](src/readaloud/configs/) for files to copy and to share.
 
@@ -197,7 +215,7 @@ odd is reported without stopping the reader.
 | Page | What is in it |
 | --- | --- |
 | [Reading](docs/reading.md) | the keys, the status bar, follow mode, the headphone button |
-| [Markdown with `-md`](docs/markdown.md) | how a rendered table is read one cell at a time |
+| [Markdown](docs/markdown.md) | how a rendered table is read one cell at a time |
 | [Pronunciations](docs/pronunciations.md) | saying a word or phrase your way |
 | [Configuration](docs/configuration.md) | `~/.readaloud/`, file by file and setting by setting |
 | [Options](docs/options.md) | every flag, and the voices |

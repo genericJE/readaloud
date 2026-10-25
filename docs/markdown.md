@@ -1,28 +1,29 @@
 # Markdown
 
-This page covers reading Markdown from its source with `-md`, and how the tables in it
-are read.
+This page covers reading Markdown from its source, and how the tables in it are read.
 
-## Markdown with `-md`
+## Markdown, drawn by mdcat
 
-`-md` reads a Markdown file from its source. readaloud runs mdcat itself, shows the file
-as `mdcat --ansi` draws it, headings, colours and tables included, and reads each table
-one cell at a time.
+A `.md` file is read with `markdown.conf`, whose `renderer = mdcat` has readaloud run mdcat
+itself: the file is shown as `mdcat --ansi` draws it, headings, colours and tables
+included, and each table is read one cell at a time.
 
 ```bash
-readaloud -md notes.md
-readaloud -md notes.md --save notes.wav
-cat notes.md | readaloud -md
+readaloud notes.md
+readaloud notes.md --save notes.wav
+cat notes.md | readaloud --conf md
 ```
 
-`-md` also works after a file that exists (`readaloud notes.md -md`), after `-f FILE`, and
-after TEXT. Put TEXT before the flag, because `-md` takes the word that follows it as its
-file.
+The file's name is enough: a lone argument that names a file is read as that file (`-f
+notes.md` is the explicit form). A pipe or TEXT has no name, so `--conf md` says to read it
+as a `.md` file would be. Which configs a `.md` file gets is the `.md = markdown` line of
+`[files]` in `readaloud.conf` (see [File types](configuration.md#file-types)); set
+`renderer = none` in `markdown.conf` to read Markdown as stripped text instead.
 
 mdcat draws a table without pipes, padding its columns with spaces and wrapping a long
 cell onto extra lines beside its neighbours. Once it is rendered nothing says where one
 cell ends and the next begins, so a piped table is read line by line, the words of
-neighbouring cells mixed together. `-md` works from the source, where the cells are known:
+neighbouring cells mixed together. From the source, the cells are known:
 
 - Tables are read row by row, left to right, header row included, one cell at a time. The
   highlight stays on the cell being read even where it wraps onto lines shared with the
@@ -52,8 +53,8 @@ neighbouring cells mixed together. `-md` works from the source, where the cells 
   itself does (`--save` always uses 80). Narrow the terminal afterwards and the lines soft
   wrap instead of being redrawn.
 
-Without mdcat on your `PATH`, `-md` stops with a one-line hint and the rest of readaloud
-works as before. Input already rendered with `mdcat --ansi` is refused, since there is no
-source left to find the cells in.
+Without mdcat on your `PATH`, the Markdown is read as written, its syntax stripped, and the
+status bar says so once (`brew install mdcat`). Input already rendered with `mdcat --ansi`
+is read as it came, colours and all, since there is no source left to find the cells in.
 
 [Back to the README](../README.md)

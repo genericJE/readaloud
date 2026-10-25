@@ -20,7 +20,7 @@ New York City = NYC        # a phrase: any spacing, one line break too
 C# = C sharp
 std::vector = standard vector
 != = not equal             # no quotes needed: the separator has spaces round it
-✓ = check                  # a tick in a -md table says "check", not "yes"
+✓ = check                  # a tick in an mdcat table says "check", not "yes"
 macOS = macOS              # said as written, which keeps "OS" below off it
 OS = O S
 "#include" = hash include  # quote text that starts with # or ; or a quote
@@ -76,7 +76,7 @@ rather than one long token whose tail Kokoro reads as Freud's id. A hyphen gets 
 measured the same way: one there reads worse.
 
 Pronunciations apply wherever readaloud speaks: prose, code blocks, piped output and the
-cells of a `-md` table, in the reader and in a `--save` WAV alike. Only what is said
+cells of a table mdcat drew, in the reader and in a `--save` WAV alike. Only what is said
 changes. The screen shows the text as written, search finds it as written, and the
 highlight stays on the written word while its respelling is said: `kubectl` stays lit
 through "cube control". Control Center and the lock screen show what is said, so
@@ -93,8 +93,8 @@ Two kinds stay unlit while still being said: an entry whose text holds a space
 (`. . = stop stop`), since a word never spans one, and, in a table cell, text the render
 wrapped onto a line of its own.
 
-A `-md` table says its ticks and crosses as "yes" and "no", and its arrows and keys by
-name (see [Markdown with `-md`](markdown.md)). Those names are not text an entry can
+A table mdcat drew says its ticks and crosses as "yes" and "no", and its arrows and keys
+by name (see [Markdown](markdown.md)). Those names are not text an entry can
 match, so `yes = yep` changes a written "yes" but no tick, and `right arrow = next` leaves
 every `→` alone. An entry for the symbol itself replaces its name: with `✓ = check`, a `✓`
 cell says "check" and `✓ (partial)` says "check (partial)". Each symbol is an entry of its
@@ -237,12 +237,14 @@ The Homebrew install ships the Python grammar already (the `grammars` extra); fo
 language, `brew`'s readaloud needs that language's package installed into its own Python,
 or a `parsers` directory. Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
 instead and install nothing. The grammar is picked by the file's suffix (`.py` is `python`,
-`.rs` is `rust`, and so on; the `language` setting overrides it),
+`.rs` is `rust`, and so on, as the `[files]` table of `readaloud.conf` says; the
+`language` setting overrides it),
 and only a named file (`-f app.py`) has one: piped text has no suffix. Without a grammar,
 or with a rule the grammar has no node or field for, the status bar says so and the file is
 read without the rules.
 
-The shipped `~/.readaloud/python.conf` (with `format = code` coming from `code.conf`):
+The shipped `~/.readaloud/python.conf` (with `format = code` coming from the `code` layer
+of `readaloud.conf`, since `[files]` says `.py = code python`):
 
 ```ini
 [syntax]
@@ -410,7 +412,7 @@ readaloud: /Users/you/.readaloud/readaloud.conf: [pronunciations] line 101: the 
 
 Text that only looks like a pattern is literal when quoted: `"/usr/" = slash user slash`.
 A pattern is matched against the text as it is spoken, which is why it cannot see the
-name a `-md` table gives a tick, and it cannot reach into one either.
+name a table mdcat drew gives a tick, and it cannot reach into one either.
 
 Some tips:
 

@@ -10,8 +10,8 @@ system play/pause button.
 | Key | Action |
 | --- | --- |
 | `Space` | play / pause |
-| `.` &middot; `→` | next chunk (in a table read with `-md`, the next cell) |
-| `,` &middot; `←` | previous chunk (in a table read with `-md`, the previous cell) |
+| `.` &middot; `→` | next chunk (in a table drawn by mdcat, the next cell) |
+| `,` &middot; `←` | previous chunk (in a table drawn by mdcat, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
 | `F` | jump to the spoken word, centred, and follow it from there |
 | `c` | jump to the spoken word and leave the view there, placed exactly where follow mode would (see [`follow_lead`](configuration.md)), with follow mode as it was |
@@ -79,7 +79,7 @@ when you quit. While it holds it:
 | previous track | previous chunk, like the `←` key |
 
 Control Center and the lock screen show the chunk being read (a paragraph, or a table cell
-with `-md`) as the track title and the document's name as the artist.
+by mdcat) as the track title and the document's name as the artist.
 
 This needs [PyObjC][pyobjc]. A Homebrew install already bundles it. In a checkout it is an
 optional extra, so the reader itself stays a small install:
