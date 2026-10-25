@@ -29,8 +29,8 @@ OS = O S
 A fresh `~/.readaloud/readaloud.conf` already holds about 125 of these, each one a word Kokoro
 was measured saying wrongly: the common file types (`main.py` is "main dot pie",
 `config.yml` is "config dot yaml", `README.md` keeps its name instead of being spelled
-out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string", `"""` is
-"triple quote"), languages and tools (`C#`, `.NET`, `json`, `YAML`, `systemd`,
+out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string"),
+languages and tools (`C#`, `.NET`, `json`, `YAML`, `systemd`,
 `journalctl`, `kubectl`, `k8s`, `redis`, `postgresql`, `PyPI`), and what the punctuation
 of code is called (`!=`, `->`, `=>`, `::`, `&&`, `||`), the URL schemes Kokoro says
 nothing for (`https`, `ssh`) and the common web domains (`.org`, `.io`, `.co.uk`). They are
@@ -332,8 +332,7 @@ The shipped `python.conf` reads a comment without its marker, `comment = ${0|#=}
 # the limit` is "x equals 3 the limit", not "hash the limit", while a `#` inside a string,
 which is no comment node, stays. The `string_start` and `string_end` rules drop a
 docstring's triple quotes the same way: a rule may say nothing at all, and the text it
-covers is then neither read nor reached by an entry (`'''' = triple quote` in
-`readaloud.conf` never sees them). The marker is each language's own (`//` is a comment in
+covers is then neither read nor reached by an entry. The marker is each language's own (`//` is a comment in
 Rust and floor division in Python), so the rule belongs in the language's file, as
 `comment = ${0|//=}` would in a `rust.conf`.
 

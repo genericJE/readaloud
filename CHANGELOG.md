@@ -23,6 +23,7 @@
 - A Python comment is read without its `#`, and a docstring without its `"""`: `[syntax]`
   rules in the shipped `python.conf`; a language's file carries its own markers. A rule
   may say nothing, and the text it covers is then neither read nor reached by an entry.
+  The two "triple quote" entries are gone from the shipped `readaloud.conf`.
 
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:

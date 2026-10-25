@@ -248,8 +248,6 @@ id = ID
 ids = IDs
 "''" = empty string
 '""' = empty string
-"'''" = triple quote
-'"""' = triple quote
 
 # file names and extensions
 README.md = readme dot M D
