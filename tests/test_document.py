@@ -2408,3 +2408,25 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+def test_a_source_file_reads_each_line_as_a_sentence():
+    from readaloud.document import Document
+
+    text = ("class A:\n    x = (1 +\n         2)\n    y = \"a\"\n    z = [\n        1,\n"
+            "    ]\n    if y:  # note\n        return y\n")
+    d = Document.from_text(text, markdown=False)
+    (chunk,) = [c for c in d.chunks if c.speakable]
+    # a full stop where a line ends a statement; none after an open bracket,
+    # a comma, a colon, on a line with no word to say, or on the last line,
+    # and none on screen
+    assert chunk.text == ("class A:\n    x = (1 +\n         2).\n    y = \"a\".\n    z = [\n"
+                          "        1,\n    ]\n    if y:  # note.\n        return y")
+    assert d.plain[2] == "         2)"
+    # every slot still sits on its word, so the highlight is unchanged
+    for o, t in zip(chunk.offsets, chunk.word_texts):
+        assert chunk.text[o:o + len(t)] == t
+    check_invariants(d, pronounced=True)       # the text is no longer a slice
+    # prose keeps its line breaks as they are
+    p = Document.from_text("one line\nand another\n\nnext", markdown=True)
+    assert all("." not in c.text for c in p.chunks)

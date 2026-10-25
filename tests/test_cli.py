@@ -877,7 +877,8 @@ def test_a_source_files_indented_lines_are_cut_into_chunks(tmp_path, launched):
     assert cli.main(["--config", str(write_conf(tmp_path, "format = code\n")), "-f",
                      str(source)]) == 0
     chunks = [c for c in launched["doc"].chunks if c.speakable]
-    assert len(chunks) > 3 and all(len(c.text) <= 380 for c in chunks)
+    # the limit is on the text as written; the voice gets a full stop per line
+    assert len(chunks) > 3 and all(len(c.text) <= 380 + c.text.count("\n") for c in chunks)
     # cut at line ends: every chunk opens on a field and closes on its value
     assert all(c.text.lstrip().startswith("field") and c.text.rstrip()[-1].isdigit()
                for c in chunks[1:])

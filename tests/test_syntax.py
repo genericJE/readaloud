@@ -214,7 +214,8 @@ def test_the_shipped_code_layer_reads_a_comment_without_its_marker(tmp_path, pyt
     doc = Document.from_text("x = 3  # the limit, see #12 and a // b\ns = '# kept'\n",
                              pronunciations=lex, markdown=False)
     # the # goes; // is floor division in Python and stays as written
-    assert doc.chunks[0].text == ("x equals 3  the limit, see 12 and a floor divided by b\n"
+    # (the full stop: with format = code each line is a sentence of its own)
+    assert doc.chunks[0].text == ("x equals 3  the limit, see 12 and a floor divided by b.\n"
                                   "s equals '# kept'")
     # a docstring's triple quotes are claimed and say nothing; '' still says
     # "empty string" through the general entry

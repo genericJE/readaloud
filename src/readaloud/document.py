@@ -759,6 +759,66 @@ def _table_chunks(plain: Sequence[str], words: Sequence[Word], table: Table,
     return out
 
 
+#: What a line of code may end with and still run on into the next: a
+#: bracket it opened, a comma or an operator, a backslash continuation.
+_RUNS_ON = frozenset("([{,\\+-*/%&|^<>=~@")
+#: Already a pause for the voice.
+_PAUSES = frozenset(".,;:!?")
+
+
+def _end_code_lines(chunk: Chunk, plain: Sequence[str], words: Sequence[Word]) -> None:
+    """End each line of `chunk`'s spoken text as a sentence, in place.
+
+    The voice reads the text, and a line break is nothing to it: the
+    ``return self.path.stem`` of one line and the ``def`` of the next are
+    read as one breath, "stem method for_file", with the pause landing
+    wherever the voice feels like it.  A full stop at the end of a line that
+    does not run on makes each line a sentence, so the pause falls where
+    the line ends.  Whether a line runs on is read off the line as written
+    (`plain`, through the last word slot on the spoken line), since a
+    ``[syntax]`` rule's wording drops the ``(`` or ``,`` that says so: a
+    bracket left open, a trailing comma or operator, a ``\\``.  Only the
+    spoken text changes: the stop sits in no word slot, so the screen, the
+    offsets and the highlight are as they were.
+    """
+    text = chunk.text
+    if "\n" not in text or not chunk.words:
+        return
+    out: list[str] = []
+    cuts: list[int] = []                     # offsets in `text` a stop goes before
+    at = 0
+    slot = 0
+    nslots = min(len(chunk.words), len(chunk.offsets))
+    while (nl := text.find("\n", at)) >= 0:
+        # the last word slot on this spoken line names the written line
+        last = None
+        while slot < nslots and chunk.offsets[slot] < nl:
+            last = slot
+            slot += 1
+        if last is not None:
+            try:
+                written = plain[words[chunk.words[last]].line].rstrip()
+            except (IndexError, AttributeError):
+                written = ""
+            body = written.rstrip(")]}\"'")   # a quote or a close bracket ends it too
+            ends = (written and written[-1] not in _RUNS_ON
+                    and written[-1] not in _PAUSES and not (body and body[-1] in _PAUSES))
+            spoken = text[at:nl].rstrip()
+            if ends and spoken:
+                cut = at + len(spoken)
+                out.append(text[at:cut] + ".")
+                cuts.append(cut)
+                at = cut
+        out.append(text[at:nl + 1])
+        at = nl + 1
+    out.append(text[at:])
+    if not cuts:
+        return
+    from bisect import bisect_right
+    chunk.text = "".join(out)
+    chunk.offsets = [o + bisect_right(cuts, o) for o in chunk.offsets]
+
+
 def build_chunks(plain: Sequence[str], words: Sequence[Word],
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
                  max_chars: int = DEFAULT_MAX_CHARS, *,
@@ -1120,6 +1180,9 @@ class Document:
         self.respell_failures = 0
         if pronunciations:
             self.respell_failures = self._respell(pronunciations)
+        if not self.markdown:
+            for chunk in self.chunks:
+                _end_code_lines(chunk, self.plain, self.words)
 
         # word index -> (chunk index, slot inside that chunk)
         self._chunk_of: list[int] = [0] * len(self.words)
