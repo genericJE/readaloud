@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 (2026-10-25)
+
+The preferences are a directory of files, one per kind of input, picked by the file's
+extension: a Markdown file is drawn by mdcat and read cell by cell without a flag, and a
+Python file is read through its grammar by the shipped `python.conf`.
 
 - **The preferences are a directory, `~/.readaloud/`**: `readaloud.conf` for what applies
   to everything, `markdown.conf` for Markdown, and a `<language>.conf` per language
