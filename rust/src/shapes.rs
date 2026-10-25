@@ -311,6 +311,11 @@ pub(crate) fn shared(pieces: &[Piece], matched: &str, start: usize, covered: &[(
     // it, so that "foo()" and "dot bar()" are kept apart and `"` and `x.y`
     // are not; the caller takes that space as the sign to put one in.
     let mut said: Vec<String> = vec![String::new(); covered.len()];
+    if covered.is_empty() {
+        // a match over no word at all (the quotes of a string): the caller
+        // says it as one piece
+        return said;
+    }
     let (mut slot, mut prev) = (0, None);
     for (word, src, until, spaced) in &words {
         // punctuation written up against a word stays with it: "$line,

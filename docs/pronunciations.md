@@ -165,7 +165,8 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
 - **An empty wording says the text as written.** That is not the same as no line: the
   shape still claims the text, so a pattern such as `/:(\d+)/` cannot reach into a time.
 - **Your entries win.** An entry for the same text (`settings.py:498 = the settings`)
-  beats the shape.
+  beats the shape. A `[syntax]` rule is the other way round: the most specific word there
+  is for a node, it beats an entry for the same text (see [Syntax](#syntax)).
 
 In a wording, `$name` or `${name}` is what the group `(?<name>...)` matched, `$1` and so on
 a group by number, `$0` the whole match, and `$$` a dollar sign. `${name|from=to}` is the
@@ -259,6 +260,8 @@ list_splat_pattern = ${0|*=star}
 attribute = $object dot $attribute
 decorator = ${0|@=decorator}
 comment = ${0|#=}
+string_start = ${0|"""=|'''=}
+string_end = ${0|"""=|'''=}
 
 [pronunciations]
 str = string
@@ -327,7 +330,10 @@ shows the same tree.
 
 The shipped `python.conf` reads a comment without its marker, `comment = ${0|#=}`: `x = 3
 # the limit` is "x equals 3 the limit", not "hash the limit", while a `#` inside a string,
-which is no comment node, stays. The marker is each language's own (`//` is a comment in
+which is no comment node, stays. The `string_start` and `string_end` rules drop a
+docstring's triple quotes the same way: a rule may say nothing at all, and the text it
+covers is then neither read nor reached by an entry (`'''' = triple quote` in
+`readaloud.conf` never sees them). The marker is each language's own (`//` is a comment in
 Rust and floor division in Python), so the rule belongs in the language's file, as
 `comment = ${0|//=}` would in a `rust.conf`.
 

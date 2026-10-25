@@ -416,6 +416,9 @@ decorator = ${0|@=decorator}
 dotted_name = ${*|.=dot}
 # a comment without its #: "the limit", not "hash the limit"; a // in it stays
 comment = ${0|#=}
+# a string's triple quotes are not said; a '' still says "empty string"
+string_start = ${0|"""=|'''=}
+string_end = ${0|"""=|'''=}
 
 [pronunciations]
 # what is Python's alone; the operators every language shares are readaloud.conf's [pronunciations.code]

@@ -73,7 +73,7 @@ pub struct Lexicon {
 }
 
 /// A candidate's rank: the longest match wins, then a key with a capital,
-/// then an entry over a shape, then the later line.
+/// then a grammar's rule over an entry over a shape, then the later line.
 type Rank = (usize, bool, u8, usize);
 
 /// Why a pattern cannot be used, or None.
@@ -317,10 +317,12 @@ impl Lexicon {
                     });
                 }
             }
-            // every shape and node starting here; a node outranks a shape
+            // every shape and node starting here: a shape loses to an entry
+            // of the same length, a grammar's rule, the most specific word
+            // there is for that text, beats one
             while si < shaped.len() && shaped[si].0 == p {
                 let (_, end, pieces, guard, tier) = &shaped[si];
-                let rank = (*end, false, 0, *tier);
+                let rank = if *tier == 1 { (*end, true, 2, 0) } else { (*end, false, 0, 0) };
                 if name_at >= *end && best.as_ref().is_none_or(|b| rank > b.0) {
                     best = Some((rank, pieces.clone(), *guard));
                 }
@@ -385,7 +387,14 @@ impl Lexicon {
                 continue;
             }
             let mut says: Vec<String> = found.pieces.iter().map(|p| self.respoken(p, true)).collect();
-            if !says.iter().any(|s| s.chars().any(is_word_char)) {
+            if says.is_empty() {
+                // over no word slot at all: one piece for the whole match
+                says.push(self.respoken(&found.say, true));
+            }
+            // A wording that says nothing (a rule dropping a string's quotes)
+            // still claims the text: it is replaced by a space, so the entries
+            // never see it.  A shape has no such wish, and is skipped.
+            if !says.iter().any(|s| s.chars().any(is_word_char)) && tier == 0 {
                 continue;
             }
             // the first slot the match reaches into; each piece runs from

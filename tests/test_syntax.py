@@ -207,6 +207,14 @@ def test_the_shipped_code_layer_reads_a_comment_without_its_marker(tmp_path, pyt
     # the # goes; // is floor division in Python and stays as written
     assert doc.chunks[0].text == ("x equals 3  the limit, see 12 and a floor divided by b\n"
                                   "s equals '# kept'")
+    # a docstring's triple quotes are claimed and say nothing; '' still says
+    # "empty string" through the general entry
+    doc = Document.from_text('def f():\n    """Say hi."""\n    return \'\'\n', pronunciations=lex,
+                             markdown=False)
+    assert doc.chunks[0].text == "function f takes\nSay hi.\nreturn empty string"
+    # alone in its chunk the rule still beats the general '\'\'\'' entry
+    doc = Document.from_text("x = '''raw'''\n", pronunciations=lex, markdown=False)
+    assert doc.chunks[0].text == "x equals  raw "
 
 
 def test_an_empty_rule_says_the_node_as_written_and_claims_it(python):
