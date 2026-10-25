@@ -46,6 +46,7 @@ REAL_DEFAULT_PATH = config.DEFAULT_PATH
 def _sandbox_default_path(tmp_path, monkeypatch):
     """No test may read or write the developer's own preferences file."""
     monkeypatch.setattr(config, "DEFAULT_PATH", tmp_path / "sandbox.conf")
+    monkeypatch.setattr(config, "LEGACY_PATH", tmp_path / "sandbox.legacy.conf")
     yield
 
 

@@ -1,6 +1,6 @@
 # Pronunciations
 
-The `[pronunciations]` section of `~/.readaloud.conf`: how to say a word or phrase your
+The `[pronunciations]` section of `~/.readaloud/readaloud.conf`: how to say a word or phrase your
 way.
 
 Kokoro does not always say a word the way you would. It reads the `id` in `user.id` to
@@ -26,7 +26,7 @@ OS = O S
 "#include" = hash include  # quote text that starts with # or ; or a quote
 ```
 
-A fresh `~/.readaloud.conf` already holds about 125 of these, each one a word Kokoro
+A fresh `~/.readaloud/readaloud.conf` already holds about 125 of these, each one a word Kokoro
 was measured saying wrongly: the common file types (`main.py` is "main dot pie",
 `config.yml` is "config dot yaml", `README.md` keeps its name instead of being spelled
 out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string", `"""` is
@@ -132,7 +132,7 @@ slashes and says how to read it, naming what the pattern's groups matched:
 | `settings.py:498` | settings dot pie line 498 |
 | `14:35`, `9:05:59` | as written: Kokoro says "fourteen thirty-five" |
 
-readaloud has no shape of its own: those seven lines are what a fresh `~/.readaloud.conf`
+readaloud has no shape of its own: those seven lines are what a fresh `readaloud.conf`
 comes with, and you add, change and delete them like any other line. A file with no
 `[shapes]` section has none, which is the case for a file written by an older readaloud;
 copy this section and the `[parts]` section below into it, before `[pronunciations]`.
@@ -215,15 +215,15 @@ a replacement cannot start with `=`. `[^,=)]` keeps the example short: a type su
 `dict[str, int]` breaks at its comma, and `*args` keeps its star unless you add `|*=star`.
 A shape is found within one stretch of text: a blank line ends one, and so can a long
 paragraph, which is cut at about 380 characters. Shapes like these belong to one language,
-so they usually go in `[shapes.py]`, `[parts.py]` and `[pronunciations.py]`, which apply only
-to a `.py` file (see [file types](configuration.md#file-types)).
+so they go in that language's file, `~/.readaloud/python.conf`, which applies only to
+`.py` files (see [file types](configuration.md#file-types)).
 
 ## Syntax
 
 For source code, a shape is the wrong tool: a parameter list can hold commas inside
-`dict[str, int]`, a comment, a decorator, any number of lines. A `[syntax.py]` section
-reads a `.py` file through a real parser instead, and says the parts of its syntax tree
-the way you describe them, node kind by node kind.
+`dict[str, int]`, a comment, a decorator, any number of lines. The `[syntax]` section of
+`~/.readaloud/python.conf` reads a `.py` file through a real parser instead, and says the
+parts of its syntax tree the way you describe them, node kind by node kind.
 
 readaloud ships the parser engine ([tree-sitter](https://tree-sitter.github.io/)) and no
 grammar. A language's grammar comes from the `tree-sitter-<language>` package, prebuilt
@@ -237,25 +237,27 @@ The Homebrew install ships the Python grammar already (the `grammars` extra); fo
 language, `brew`'s readaloud needs that language's package installed into its own Python,
 or a `parsers` directory. Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
 instead and install nothing. The grammar is picked by the file's suffix (`.py` is `python`,
-`.rs` is `rust`, and so on; the `language` setting under `[config.<ext>]` overrides it),
+`.rs` is `rust`, and so on; the `language` setting overrides it),
 and only a named file (`-f app.py`) has one: piped text has no suffix. Without a grammar,
 or with a rule the grammar has no node or field for, the status bar says so and the file is
 read without the rules.
 
-```ini
-[config.py]
-markdown = no
+The shipped `~/.readaloud/python.conf` (with `markdown = no` coming from `code.conf`):
 
-[syntax.py]
+```ini
+[syntax]
 function_definition = function $name $parameters $return_type $body
+class_definition/function_definition = method $name $parameters $return_type $body
 function_definition.return_type = and returns type $0
 parameters = takes ${*|,=and}
 typed_parameter = ${*|:=type}
 typed_default_parameter = $name type $type with a default of $value
 type/binary_operator = $left or $right
 list_splat_pattern = ${0|*=star}
+attribute = $object dot $attribute
+decorator = ${0|@=decorator}
 
-[pronunciations.py]
+[pronunciations]
 str = string
 ```
 
@@ -289,9 +291,9 @@ Colouring needs no `[syntax]` rules: a grammar alone is enough.
 
 ### Changing how a piece of code is read
 
-Every rule is yours: readaloud ships none, so a file is read as written until you say
-otherwise, and a wording you dislike is a line in your own `[syntax.py]`. To change how a
-kind of code is read, find its node kind and write a rule for it:
+Every rule is a line in `~/.readaloud/python.conf`, the shipped ones included, so a
+wording you dislike is yours to change or delete; a language with no file is read as
+written. To change how a kind of code is read, find its node kind and write a rule for it:
 
 ```bash
 readaloud --tree app.py
@@ -403,7 +405,7 @@ A pattern that will not compile, or that could match empty text (`/\d*/`), is re
 with its line number and skipped, like any other line readaloud cannot use:
 
 ```
-readaloud: /Users/you/.readaloud.conf: [pronunciations] line 101: the pattern /:(\d+/ cannot be used: unclosed group
+readaloud: /Users/you/.readaloud/readaloud.conf: [pronunciations] line 101: the pattern /:(\d+/ cannot be used: unclosed group
 ```
 
 Text that only looks like a pattern is literal when quoted: `"/usr/" = slash user slash`.
@@ -433,11 +435,11 @@ the file, and skipped. It costs only itself: every other pronunciation and every
 still applies.
 
 ```
-readaloud: /Users/you/.readaloud.conf: [pronunciations] line 99: 'kubectl' has no "="; write it as: text = how to say it
+readaloud: /Users/you/.readaloud/readaloud.conf: [pronunciations] line 99: 'kubectl' has no "="; write it as: text = how to say it
 ```
 
 The same text on two lines is reported too, and the later line wins; `id`, `Id` and `ID`
-are three different entries. An existing `~/.readaloud.conf` is never touched, so a file
+are three different entries. An existing `readaloud.conf` is never touched, so a file
 written by an older readaloud has neither the shipped entries nor the `[pronunciations]`
 line: add the line above your own entries, since an entry left under `[config]` is
 ignored with a warning that it belongs under `[pronunciations]`. To take the shipped ones,

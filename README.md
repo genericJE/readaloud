@@ -132,10 +132,12 @@ mode and the headphone button.
 
 ## Configuration
 
-The first run writes `~/.readaloud.conf`, a copy of the file readaloud ships: every setting
-at its default, the shapes that say a file with its line or a URL with its port, and the
-words Kokoro says wrongly, as ordinary lines to edit or delete. A shortened example, with
-one setting changed and a set of sections for Python files added:
+The first run writes `~/.readaloud/`, the three files readaloud ships: `readaloud.conf`
+with every setting at its default, the shapes that say a file with its line or a URL with
+its port, and the words Kokoro says wrongly; `code.conf` for every source file; and
+`python.conf` for Python. All of it is ordinary lines to edit or delete, and a `rust.conf`
+dropped beside them reads Rust the same way. A shortened `readaloud.conf`, with one
+setting changed:
 
 ```ini
 [config]
@@ -168,47 +170,24 @@ README.md = readme dot M D
 
 # what the punctuation of code is called
 != = not equals
-
-# source files (-f x.py, x.rs, ...): read as written, with words for the operators
-[config.code]
-markdown = no
-
-[pronunciations.code]
-== = is equal to
-| = pipe
-
-# Python files: said through the tree-sitter-python grammar
-
-[syntax.py]
-# node kind = wording; $field is that part of the node, $* its parts, $0 the whole
-function_definition = function $name $parameters $return_type $body
-function_definition.return_type = and returns type $0
-parameters = takes ${*|,=and}
-typed_parameter = ${*|:=type}
-typed_default_parameter = $name type $type with a default of $value
-type/binary_operator = $left or $right
-attribute = $object dot $attribute
-
-[pronunciations.py]
-str = string
-:= = walrus
 ```
 
 With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 283",
-`user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b". The
-whole file, with every part, shape and pronunciation, is in
-[Configuration](docs/configuration.md#the-file-a-first-run-writes).
+`user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b".
 
-The sections ending in `.code` apply to every source file, those ending in `.py` to a Python
-file only (`readaloud -f app.py`), which is read through a real parser, coloured, and said
-node by node: `def for_file(self, path:
-str | None) -> Config:` is "function for_file takes self and path type string or None and
-returns type Config", `self.rate` is "self dot rate", and `a | b` between two sets stays
-"a pipe b". The Homebrew install has the Python grammar; another language is its
-`tree-sitter-<language>` package installed next to readaloud. See
-[Syntax](docs/pronunciations.md#syntax) and [File types](docs/configuration.md#file-types).
+`code.conf` turns the Markdown stripping off for source files and names the operators
+(`== = is equal to`, `| = pipe`); `python.conf` holds `[syntax]` rules that say a `.py`
+file node by node through its grammar, so `def for_file(self, path: str | None) ->
+Config:` is "function for_file takes self and path type string or None and returns type
+Config", `self.rate` is "self dot rate", and `a | b` between two sets stays "a pipe b".
+The three files in full, with every part, shape and pronunciation, are in
+[Configuration](docs/configuration.md#the-files-a-first-run-writes); how the files lay over
+one another is in [File types](docs/configuration.md#file-types). The Homebrew install has
+the Python grammar; another language is its `tree-sitter-<language>` package installed
+next to readaloud, plus its `.conf`: see [Syntax](docs/pronunciations.md#syntax), and
+[`src/readaloud/configs/`](src/readaloud/configs/) for files to copy and to share.
 
-Precedence is `explicit flag > ~/.readaloud.conf > built-in default`, key by key. The file
+Precedence is `explicit flag > ~/.readaloud/ > built-in default`, key by key. The file
 is read forgivingly: a value that makes no sense keeps its default, one that is out of
 range is clamped, a pronunciation line that makes no sense costs only itself, and anything
 odd is reported without stopping the reader.
@@ -220,7 +199,7 @@ odd is reported without stopping the reader.
 | [Reading](docs/reading.md) | the keys, the status bar, follow mode, the headphone button |
 | [Markdown with `-md`](docs/markdown.md) | how a rendered table is read one cell at a time |
 | [Pronunciations](docs/pronunciations.md) | saying a word or phrase your way |
-| [Configuration](docs/configuration.md) | `~/.readaloud.conf`, setting by setting |
+| [Configuration](docs/configuration.md) | `~/.readaloud/`, file by file and setting by setting |
 | [Options](docs/options.md) | every flag, and the voices |
 | [Development](docs/development.md) | how the modules fit together, the tests, releases |
 

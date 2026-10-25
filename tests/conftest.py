@@ -29,3 +29,6 @@ from readaloud import config as _config  # noqa: E402
 @pytest.fixture(autouse=True)
 def _sandbox_config_path(tmp_path, monkeypatch):
     monkeypatch.setattr(_config, "DEFAULT_PATH", tmp_path / "sandbox.readaloud.conf")
+    # the one-file preferences a first run would move into the directory:
+    # never the developer's own
+    monkeypatch.setattr(_config, "LEGACY_PATH", tmp_path / "sandbox.legacy.conf")

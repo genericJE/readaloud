@@ -20,7 +20,7 @@ a release.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
-| `config.py` | `~/.readaloud.conf`: parsing the settings and the `[pronunciations]` lines, clamping; the file a first run writes is `readaloud/readaloud.conf` |
+| `config.py` | `~/.readaloud/`: parsing the settings and the `[pronunciations]` lines, clamping, laying `code.conf` and a language's file over `readaloud.conf`; the files a first run writes are under `readaloud/configs/` |
 | `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## From a checkout

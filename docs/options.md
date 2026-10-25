@@ -21,15 +21,15 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--repo ID` | `mlx-community/Kokoro-82M-4bit` | model repo |
 | `--color` / `--no-color` | colour on | render the input's colours, and a source file's by its grammar, or force monochrome |
 | `--media-keys` / `--no-media-keys` | on | take over the system play/pause button, or leave it alone |
-| `--config PATH` | `~/.readaloud.conf` | read defaults from `PATH` instead |
-| `--no-config` | | ignore the config file; built-in defaults only |
-| `--write-config` | | write the shipped config file (overwriting) and exit |
+| `--config PATH` | `~/.readaloud/` | read the preferences from `PATH`, a directory or a single `.conf` file, instead |
+| `--no-config` | | ignore the preferences; built-in defaults only |
+| `--write-config` | | write the shipped files (`readaloud.conf`, `code.conf`, `python.conf`, overwriting) and exit |
 | `--list-voices` | | print the voices for the chosen language |
 | `--tree` | | print the syntax tree of `FILE` through its grammar, the node kinds and fields a `[syntax]` rule can name, and exit (see [Syntax](pronunciations.md#syntax)) |
 | `--list-devices` | | print the audio output devices |
 
 The "Default" column is the *built-in* default. Anything set in
-[`~/.readaloud.conf`](configuration.md) wins over it, and an explicit flag wins over both.
+[`~/.readaloud/`](configuration.md) wins over it, and an explicit flag wins over both.
 
 ## Voices
 

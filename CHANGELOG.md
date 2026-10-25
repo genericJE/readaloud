@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The preferences are a directory, `~/.readaloud/`**: `readaloud.conf` for what applies
+  to everything, `code.conf` for every source file, and a `<language>.conf` per language
+  (`python.conf`, `rust.conf`), named after the grammar, with plain `[config]`,
+  `[pronunciations]`, `[shapes]`, `[parts]` and `[syntax]` sections inside. Dropping a
+  `rust.conf` into the directory is the whole install. The first run of this version
+  moves an existing `~/.readaloud.conf` into the directory, section by section, and says
+  so. The three shipped files live in `src/readaloud/configs/`, where a language's file
+  can be shared.
+
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:
   find its kind in the tree, write the line, delete it to go back.
