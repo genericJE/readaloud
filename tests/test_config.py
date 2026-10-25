@@ -1015,6 +1015,88 @@ def test_a_problem_in_a_language_file_names_that_file(tmp_path):
         f"it can match empty text"]
 
 
+LEGACY = """\
+[config]
+# settings
+speed = 1.3
+
+[parts]
+ext = py|rs
+
+# source files: read as written
+[config.code]
+markdown = no
+
+[syntax.py]  # the def rules
+function_definition = function $name $body
+
+[pronunciations.code]
+== = is equal to
+[1] = one
+[pronunciations.PY]
+str = string
+[pronunciations.xyz]
+odd = words
+[pronunciations]
+id = I D
+"""
+
+
+def test_split_legacy_sends_each_types_sections_to_its_file():
+    files = config.split_legacy(LEGACY)
+    assert list(files) == ["readaloud.conf", "code.conf", "python.conf"]
+    assert files["readaloud.conf"] == (
+        "[config]\n# settings\nspeed = 1.3\n\n[parts]\next = py|rs\n"
+        "[pronunciations.xyz]\nodd = words\n[pronunciations]\nid = I D\n")
+    # the comment above a header moves with it; the suffix comes off; a
+    # "[1] = one" line is an entry, not a header
+    assert files["code.conf"] == (
+        "# source files: read as written\n[config]\nmarkdown = no\n\n"
+        "[pronunciations]\n== = is equal to\n[1] = one\n")
+    assert files["python.conf"] == (
+        "[syntax]  # the def rules\nfunction_definition = function $name $body\n"
+        "[pronunciations]\nstr = string\n")
+    assert config.split_legacy("") == {}
+    assert config.split_legacy("speed = 2\n") == {"readaloud.conf": "speed = 2\n"}
+
+
+def test_migrate_splits_the_old_file_into_the_directory_and_deletes_it(tmp_path):
+    old = write(tmp_path / ".readaloud.conf", LEGACY)
+    folder = tmp_path / ".readaloud"
+    notes = config.migrate(old, folder)
+    assert notes == [f"moved {old} into {folder}/: readaloud.conf, code.conf, "
+                     f"python.conf (the settings section and your pronunciations "
+                     f"are in readaloud.conf; the sections for a file type are in "
+                     f"that language's file)"]
+    assert not old.exists()
+    assert sorted(p.name for p in folder.iterdir()) == ["code.conf", "python.conf",
+                                                         "readaloud.conf"]
+    cfg, warnings = config.load(folder)
+    assert warnings == []
+    assert (cfg.speed, cfg.parts) == (1.3, (("ext", "py|rs"),))
+    py = cfg.for_file("a.py")
+    assert py.markdown is False and ("str", "string") in py.pronunciations
+    assert py.syntax == (("function_definition", "function $name $body"),)
+    assert ("odd", "words") in cfg.for_file("a.xyz").pronunciations
+    # nothing to do a second time, or when the directory is already there
+    assert config.migrate(old, folder) == []
+    write(old, "[config]\nspeed = 2\n")
+    assert config.migrate(old, folder) == [] and old.exists()
+
+
+def test_migrate_never_raises(tmp_path):
+    old = write(tmp_path / "old.conf", "[config]\nspeed = 2\n")
+    blocked = tmp_path / "ro"
+    blocked.mkdir()
+    blocked.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        notes = config.migrate(old, blocked / ".readaloud")
+    finally:
+        blocked.chmod(stat.S_IRWXU)
+    assert len(notes) == 1 and notes[0].startswith(f"could not move {old}")
+    assert old.exists()
+
+
 def test_type_headers_ignore_case_and_take_one_extension(tmp_path):
     path = write(tmp_path / "c.conf",
                  "[Shapes.PY]\n/x+/ = ex\n[config.]\n[.py]\n[shapes.tar.gz]\n")

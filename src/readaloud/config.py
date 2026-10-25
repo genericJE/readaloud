@@ -65,6 +65,7 @@ __all__ = [
     "Config",
     "FileType",
     "DEFAULT_PATH",
+    "LEGACY_PATH",
     "MAIN_FILE",
     "SHIPPED_FILES",
     "PRONUNCIATIONS",
@@ -74,6 +75,8 @@ __all__ = [
     "TEMPLATE_PARTS",
     "TEMPLATE_PRONUNCIATIONS",
     "TEMPLATE_SHAPES",
+    "migrate",
+    "split_legacy",
     "templates",
     "expand_parts",
     "SECTION",
@@ -90,6 +93,10 @@ MAIN_FILE = "readaloud.conf"
 #: Where the preferences live.  Resolved at call time (``path or DEFAULT_PATH``)
 #: so tests can point the module elsewhere.
 DEFAULT_PATH = Path.home() / ".readaloud"
+
+#: Where the preferences lived up to 2.0: one file, which `migrate` splits
+#: into the directory on the first run of a newer readaloud.
+LEGACY_PATH = Path.home() / ".readaloud.conf"
 
 #: The files a first run writes into the directory, in `templates`' order:
 #: the general one first, then the code one, then a language's.
@@ -1331,6 +1338,82 @@ def _shipped() -> tuple[tuple[tuple[str, str], ...], ...]:
 
 #: What the shipped file holds, as `load` reads it.
 TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES = _shipped()
+
+
+#: A line that is nothing but a section header, its inline comment aside.
+_HEADER_LINE_RE = re.compile(r"\[(?P<name>[^\]]+)\]")
+
+
+def split_legacy(text: str) -> dict[str, str]:
+    """The one-file preferences `text` as the files of a directory, by name.
+
+    The sections for a file type go to that type's file with the suffix
+    taken off their headers: ``[pronunciations.code]`` to ``code.conf`` as
+    ``[pronunciations]``, ``[syntax.py]`` to ``python.conf`` as
+    ``[syntax]``.  The comment lines right above a header move with it.
+    Everything else, a type whose language readaloud does not know
+    included, stays in `MAIN_FILE` as it was.
+    """
+    from .syntax import language_for
+
+    files: dict[str, list[str]] = {MAIN_FILE: []}
+    current = MAIN_FILE
+    pending: list[str] = []            # comments and blanks awaiting a header
+    for line in text.split("\n"):
+        bare = line[:_comment_start(line)].strip()
+        header = _HEADER_LINE_RE.fullmatch(bare)
+        if header:
+            name = header.group("name")
+            kind = _typed(name)
+            current = MAIN_FILE
+            if kind is not None:
+                base, suffix = kind
+                language = "code" if suffix == ".code" else language_for(suffix)
+                if language is not None:
+                    current = f"{language}.conf"
+                    line = line.replace(f"[{name}]", f"[{base}]", 1)
+            files.setdefault(current, []).extend(pending)
+            pending = []
+            files[current].append(line)
+        elif not bare and (not line.strip() or line.lstrip()[0] in "#;"):
+            pending.append(line)        # a comment or blank: may belong below
+        else:
+            files[current].extend(pending)
+            pending = []
+            files[current].append(line)
+    files[current].extend(pending)
+    out = {}
+    for name, lines in files.items():
+        body = "\n".join(lines).strip("\n")
+        if body.strip():
+            out[name] = body + "\n"
+    return out
+
+
+def migrate(old: Path | None = None, folder: Path | None = None) -> list[str]:
+    """Split the one-file preferences at `old` (`LEGACY_PATH`) into the
+    directory `folder` (`DEFAULT_PATH`), and delete the file.  Returns the
+    notices to show; nothing happens unless `old` is a file and `folder`
+    does not exist.  Never raises."""
+    old = Path(old) if old is not None else LEGACY_PATH
+    folder = Path(folder) if folder is not None else DEFAULT_PATH
+    try:
+        if not old.is_file() or folder.exists():
+            return []
+        text, notes = _read_text(old)
+        if text is None:
+            return notes
+        files = split_legacy(text)
+        folder.mkdir(parents=True)
+        for name, body in files.items():
+            (folder / name).write_text(body, encoding="utf-8")
+        old.unlink()
+        return [f"moved {old} into {folder}/: "
+                f"{', '.join(files)} (the settings section and your "
+                f"pronunciations are in {MAIN_FILE}; the sections for a "
+                f"file type are in that language's file)"]
+    except Exception as exc:  # noqa: BLE001 - never stop the reader
+        return [f"could not move {old} into {folder}: {exc!r}"]
 
 
 def write_template(path: Path | None = None) -> Path:

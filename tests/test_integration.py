@@ -853,6 +853,28 @@ def test_an_unreadable_config_does_not_stop_the_run(tmp_path, launched):
     assert any("could not be read" in n for n in launched["notices"])
 
 
+def test_the_first_run_of_a_new_readaloud_moves_the_old_file_into_the_directory(
+        tmp_path, launched, capsys, monkeypatch):
+    old = tmp_path / ".readaloud.conf"
+    old.write_text("[config]\nspeed = 1.4\n[pronunciations.py]\nstr = string\n",
+                   encoding="utf-8")
+    folder = tmp_path / ".readaloud"
+    monkeypatch.setattr(config, "LEGACY_PATH", old)
+    monkeypatch.setattr(config, "DEFAULT_PATH", folder)
+    assert cli.main([]) == 0
+    assert launched["speed"] == 1.4              # read from the new place
+    assert not old.exists() and (folder / "python.conf").exists()
+    err = capsys.readouterr().err
+    assert f"moved {old} into {folder}/" in err
+    # the shipped code.conf was added beside the migrated files
+    assert "created" in err and "code.conf" in err
+    assert (folder / "code.conf").read_text(encoding="utf-8") == config.template("code.conf")
+    # --config elsewhere never migrates
+    old.write_text("[config]\nspeed = 2\n", encoding="utf-8")
+    assert cli.main(["--config", str(tmp_path / "other.conf")]) == 0
+    assert old.exists()
+
+
 def test_first_run_creates_the_config_and_says_so(tmp_path, launched, capsys):
     conf = tmp_path / "fresh.conf"
     assert cli.main(["--config", str(conf)]) == 0

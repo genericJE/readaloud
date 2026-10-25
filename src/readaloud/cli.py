@@ -580,6 +580,12 @@ def _main(argv: Sequence[str] | None = None) -> int:
     # The file named for the input picks the sections for its type, before
     # any setting is applied.
     target = config_path(args)
+    # Up to 2.0 the preferences were one file; the first run of a newer
+    # readaloud splits it into the directory, once, and says so on stderr,
+    # which is still safe before curses starts.
+    if not args.no_config and target == config_mod.DEFAULT_PATH:
+        for note in config_mod.migrate():
+            _err(note)
     cfg, warnings = load_config(args)
     cfg = cfg.for_file(input_file(args))
     _apply_config(args, cfg)
