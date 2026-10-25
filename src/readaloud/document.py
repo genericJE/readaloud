@@ -273,17 +273,20 @@ def split_words(text: str) -> list[str]:
 
 
 def extract_words(plain: Sequence[str], *, references: bool = True,
-                  silent: Container[int] = ()) -> list[Word]:
+                  silent: Container[int] = (), operators: bool = False
+                  ) -> list[Word]:
     """Every speakable word of a document, in line order.
 
     With ``references=False`` a ``[1]: ...`` line is read like any other: it is
     a footnote, not the link reference block of mdcat's degraded output.  The
     line numbers in `silent` give no words either (the Document puts the
     references of images inside links there, see the module docstring).
+    With `operators`, as in a source file, a run of operator characters
+    (``==``, ``<=``, ``->``) is a word too, lit while it is spoken.
     """
     words: list[Word] = []
     for line_no, (text, spans) in enumerate(
-            zip(plain, _core.lines_word_spans(list(plain)))):
+            zip(plain, _core.lines_word_spans(list(plain), operators))):
         if (not text or (references and _REF_DEF_RE.match(text))
                 or line_no in silent):
             continue          # a link-reference definition has nothing to say
@@ -1107,7 +1110,8 @@ class Document:
         self.plain: list[str] = ["".join(r.text for r in line)
                                  for line in self.lines]
         self.words: list[Word] = extract_words(
-            self.plain, references=self.references, silent=silent)
+            self.plain, references=self.references, silent=silent,
+            operators=not self.markdown)
         self.tables: list[Table]
         self.tables, cells = _layout_tables(self.plain, self.words, tables)
         self.chunks: list[Chunk] = build_chunks(

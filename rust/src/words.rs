@@ -166,8 +166,51 @@ fn word_at(t: &[char], p: usize) -> Option<usize> {
     Some(i)
 }
 
-/// Char spans of every speakable word in one line of text.
-pub fn line_word_spans(t: &[char]) -> Vec<(usize, usize)> {
+/// The characters an operator is made of, in a source file.
+const OPERATOR: &[char] = &['=', '<', '>', '!', '+', '-', '*', '/', '%', '&', '|', '^', '~', '@'];
+
+/// Char spans of every speakable word in one line of text.  With
+/// `operators`, as in a source file, a run of operator characters outside
+/// the words (`==`, `<=`, `->`, `*` before `args`) is a word of its own, so
+/// it is lit while it is spoken; a colon joins such a run (`:=`), and a run
+/// of colons alone is not one.
+pub fn line_word_spans(t: &[char], operators: bool) -> Vec<(usize, usize)> {
+    let mut out = words_of(t);
+    if !operators {
+        return out;
+    }
+    let mut p = 0;
+    let mut k = 0;
+    while p < t.len() {
+        // skip the words, which may hold a connector or a percent sign
+        while k < out.len() && out[k].1 <= p {
+            k += 1;
+        }
+        if k < out.len() && out[k].0 <= p {
+            p = out[k].1;
+            continue;
+        }
+        let stop = out.get(k).map_or(t.len(), |w| w.0);
+        let is_op = |c: char| OPERATOR.contains(&c) || c == ':';
+        if is_op(t[p]) {
+            let mut e = p;
+            while e < stop && is_op(t[e]) {
+                e += 1;
+            }
+            if t[p..e].iter().any(|c| OPERATOR.contains(c)) {
+                out.push((p, e));
+            }
+            p = e;
+        } else {
+            p += 1;
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Char spans of every word with a letter or digit in one line of text.
+fn words_of(t: &[char]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut p = 0;
     while p < t.len() {
@@ -613,7 +656,19 @@ mod tests {
 
     fn words(s: &str) -> Vec<String> {
         let t: Vec<char> = s.chars().collect();
-        line_word_spans(&t).iter().map(|&(a, b)| t[a..b].iter().collect()).collect()
+        line_word_spans(&t, false).iter().map(|&(a, b)| t[a..b].iter().collect()).collect()
+    }
+
+    #[test]
+    fn operators_are_words_in_a_source_file() {
+        let t: Vec<char> = "return a == self.b and x <= col < y; f(*args) -> z: int = -1 # ok".chars().collect();
+        let ops: Vec<String> = line_word_spans(&t, true)
+            .iter()
+            .map(|&(a, b)| t[a..b].iter().collect())
+            .filter(|w: &String| !w.chars().any(is_alnum))
+            .collect();
+        assert_eq!(ops, ["==", "<=", "<", "*", "->", "=", "-"]);
+        assert_eq!(line_word_spans(&t, false).len(), line_word_spans(&t, true).len() - ops.len());
     }
 
     #[test]

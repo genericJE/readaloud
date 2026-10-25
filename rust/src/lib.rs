@@ -261,14 +261,16 @@ fn lines_of(lines: &[Bound<'_, PyString>]) -> Vec<Vec<char>> {
 
 /// Char spans of every speakable word in one line of text.
 #[pyfunction]
-fn line_word_spans(text: &Bound<'_, PyString>) -> Vec<(usize, usize)> {
-    words::line_word_spans(&chars_of(text))
+#[pyo3(signature = (text, operators = false))]
+fn line_word_spans(text: &Bound<'_, PyString>, operators: bool) -> Vec<(usize, usize)> {
+    words::line_word_spans(&chars_of(text), operators)
 }
 
 /// The word spans of every line, one list per line.
 #[pyfunction]
-fn lines_word_spans(lines: Vec<Bound<'_, PyString>>) -> Vec<Vec<(usize, usize)>> {
-    lines.iter().map(|line| words::line_word_spans(&chars_of(line))).collect()
+#[pyo3(signature = (lines, operators = false))]
+fn lines_word_spans(lines: Vec<Bound<'_, PyString>>, operators: bool) -> Vec<Vec<(usize, usize)>> {
+    lines.iter().map(|line| words::line_word_spans(&chars_of(line), operators)).collect()
 }
 
 /// Sentence spans of `text[lo:hi]`, as absolute offsets.

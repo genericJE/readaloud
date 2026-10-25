@@ -8,6 +8,10 @@
 - With `markdown = no`, a source file's indented lines are cut into chunks of at most
   `chars` like any paragraph, at line ends, instead of being read as one code block: a
   class body no longer waits on one long synthesis.
+- In a source file, operators (`==`, `<=`, `->`, the `*` of `*args`) are words of their
+  own, lit while they are spoken; before, their speech ran under the neighbouring word.
+  A rule's opening words light the token before the node, so "and returns type" lights
+  the `->` and "with a default of" the `=`.
 
 ## 2.0.0 (2026-10-24)
 

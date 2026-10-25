@@ -421,7 +421,18 @@ impl Syntax {
             }
         };
         let word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '*';
+        // the wording's opening words come from the token right before the
+        // node when there is one ("and returns type" lights the `->` before
+        // a return type), else from the node's start
         let mut prev_end = node.start_byte() - base;
+        if let Some(lead) = node.prev_sibling() {
+            if !lead.is_named()
+                && lead.start_byte() >= base
+                && p.text[lead.end_byte()..node.start_byte()].trim().is_empty()
+            {
+                prev_end = lead.start_byte() - base;
+            }
+        }
         let mut rest = wording;
         while let Some(dollar) = rest.find('$') {
             own(out, &rest[..dollar], prev_end);

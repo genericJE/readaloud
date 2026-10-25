@@ -869,6 +869,20 @@ def test_a_source_files_indented_lines_are_cut_into_chunks(tmp_path, launched):
                for c in chunks[1:])
 
 
+def test_operators_are_words_in_a_source_file(tmp_path, launched):
+    source = tmp_path / "x.py"
+    source.write_text("return line == self.line and self.start <= col < self.end\n",
+                      encoding="utf-8")
+    assert cli.main(["--config", str(write_conf(tmp_path, "markdown = no\n")), "-f",
+                     str(source)]) == 0
+    assert [w.text for w in launched["doc"].words] == [
+        "return", "line", "==", "self.line", "and", "self.start", "<=", "col", "<",
+        "self.end"]
+    # as Markdown, as before: words with a letter or digit only
+    assert cli.main(["--config", str(write_conf(tmp_path, "")), "-f", str(source)]) == 0
+    assert "==" not in [w.text for w in launched["doc"].words]
+
+
 def test_a_type_section_applies_to_the_file_it_names(tmp_path, launched):
     conf = write_conf(tmp_path, TYPE_CONF)
     for name, speed in [("x.py", 2.0), ("x.md", 1.4)]:
