@@ -80,7 +80,9 @@ a daemon thread).
 cell by cell, then a Python file read through its grammar, with the speech muxed in. It
 needs [vhs][vhs], ffmpeg, mdcat and the model weights, and it really speaks out loud. The
 script's header carries what the recording taught: vhs captures no audio, so `tap.py`
-writes what the player plays and `align.py` lines it up with the first word that lights.
+writes what the player plays, and `align.py` measures the picture's speed against it (vhs
+drops frames, so the picture runs a few percent fast), retimes it, and lines it up with the
+first word that lights.
 
 ## Cutting a release
 

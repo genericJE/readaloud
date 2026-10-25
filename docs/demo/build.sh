@@ -12,8 +12,11 @@
 # then finds where it belongs in the picture (the first word lights as its
 # sound starts) and muxes the two.  Things that cost time to learn:
 #
-# * the mp4 comes out at 25 fps whatever `Set Framerate` says, so align.py
-#   reads the rate from the file;
+# * the mp4 comes out at 25 fps whatever `Set Framerate` says, and vhs does
+#   not capture every frame, so the picture runs 3 to 8 percent faster than
+#   real time (worse with more on screen) and a highlight that merely starts
+#   in sync pulls ahead of the voice by seconds: align.py measures the speed
+#   against the sound's onsets and retimes the picture;
 # * the tap's timeline is only real time once playback starts: while the model
 #   loads, the audio callback is starved and blocks go missing, so nothing
 #   before the first sound can be used for the offset;
