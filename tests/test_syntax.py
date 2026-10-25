@@ -85,15 +85,6 @@ def test_a_library_without_the_grammar_is_refused():
         syntax.from_file(binding, "python")
 
 
-@pytest.mark.parametrize("suffix, override, language", [
-    (".py", "", "python"), (".PY", "", "python"), (".rs", "", "rust"),
-    (".txt", "", None), (".txt", "Tree-Sitter", "tree_sitter"),
-    (".py", " rust ", "rust"),
-])
-def test_the_language_comes_from_the_suffix_unless_set(suffix, override, language):
-    assert syntax.language_for(suffix, override) == language
-
-
 def test_grammar_for_tries_the_wheel_and_then_the_parsers_directory(tmp_path):
     assert syntax.grammar_for("python").abi_version >= 13
     with pytest.raises(GrammarError) as err:

@@ -26,51 +26,11 @@ from pathlib import Path
 from . import _core
 from .ansi import Run, Style
 
-__all__ = ["CODE", "Grammar", "GrammarError", "LANGUAGES", "PALETTE",
-           "PROSE_LANGUAGES", "check_rules", "coloured", "from_file",
-           "from_module", "grammar_for", "highlighter", "highlights_for",
-           "is_code", "language_for", "outline"]
+__all__ = ["Grammar", "GrammarError", "PALETTE", "check_rules", "coloured",
+           "from_file", "from_module", "grammar_for", "highlighter",
+           "highlights_for", "outline"]
 
 Grammar = _core.Grammar
-
-#: The grammar a file suffix usually wants: the name after ``tree_sitter_``
-#: in the wheel's module, and of Neovim's ``parser/<name>.so``.  The
-#: ``language`` setting under ``[config.<ext>]`` overrides it.
-LANGUAGES = {
-    ".py": "python", ".pyi": "python", ".rs": "rust", ".js": "javascript",
-    ".mjs": "javascript", ".ts": "typescript", ".tsx": "tsx", ".go": "go",
-    ".c": "c", ".h": "c", ".cc": "cpp", ".cpp": "cpp", ".hpp": "cpp",
-    ".java": "java", ".kt": "kotlin", ".rb": "ruby", ".php": "php",
-    ".swift": "swift", ".sh": "bash", ".bash": "bash", ".zsh": "bash",
-    ".lua": "lua", ".toml": "toml", ".json": "json", ".yaml": "yaml",
-    ".yml": "yaml", ".html": "html", ".css": "css", ".md": "markdown",
-    ".sql": "sql", ".hs": "haskell", ".ex": "elixir", ".exs": "elixir",
-    ".zig": "zig", ".nix": "nix",
-}
-
-
-#: Grammars of text rather than code: a `[... .code]` section is not for them.
-PROSE_LANGUAGES = frozenset({"markdown", "html"})
-
-#: The pseudo-suffix of the sections for every source file, ``[config.code]``.
-CODE = ".code"
-
-
-def is_code(suffix: str, override: str = "") -> bool:
-    """Whether a file with `suffix` is source code: it has a grammar
-    readaloud knows (or `override`, the ``language`` setting, names one) and
-    that grammar is not one of a text format."""
-    language = language_for(suffix, override)
-    return language is not None and language not in PROSE_LANGUAGES
-
-
-def language_for(suffix: str, override: str = "") -> str | None:
-    """The grammar's name for a file `suffix` (``.py``), `override` first,
-    or None when readaloud has no idea."""
-    if override.strip():
-        return override.strip().lower().replace("-", "_")
-    return LANGUAGES.get(suffix.lower())
-
 
 def grammar_for(language: str, parsers: str | Path = "") -> Grammar:
     """The grammar called `language`: from the ``tree-sitter-<language>``

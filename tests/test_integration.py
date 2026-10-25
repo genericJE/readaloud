@@ -874,9 +874,9 @@ def test_the_first_run_of_a_new_readaloud_moves_the_old_file_into_the_directory(
     assert not old.exists() and (folder / "python.conf").exists()
     err = capsys.readouterr().err
     assert f"moved {old} into {folder}/" in err
-    # the shipped code.conf was added beside the migrated files
-    assert "created" in err and "code.conf" in err
-    assert (folder / "code.conf").read_text(encoding="utf-8") == config.template("code.conf")
+    # the shipped markdown.conf was added beside the migrated files
+    assert "created" in err and "markdown.conf" in err
+    assert (folder / "markdown.conf").read_text(encoding="utf-8") == config.template("markdown.conf")
     # --config elsewhere never migrates
     old.write_text("[config]\nspeed = 2\n", encoding="utf-8")
     assert cli.main(["--config", str(tmp_path / "other.conf")]) == 0

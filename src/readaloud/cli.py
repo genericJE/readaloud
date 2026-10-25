@@ -247,10 +247,10 @@ def print_tree(args: argparse.Namespace, cfg) -> int:
         _err("--tree needs a file: readaloud --tree app.py")
         return EXIT_USAGE
     suffix = Path(path).suffix
-    language = syntax.language_for(suffix, cfg.language)
+    language = cfg.grammar_name(suffix)
     if language is None:
         _err(f"no grammar is known for {suffix or 'a file without a suffix'}; "
-             f"set language under [config{suffix.lower()}]")
+             f"name one in [files], or set language")
         return EXIT_ERROR
     try:
         grammar = syntax.grammar_for(language, cfg.parsers)
@@ -279,21 +279,19 @@ def grammar_for_input(args: argparse.Namespace, cfg):
     if not (cfg.syntax or cfg.highlight) or not path or path == "-":
         return None, None, []
     suffix = Path(path).suffix
-    language = syntax.language_for(suffix, cfg.language)
+    language = cfg.grammar_name(suffix)
     at = f"{config_path(args)}: "
     if language is None:
         if not cfg.syntax:
             return None, None, []          # nothing to colour it with: fine
         return None, None, [
-            f"{at}[{config_mod.SYNTAX}{suffix.lower()}]: no grammar is known "
-            f"for {suffix} files; set language under "
-            f"[{config_mod.SECTION}{suffix.lower()}]"]
+            f"{at}[{config_mod.SYNTAX}]: no grammar is known for {suffix} "
+            f"files; name one in [{config_mod.FILES}], or set language"]
     try:
         grammar = syntax.grammar_for(language, cfg.parsers)
     except syntax.GrammarError as exc:
         return None, language, [f"{at}{exc}"] if cfg.syntax else []
-    section = f"{config_mod.SYNTAX}{suffix.lower()}"
-    problems = syntax.check_rules(cfg.syntax, grammar, section)
+    problems = syntax.check_rules(cfg.syntax, grammar, config_mod.SYNTAX)
     return grammar, language, [f"{at}{p}" for p in problems]
 
 

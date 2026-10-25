@@ -828,19 +828,19 @@ def test_the_reader_gets_pronunciation_problems_in_the_status_bar(
 TYPE_CONF = r"""[config]
 speed = 1.4
 
-[config.py]
+[config.python]
 speed = 2
 format = code
 
-[parts.py]
+[parts.python]
 ident = [A-Za-z_]\w*
 
-[shapes.py]
+[shapes.python]
 dflt: /=\s*(?<v>[^,)]+)/ = with a default of $v
 param: /(?<name>%{ident})\s*(?<type>:\s*[^,=)]+)?\s*(?<default>=\s*[^,)]+)?/ = $name ${default|dflt} ${type|:=type}
 /def\s+(?<fn>%{ident})\s*\((?<params>[^()]*?),?\s*\)\s*(?<ret>->\s*[^:]+)?:/ = function $fn takes ${params|param|,=and} ${ret|->=and returns a}
 
-[pronunciations.py]
+[pronunciations.python]
 str = string
 
 [pronunciations]
@@ -919,7 +919,7 @@ def test_a_flag_still_beats_a_type_setting(tmp_path, launched):
 
 def test_a_markdown_file_named_in_text_gets_its_type(
         tmp_path, launched, fake_mdcat):
-    conf = write_conf(tmp_path, "[config.md]\nspeed = 1.7\n")
+    conf = write_conf(tmp_path, "[config.markdown]\nspeed = 1.7\n")
     (tmp_path / "x.md").write_text(TEAM_MD, encoding="utf-8")
     assert cli.main(["--config", str(conf), str(tmp_path / "x.md"),
                      "-md"]) == 0
@@ -938,13 +938,13 @@ def test_a_type_shape_reads_a_python_def(tmp_path, monkeypatch, stub_voices):
         "string type string\nand returns a string"]
 
 
-SYNTAX_CONF = TYPE_CONF.replace("[shapes.py]", "[syntax.py]\n"
+SYNTAX_CONF = TYPE_CONF.replace("[shapes.python]", "[syntax.python]\n"
     "function_definition = function $name $parameters $return_type\n"
     "function_definition.return_type = and returns type $0\n"
     "parameters = takes ${*|,=and}\n"
     "typed_parameter = ${*|:=type}\n"
     "typed_default_parameter = $name type $type with a default of $value\n"
-    "\n[shapes.py]")
+    "\n[shapes.python]")
 
 
 def test_syntax_rules_read_a_python_file_through_its_grammar(
@@ -966,7 +966,7 @@ def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
     pytest.importorskip("tree_sitter_python")
     source = tmp_path / "x.py"
     source.write_text("def f():\n    pass  # c\n", encoding="utf-8")
-    conf = write_conf(tmp_path, "[config.py]\nformat = code\n")
+    conf = write_conf(tmp_path, "[config.python]\nformat = code\n")
     assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
     runs = [(r.text, r.style.fg) for r in launched["doc"].lines[0]]
     assert runs[:3] == [("def", 5), (" ", None), ("f", 4)]
@@ -974,7 +974,7 @@ def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
     # --no-color, and highlight = no, leave it plain
     assert cli.main(["--config", str(conf), "--no-color", "-f", str(source)]) == 0
     assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
-    conf = write_conf(tmp_path, "[config.py]\nformat = code\nhighlight = no\n")
+    conf = write_conf(tmp_path, "[config.python]\nformat = code\nhighlight = no\n")
     assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
     assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
 
@@ -999,38 +999,38 @@ def test_tree_prints_the_files_syntax_tree_and_exits(tmp_path, capsys, launched)
 
 
 def test_a_file_with_no_known_grammar_is_read_without_one(tmp_path, launched):
-    conf = write_conf(tmp_path, "[syntax.xyz]\nfunction_definition = f $name\n")
+    conf = write_conf(tmp_path, "[syntax]\nfunction_definition = f $name\n")
     (tmp_path / "x.xyz").write_text("def f(): pass\n", encoding="utf-8")
     assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.xyz")]) == 0
     assert launched["notices"] == [
-        "config: [syntax.xyz]: no grammar is known for .xyz files; set "
-        "language under [config.xyz]"]
+        "config: [syntax]: no grammar is known for .xyz files; name one in "
+        "[files], or set language"]
     assert launched["doc"].chunks[0].text == "def f(): pass"
 
 
 def test_a_missing_grammar_and_an_unknown_kind_are_notices(tmp_path, launched):
     pytest.importorskip("tree_sitter_python")
-    conf = write_conf(tmp_path, "[config.py]\nlanguage = nothing_at_all\n"
-                                "[syntax.py]\ndef_statement = f $name\n")
+    conf = write_conf(tmp_path, "[config.python]\nlanguage = nothing_at_all\n"
+                                "[syntax.python]\ndef_statement = f $name\n")
     (tmp_path / "x.py").write_text("def f(): pass\n", encoding="utf-8")
     assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
     assert launched["notices"] == [
         "config: no grammar for nothing_at_all: install the "
         "tree-sitter-nothing-at-all package next to readaloud (uv tool "
         "install readaloud --with tree-sitter-nothing-at-all)"]
-    conf = write_conf(tmp_path, "[syntax.py]\ndef_statement = f $name\n")
+    conf = write_conf(tmp_path, "[syntax.python]\ndef_statement = f $name\n")
     assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
     assert launched["notices"] == [
-        "config: [syntax.py] def_statement: no node is a 'def_statement'"]
+        "config: [syntax] def_statement: no node is a 'def_statement'"]
 
 
 def test_a_type_problem_reaches_the_status_bar_with_its_label(
         tmp_path, launched):
-    conf = write_conf(tmp_path, "[pronunciations.py]\nid ID\n")
+    conf = write_conf(tmp_path, "[pronunciations.python]\nid ID\n")
     (tmp_path / "x.py").write_text("hello\n", encoding="utf-8")
     assert cli.main(["--config", str(conf), "-f", str(tmp_path / "x.py")]) == 0
     assert launched["notices"] == [
-        "config: [pronunciations.py] line 2: 'id ID' has no \"=\"; "
+        "config: [pronunciations.python] line 2: 'id ID' has no \"=\"; "
         "write it as: text = how to say it"]
 
 

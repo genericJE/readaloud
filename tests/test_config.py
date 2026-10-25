@@ -826,30 +826,38 @@ def test_load_never_raises_on_garbage_in_the_section(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# sections for one file type
+# layers: [files], and the sections headed with a layer's name
 # --------------------------------------------------------------------------- #
 
 
-TYPED = """\
+LAYERED = """\
 [config]
 speed = 1.2
 voice = bf_emma
 
-[config.py]
-speed = 2
+[files]
+.py .pyi = code python
+.rs = code rust
+.md = markdown
+.xyz = rust
+
+[config.code]
+speed = 1.5
 format = code
+
+[config.python]
+speed = 2
 
 [parts]
 num = \\d+
 
-[parts.py]
+[parts.code]
 word = [a-z]+
 
 [shapes]
 /(?<n>%{num})/ = general $n
-/(?<w>%{word})!/ = never: no general part word
 
-[shapes.py]
+[shapes.python]
 item: /(?<n>%{num})/ = item $n
 /\\[(?<l>[^\\]]+)\\]/ = list ${l|item|,=and}
 /(?<w>%{word}):(?<n>%{num})/ = $w at $n
@@ -858,103 +866,106 @@ item: /(?<n>%{num})/ = item $n
 id = I D
 api = general
 
-[pronunciations.py]
+[pronunciations.code]
+== = is equal to
+| = pipe
 api = A P I
+
+[pronunciations.python]
+| = or
 """
 
 
-def test_a_type_section_is_read_for_each_section(tmp_path):
-    path = write(tmp_path / "c.conf", TYPED)
+def test_the_layers_are_read_from_their_headers(tmp_path):
+    path = write(tmp_path / "c.conf", LAYERED)
     cfg, warnings = config.load(path)
-    assert warnings == [
-        f"{path}: [shapes] line 17: /(?<w>%{{word}})!/ uses %{{word}}, which "
-        f"is not a part"]
-    (py,) = cfg.types
-    assert py == config.FileType(
-        ".py", settings=(("speed", 2.0), ("format", "code")),
-        pronunciations=(("api", "A P I"),),
-        shapes=((r"/\[(?<l>[^\]]+)\]/", "list ${l|item|,=and}"),
-                (r"/(?<w>%{word}):(?<n>%{num})/", "$w at $n")),
-        named_shapes=(("item", r"/(?<n>%{num})/", "item $n"),),
+    assert warnings == []
+    assert cfg.files == ((".py", ("code", "python")), (".pyi", ("code", "python")),
+                         (".rs", ("code", "rust")), (".md", ("markdown",)),
+                         (".xyz", ("rust",)))
+    assert [t.name for t in cfg.types] == ["code", "python"]
+    code, py = cfg.types
+    assert code == config.FileType(
+        "code", settings=(("speed", 1.5), ("format", "code")),
+        pronunciations=(("==", "is equal to"), ("|", "pipe"), ("api", "A P I")),
         parts=(("word", "[a-z]+"),))
+    assert py.settings == (("speed", 2.0),)
+    assert py.named_shapes == (("item", r"/(?<n>%{num})/", "item $n"),)
+    assert py.shapes == ((r"/\[(?<l>[^\]]+)\]/", "list ${l|item|,=and}"),
+                         (r"/(?<w>%{word}):(?<n>%{num})/", "$w at $n"))
     # the general config is untouched
     assert (cfg.speed, cfg.format) == (1.2, "markdown")
     assert cfg.pronunciations == (("id", "I D"), ("api", "general"))
     assert cfg.shapes == ((r"/(?<n>%{num})/", "general $n"),)
 
 
-def test_for_suffix_lays_the_type_over_the_general_config(tmp_path):
-    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
+def test_layers_for_and_grammar_name_follow_the_files_map(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", LAYERED))
+    assert cfg.layers_for(".py") == cfg.layers_for(".PY") == ("code", "python")
+    assert cfg.layers_for(".xyz") == ("rust",) and cfg.layers_for(".txt") == ()
+    assert cfg.grammar_name(".py") == "python" and cfg.grammar_name(".xyz") == "rust"
+    assert cfg.grammar_name(".txt") is None
+    assert config.Config(language="Tree-Sitter").grammar_name(".py") == "tree_sitter"
+
+
+def test_the_layers_lie_over_the_general_config_in_files_order(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", LAYERED))
     py = cfg.for_suffix(".PY")
-    assert (py.speed, py.voice, py.format, py.types) == (
-        2.0, "bf_emma", "code", ())
-    # a type's shapes are tried first; its pronunciations and parts follow
-    # the general ones, so the type's win a tie
-    assert py.shapes == cfg.types[0].shapes + cfg.shapes
-    assert py.pronunciations == cfg.pronunciations + (("api", "A P I"),)
+    assert (py.speed, py.voice, py.format, py.types) == (2.0, "bf_emma", "code", ())
+    # a later layer's shapes are tried first; its pronunciations and parts
+    # follow the earlier ones, so the later wins a tie
+    assert py.shapes == cfg.types[1].shapes + cfg.shapes
+    assert py.pronunciations == (("id", "I D"), ("api", "general"), ("==", "is equal to"),
+                                 ("|", "pipe"), ("api", "A P I"), ("|", "or"))
     assert py.parts == (("num", r"\d+"), ("word", "[a-z]+"))
-    assert py.shape_patterns[1] == (r"(?<w>(?:[a-z]+)):(?<n>(?:\d+))",
-                                    "$w at $n")
+    # a python shape may use a code part, which was headed before it
+    assert py.shape_patterns[1] == (r"(?<w>(?:[a-z]+)):(?<n>(?:\d+))", "$w at $n")
     assert py.sub_patterns == (("item", r"(?<n>(?:\d+))", "item $n"),)
+    rs = cfg.for_suffix(".rs")                      # code, and a rust layer nobody wrote
+    assert (rs.speed, rs.format) == (1.5, "code")
+    assert rs.pronunciations == (("id", "I D"), ("api", "general"), ("==", "is equal to"),
+                                 ("|", "pipe"), ("api", "A P I"))
+    # a layer with no sections, or a suffix [files] does not name: as it is
+    assert cfg.for_suffix(".md") is cfg and cfg.for_suffix(".txt") is cfg
+    assert cfg.for_layers(["python"]).speed == 2.0  # --conf python: that layer alone
+    assert cfg.for_layers(["python"]).format == "markdown"
 
 
-@pytest.mark.parametrize("path", [None, "-", "notes.md", "Makefile", ".py"])
-def test_a_file_of_no_known_type_gets_the_general_config(tmp_path, path):
-    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
-    assert cfg.for_file(path) is cfg
+@pytest.mark.parametrize("path", [None, "-", "notes.txt", "Makefile"])
+def test_a_file_the_files_map_does_not_name_gets_the_general_config(tmp_path, path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", LAYERED))
+    assert cfg.for_file(path) == cfg or cfg.for_file(path) is cfg
 
 
 def test_for_file_goes_by_the_suffix(tmp_path):
-    cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
+    cfg, _ = config.load(write(tmp_path / "c.conf", LAYERED))
     assert cfg.for_file("src/a.py").speed == 2.0
     assert cfg.for_file("src/A.PY").speed == 2.0
 
 
-CODE = """\
-[config]
-speed = 1.2
-[config.code]
-format = code
-speed = 1.5
-[config.py]
-speed = 2
-[parts.code]
-op = [=<>]+
-[shapes.py]
-/(?<o>%{op})/ = op $o
-[pronunciations]
-id = I D
-[pronunciations.code]
-== = is equal to
-| = pipe
-[pronunciations.py]
-| = or
-"""
+def test_the_shipped_files_map_is_the_default(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf", "[config]\nspeed = 1.2\n"))
+    assert cfg.files == config.TEMPLATE_FILES == config.Config().files
+    assert cfg.layers_for(".py") == ("code", "python")
+    assert cfg.layers_for(".md") == ("markdown",) and cfg.layers_for(".txt") == ("plain",)
+    assert cfg.grammar_name(".rs") == "rust"
 
 
-def test_the_code_type_lies_between_the_general_and_the_suffixs_own(tmp_path):
-    cfg, warnings = config.load(write(tmp_path / "c.conf", CODE))
-    assert warnings == []
-    py = cfg.for_suffix(".py")
-    assert (py.speed, py.format) == (2.0, "code")
-    assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
-                                 ("|", "or"))
-    assert py.parts == (("op", "[=<>]+"),)          # a .py shape may use a .code part
-    assert py.shape_patterns == (("(?<o>(?:[=<>]+))", "op $o"),)
-    rs = cfg.for_suffix(".rs")                      # code, no sections of its own
-    assert (rs.speed, rs.format) == (1.5, "code")
-    assert rs.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"))
-    for text in (".md", ".html", ".txt"):           # text, or no grammar: not code
-        assert cfg.for_suffix(text).speed == 1.2
-    assert cfg.for_suffix(".md").pronunciations == (("id", "I D"),)
-    assert cfg.for_file("notes.md").format == "markdown"
-
-
-def test_the_language_setting_makes_a_suffix_code(tmp_path):
-    cfg, _ = config.load(write(tmp_path / "c.conf",
-                               "[config.code]\nspeed = 1.5\n[config.xyz]\nlanguage = rust\n"))
-    assert cfg.for_suffix(".xyz").speed == 1.5
-    assert cfg.for_suffix(".abc").speed == 1.0
+def test_each_files_problem_says_what_is_wrong(tmp_path):
+    for line, problem in [
+        ("py = python", "'py' is not an extension: write it with its dot, as .py"),
+        (".py = Py Thon!", "'thon!' is not a layer's name: letters, digits and _, "
+                           "as code or python"),
+        ("nothing", "'nothing' has no \"=\"; write it as: .ext = layer layer"),
+    ]:
+        path = write(tmp_path / "c.conf", f"[files]\n{line}\n")
+        cfg, warnings = config.load(path)
+        assert cfg.files == config.TEMPLATE_FILES, line
+        assert warnings == [f"{path}: [files] line 2: {problem}"]
+    path = write(tmp_path / "c.conf", "[files]\n.py = a\n.rs .py = b\n")
+    cfg, warnings = config.load(path)
+    assert cfg.files == ((".rs", ("b",)), (".py", ("b",)))
+    assert warnings == [f"{path}: [files] line 3: .py is also on line 2; line 3 wins"]
 
 
 def folder(tmp_path, **files: str) -> Path:
@@ -966,13 +977,13 @@ def folder(tmp_path, **files: str) -> Path:
     return d
 
 
-def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
+def test_a_directory_holds_the_main_file_and_a_file_per_layer(tmp_path):
     d = folder(
         tmp_path,
-        readaloud_conf="[config]\nspeed = 1.2\n[parts]\nident = [a-z]+\n"
-                       "[pronunciations]\nid = I D\n",
-        code_conf="[config]\nformat = code\n[parts]\nop = [=<>]+\n"
-                  "[pronunciations]\n== = is equal to\n| = pipe\n",
+        readaloud_conf="[config]\nspeed = 1.2\n[files]\n.py = code python\n.rs = code\n"
+                       "[parts]\nident = [a-z]+\n[pronunciations]\nid = I D\n"
+                       "[config.code]\nformat = code\n",
+        code_conf="[parts]\nop = [=<>]+\n[pronunciations]\n== = is equal to\n| = pipe\n",
         python_conf="[config]\nspeed = 2\n[shapes]\n/(?<o>%{op})(?<i>%{ident})/ = $o $i\n"
                     "[syntax]\nfunction_definition = function $name\n"
                     "[pronunciations]\n| = or\n",
@@ -980,7 +991,8 @@ def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
     cfg, warnings = config.load(d)
     assert warnings == []
     assert (cfg.speed, cfg.format, cfg.pronunciations) == (1.2, "markdown", (("id", "I D"),))
-    assert [t.suffix for t in cfg.types] == [".code", "python"]
+    # the code layer comes from a header in the main file and from code.conf
+    assert [t.name for t in cfg.types] == ["code", "code", "python"]
     py = cfg.for_file("app.py")
     assert (py.speed, py.format) == (2.0, "code")
     assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
@@ -995,13 +1007,16 @@ def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
 
 
 def test_a_directory_without_the_main_file_and_odd_files(tmp_path):
-    d = folder(tmp_path, python_conf="[config]\nspeed = 2\n")
+    d = folder(tmp_path, python_conf="[config]\nspeed = 2\n[files]\n.py = python\n")
     (d / "Rust Lang.conf").write_text("[config]\nspeed = 3\n", encoding="utf-8")
     (d / "notes.txt").write_text("not a config\n", encoding="utf-8")
     cfg, warnings = config.load(d)
     assert cfg.speed == 1.0 and cfg.for_file("a.py").speed == 2.0
-    assert warnings == [f"{d / 'Rust Lang.conf'}: ignored; a language file is "
-                        f"named after its grammar, as python.conf"]
+    assert sorted(warnings) == sorted([
+        f"{d / 'Rust Lang.conf'}: ignored; a layer's file is named after its "
+        f"layer, as python.conf",
+        f"{d / 'python.conf'}: [files] belongs in readaloud.conf, not in "
+        f"python.conf; ignored"])
 
 
 def test_a_problem_in_a_language_file_names_that_file(tmp_path):
@@ -1042,17 +1057,17 @@ id = I D
 """
 
 
-def test_split_legacy_sends_each_types_sections_to_its_file():
+def test_split_legacy_sends_a_suffixs_sections_to_its_language_file():
     files = config.split_legacy(LEGACY)
-    assert list(files) == ["readaloud.conf", "code.conf", "python.conf"]
+    assert list(files) == ["readaloud.conf", "python.conf"]
+    # a layer's sections ([x.code]) and an unknown suffix stay in the main
+    # file; the comment above a header moves with it; markdown = no is
+    # format = code; "[1] = one" is an entry, not a header
     assert files["readaloud.conf"] == (
-        "[config]\n# settings\nspeed = 1.3\n\n[parts]\next = py|rs\n"
+        "[config]\n# settings\nspeed = 1.3\n\n[parts]\next = py|rs\n\n"
+        "# source files: read as written\n[config.code]\nformat = code\n\n"
+        "[pronunciations.code]\n== = is equal to\n[1] = one\n"
         "[pronunciations.xyz]\nodd = words\n[pronunciations]\nid = I D\n")
-    # the comment above a header moves with it; the suffix comes off; a
-    # "[1] = one" line is an entry, not a header
-    assert files["code.conf"] == (
-        "# source files: read as written\n[config]\nformat = code\n\n"
-        "[pronunciations]\n== = is equal to\n[1] = one\n")
     assert files["python.conf"] == (
         "[syntax]  # the def rules\nfunction_definition = function $name $body\n"
         "[pronunciations]\nstr = string\n")
@@ -1072,6 +1087,15 @@ def test_format_takes_one_of_three_words(tmp_path):
         f"{path}: unknown key 'markdown' (ignored; it is format = markdown | code | plain now)"]
 
 
+def test_renderer_is_none_or_mdcat(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf", "[config]\nrenderer = MDCAT\n"))
+    assert (cfg.renderer, warnings) == ("mdcat", [])
+    path = write(tmp_path / "c.conf", "[config]\nrenderer = pandoc\n")
+    cfg, warnings = config.load(path)
+    assert cfg.renderer == "none"
+    assert warnings == [f"{path}: renderer: 'pandoc' is not one of none, mdcat; using none"]
+
+
 def test_split_legacy_rewrites_the_markdown_setting():
     files = config.split_legacy("[config]\nmarkdown = yes\nspeed = 2\n[config.py]\n"
                                 "markdown = no  # as written\n")
@@ -1083,20 +1107,17 @@ def test_migrate_splits_the_old_file_into_the_directory_and_deletes_it(tmp_path)
     old = write(tmp_path / ".readaloud.conf", LEGACY)
     folder = tmp_path / ".readaloud"
     notes = config.migrate(old, folder)
-    assert notes == [f"moved {old} into {folder}/: readaloud.conf, code.conf, "
-                     f"python.conf (the settings section and your pronunciations "
-                     f"are in readaloud.conf; the sections for a file type are in "
-                     f"that language's file)"]
+    assert notes == [f"moved {old} into {folder}/: readaloud.conf, python.conf (the "
+                     f"settings section and your pronunciations are in readaloud.conf; "
+                     f"the sections for a file type are in that language's file)"]
     assert not old.exists()
-    assert sorted(p.name for p in folder.iterdir()) == ["code.conf", "python.conf",
-                                                         "readaloud.conf"]
+    assert sorted(p.name for p in folder.iterdir()) == ["python.conf", "readaloud.conf"]
     cfg, warnings = config.load(folder)
     assert warnings == []
     assert (cfg.speed, cfg.parts) == (1.3, (("ext", "py|rs"),))
     py = cfg.for_file("a.py")
     assert py.format == "code" and ("str", "string") in py.pronunciations
     assert py.syntax == (("function_definition", "function $name $body"),)
-    assert ("odd", "words") in cfg.for_file("a.xyz").pronunciations
     # nothing to do a second time, or when the directory is already there
     assert config.migrate(old, folder) == []
     write(old, "[config]\nspeed = 2\n")
@@ -1116,67 +1137,67 @@ def test_migrate_never_raises(tmp_path):
     assert old.exists()
 
 
-def test_type_headers_ignore_case_and_take_one_extension(tmp_path):
+def test_layer_headers_ignore_case_and_take_one_name(tmp_path):
     path = write(tmp_path / "c.conf",
-                 "[Shapes.PY]\n/x+/ = ex\n[config.]\n[.py]\n[shapes.tar.gz]\n")
+                 "[Shapes.Python]\n/x+/ = ex\n[config.]\n[.py]\n[shapes.a.b]\n[files.py]\n")
     cfg, warnings = config.load(path)
-    assert cfg.types[0].suffix == ".py" and cfg.types[0].shapes == (
-        ("/x+/", "ex"),)
+    assert cfg.types[0].name == "python" and cfg.types[0].shapes == (("/x+/", "ex"),)
     assert [w.split(": ", 1)[1].split(" (")[0] for w in warnings] == [
         "ignoring unknown section [config.]",
         "ignoring unknown section [.py]",
-        "ignoring unknown section [shapes.tar.gz]"]
+        "ignoring unknown section [shapes.a.b]",
+        "ignoring unknown section [files.py]"]
 
 
-def test_a_misspelled_type_header_is_hinted(tmp_path):
-    path = write(tmp_path / "c.conf", "[shapess.py]\n/x+/ = ex\n")
+def test_a_misspelled_layer_header_is_hinted(tmp_path):
+    path = write(tmp_path / "c.conf", "[shapess.python]\n/x+/ = ex\n")
     cfg, warnings = config.load(path)
     assert cfg.types == ()
-    assert warnings == [f"{path}: ignoring unknown section [shapess.py] "
-                        f"(did you mean [shapes.py]?)"]
+    assert warnings == [f"{path}: ignoring unknown section [shapess.python] "
+                        f"(did you mean [shapes.python]?)"]
 
 
-def test_type_problems_carry_the_type_label(tmp_path):
+def test_layer_problems_carry_the_layer_label(tmp_path):
     path = write(tmp_path / "c.conf",
-                 "[config.py]\nspeed = fast\nspead = 2\n"
-                 "[parts.py]\nbad = (x\n"
-                 "[shapes.py]\n/x*/ = ex\n"
-                 "[pronunciations.py]\nno equals here\n")
+                 "[config.python]\nspeed = fast\nspead = 2\n"
+                 "[parts.python]\nbad = (x\n"
+                 "[shapes.python]\n/x*/ = ex\n"
+                 "[pronunciations.python]\nno equals here\n")
     cfg, warnings = config.load(path)
     assert [w.removeprefix(f"{path}: ") for w in warnings] == [
-        "[config.py] speed: 'fast' is not a number; using 1.0",
-        "[config.py] unknown key 'spead' (ignored)",
-        "[pronunciations.py] line 9: 'no equals here' has no \"=\"; write it "
+        "[config.python] speed: 'fast' is not a number; using 1.0",
+        "[config.python] unknown key 'spead' (ignored)",
+        "[pronunciations.python] line 9: 'no equals here' has no \"=\"; write it "
         "as: text = how to say it",
-        "[parts.py] line 5: 'bad' cannot be used: unclosed group",
-        "[shapes.py] line 7: the shape /x*/ cannot be used: it can match "
+        "[parts.python] line 5: 'bad' cannot be used: unclosed group",
+        "[shapes.python] line 7: the shape /x*/ cannot be used: it can match "
         "empty text",
     ]
 
 
-def test_a_type_part_may_share_a_general_name_without_a_warning(tmp_path):
+def test_a_layer_part_may_share_a_general_name_without_a_warning(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf",
-                                      "[parts]\nx = a\n[parts.py]\nx = b\n"
-                                      "[shapes.py]\n/%{x}/ = it\n"))
+                                      "[parts]\nx = a\n[parts.python]\nx = b\n"
+                                      "[shapes.python]\n/%{x}/ = it\n"))
     assert warnings == []
     assert cfg.for_suffix(".py").shape_patterns == (("(?:b)", "it"),)
 
 
-def test_a_type_shape_may_use_a_general_named_shape(tmp_path):
+def test_a_layer_shape_may_use_a_general_named_shape(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf",
                                       "[shapes]\nn: /\\d/ = digit\n"
-                                      "[shapes.py]\n/<(?<l>[\\d,]+)>/ = ${l|n}\n"))
+                                      "[shapes.python]\n/<(?<l>[\\d,]+)>/ = ${l|n}\n"))
     assert warnings == []
     assert cfg.shapes == ()
     assert cfg.for_suffix(".py").shapes == (("/<(?<l>[\\d,]+)>/", "${l|n}"),)
 
 
-def test_a_repeated_type_header_is_read_as_one(tmp_path):
+def test_a_repeated_layer_header_is_read_as_one(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf",
-                                      "[config.py]\nspeed = 2\n"
-                                      "[pronunciations.py]\na = b\n"
-                                      "[config.py]\nformat = code\n"
-                                      "[pronunciations.py]\nc = d\n"))
+                                      "[config.python]\nspeed = 2\n"
+                                      "[pronunciations.python]\na = b\n"
+                                      "[config.python]\nformat = code\n"
+                                      "[pronunciations.python]\nc = d\n"))
     assert warnings == []
     (py,) = cfg.types
     assert py.settings == (("speed", 2.0), ("format", "code"))
@@ -1194,7 +1215,7 @@ function_definition = function $name $parameters $return_type
 function_definition.return_type = and returns type $0
 parameters = takes ${*|,=and}
 
-[syntax.py]
+[syntax.python]
 typed_default_parameter = $name type $type with a default of $value
 type/binary_operator = $left or $right
 parameters = takes ${*|,=and|*=star}
@@ -1236,10 +1257,10 @@ def test_each_syntax_problem_says_what_is_wrong(tmp_path):
 
 
 def test_an_empty_syntax_wording_and_a_repeat_are_read(tmp_path):
-    path = write(tmp_path / "c.conf", "[syntax.py]\nstring =\ndef = a\ndef = b\n")
+    path = write(tmp_path / "c.conf", "[syntax.python]\nstring =\ndef = a\ndef = b\n")
     cfg, warnings = config.load(path)
     assert cfg.types[0].syntax == (("string", ""), ("def", "b"))
-    assert warnings == [f"{path}: [syntax.py] line 4: 'def' is also on line 3; "
+    assert warnings == [f"{path}: [syntax.python] line 4: 'def' is also on line 3; "
                         f"line 4 wins"]
 
 
@@ -1382,12 +1403,14 @@ def test_the_shipped_directory_loads_clean_and_lays_python_over_code(tmp_path):
     config.write_template(d)
     cfg, warnings = config.load(d)
     assert warnings == []
-    assert [t.suffix for t in cfg.types] == [".code", "python"]
+    assert [t.name for t in cfg.types] == ["code", "plain", "markdown", "python"]
     py = cfg.for_file("app.py")
     assert py.format == "code" and ("==", "is equal to") in py.pronunciations
     assert ("str", "string") in py.pronunciations and py.syntax
     assert cfg.for_file("lib.rs").format == "code" and not cfg.for_file("lib.rs").syntax
-    assert cfg.for_file("notes.md").format == "markdown"
+    md = cfg.for_file("notes.md")
+    assert (md.format, md.renderer) == ("markdown", "mdcat")
+    assert (cfg.for_file("a.txt").format, cfg.renderer) == ("plain", "none")
     assert config.write_template(tmp_path / "one.conf") == tmp_path / "one.conf"
     assert (tmp_path / "one.conf").read_text(encoding="utf-8") == config.template()
 

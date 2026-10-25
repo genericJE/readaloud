@@ -54,7 +54,8 @@ import difflib
 import io
 import re
 import unicodedata
-from dataclasses import dataclass, fields as _dataclass_fields, replace
+from collections.abc import Sequence
+from dataclasses import dataclass, field, fields as _dataclass_fields, replace
 from importlib import resources
 from pathlib import Path
 
@@ -73,9 +74,11 @@ __all__ = [
     "PARTS",
     "SHAPES",
     "SYNTAX",
+    "FILES",
     "TEMPLATE_PARTS",
     "TEMPLATE_PRONUNCIATIONS",
     "TEMPLATE_SHAPES",
+    "TEMPLATE_FILES",
     "migrate",
     "split_legacy",
     "templates",
@@ -101,7 +104,7 @@ LEGACY_PATH = Path.home() / ".readaloud.conf"
 
 #: The files a first run writes into the directory, in `templates`' order:
 #: the general one first, then the code one, then a language's.
-SHIPPED_FILES = (MAIN_FILE, "code.conf", "python.conf")
+SHIPPED_FILES = (MAIN_FILE, "markdown.conf", "python.conf")
 
 SECTION = "config"
 
@@ -118,8 +121,11 @@ PARTS = "parts"
 #: The section of rules saying a source file's syntax tree, node kind by kind.
 SYNTAX = "syntax"
 
+#: The section mapping a file's extension to the configs that read it.
+FILES = "files"
+
 #: The sections this module reads itself, rather than configparser.
-_LIFTED = (PRONUNCIATIONS, SHAPES, PARTS, SYNTAX)
+_LIFTED = (PRONUNCIATIONS, SHAPES, PARTS, SYNTAX, FILES)
 
 #: A part used in a pattern: %{name}.
 _PART_RE = re.compile(r"%\{(\w+)\}")
@@ -129,9 +135,11 @@ _PART_NAME_RE = re.compile(r"[A-Za-z_]\w*")
 
 @dataclass(frozen=True)
 class FileType:
-    """The sections for one file type, such as ``[shapes.py]``."""
+    """One config layer: the sections headed with its name in a file
+    (``[shapes.python]``) or the plain sections of ``<name>.conf``.  The
+    ``[files]`` section says which layers read a file, by its extension."""
 
-    suffix: str                    # ".py", in lower case
+    name: str                      # "code", "python": in lower case
     settings: tuple[tuple[str, object], ...] = ()
     pronunciations: tuple[tuple[str, str], ...] = ()
     shapes: tuple[tuple[str, str], ...] = ()
@@ -158,7 +166,8 @@ class Config:
     media_keys: bool = True        # claim the system play/pause button
     format: str = "markdown"       # how plain input is read: markdown, code or plain
     highlight: bool = True         # colour a source file by its grammar
-    language: str = ""             # the grammar's name; "" = from the suffix
+    language: str = ""             # the grammar's name; "" = the last layer's
+    renderer: str = "none"         # draw plain input with mdcat first, or not
     parsers: str = ""              # a directory of parser/<language>.so files
     # (written, spoken) pairs from [pronunciations], in file order
     pronunciations: tuple[tuple[str, str], ...] = ()
@@ -170,9 +179,30 @@ class Config:
     parts: tuple[tuple[str, str], ...] = ()
     # (node kind, wording) of each [syntax] line, in file order
     syntax: tuple[tuple[str, str], ...] = ()
-    # what [config.py], [parts.py], [shapes.py] and [pronunciations.py] add
-    # for a file of that type, one per suffix, in file order
+    # (extension, layer names) of each [files] line, in file order; the
+    # shipped file's unless a file gives its own
+    files: tuple[tuple[str, tuple[str, ...]], ...] = field(
+        default_factory=lambda: TEMPLATE_FILES)
+    # the layers: the sections headed [config.code], [pronunciations.code]
+    # and so on, and each <name>.conf of the directory, in load order
     types: tuple[FileType, ...] = ()
+
+    def layers_for(self, suffix: str) -> tuple[str, ...]:
+        """The layer names the ``[files]`` section gives for `suffix`
+        (``.py``), in order; none for a suffix it does not name."""
+        suffix = suffix.lower()
+        for extension, layers in self.files:
+            if extension == suffix:
+                return layers
+        return ()
+
+    def grammar_name(self, suffix: str) -> str | None:
+        """The grammar a file with `suffix` is read with: the ``language``
+        setting, else the last of its layers, else None."""
+        if self.language.strip():
+            return self.language.strip().lower().replace("-", "_")
+        layers = self.layers_for(suffix)
+        return layers[-1] if layers else None
 
     def for_file(self, path: str | Path | None) -> Config:
         """This config with the sections for `path`'s file type laid over
@@ -182,37 +212,28 @@ class Config:
         return self.for_suffix(Path(path).suffix)
 
     def for_suffix(self, suffix: str) -> Config:
-        """This config with the sections for `suffix` (``.py``) laid over
-        it: their settings replace the general ones, their shapes are tried
-        first, and their pronunciations, parts, named shapes and syntax
-        rules come after the general ones, so the type's win.  A source
-        file (one with a grammar that is not a text format's) first gets
-        the ``.code`` sections, which every source file shares, then its
-        language's (a ``python.conf``, keyed by the grammar's name), then
-        its own suffix's sections over those."""
-        from .syntax import CODE, is_code, language_for
+        """This config with the layers ``[files]`` gives for `suffix`
+        (``.py``) laid over it, see `for_layers`."""
+        return self.for_layers(self.layers_for(suffix))
 
-        suffix = suffix.lower()
-        own = next((t for t in self.types if t.suffix == suffix), None)
-        override = dict(own.settings).get("language", self.language) if own else self.language
-        language = language_for(suffix, override)
-        layers = [t for t in self.types
-                  if t.suffix == CODE and suffix != CODE and is_code(suffix, override)]
-        layers += [t for t in self.types if language and t.suffix == language]
-        layers += [own] if own else []
-        if not layers:
-            return self
+    def for_layers(self, names: Sequence[str]) -> Config:
+        """This config with the layers called `names` laid over it, in that
+        order, each winning over the one before: a layer's settings replace
+        the earlier ones, its shapes are tried first, and its pronunciations,
+        parts, named shapes and syntax rules come after the earlier ones."""
         out = self
-        for typed in layers:
-            out = replace(
-                out, **dict(typed.settings),
-                pronunciations=out.pronunciations + typed.pronunciations,
-                shapes=typed.shapes + out.shapes,
-                named_shapes=out.named_shapes + typed.named_shapes,
-                parts=out.parts + typed.parts,
-                syntax=out.syntax + typed.syntax,
-                types=())
-        return out
+        for name in names:
+            for typed in self.types:
+                if typed.name != name.lower():
+                    continue
+                out = replace(
+                    out, **dict(typed.settings),
+                    pronunciations=out.pronunciations + typed.pronunciations,
+                    shapes=typed.shapes + out.shapes,
+                    named_shapes=out.named_shapes + typed.named_shapes,
+                    parts=out.parts + typed.parts,
+                    syntax=out.syntax + typed.syntax)
+        return replace(out, types=()) if out is not self else self
 
     @property
     def shape_patterns(self) -> tuple[tuple[str, str], ...]:
@@ -266,6 +287,7 @@ _FIELDS: tuple[_Field, ...] = (
     _Field("format", "str", choices=FORMATS),
     _Field("highlight", "bool"),
     _Field("language", "str"),
+    _Field("renderer", "str", choices=("none", "mdcat")),
     _Field("parsers", "str"),
 )
 
@@ -276,7 +298,7 @@ _BY_NAME = {f.name: f for f in _FIELDS}
 # [config] keys.
 assert _BY_NAME.keys() == ({f.name for f in _dataclass_fields(Config)}
                            - {"pronunciations", "shapes", "named_shapes",
-                              "parts", "syntax", "types"})
+                              "parts", "syntax", "files", "types"})
 
 
 def _default_of(name: str) -> object:
@@ -440,8 +462,6 @@ def _load_dir(folder: Path) -> tuple[Config, list[str]]:
     """`load` for a directory: `MAIN_FILE`, then ``code.conf``, then each
     other ``<language>.conf``, whose parts and named shapes may use those of
     the files before them."""
-    from .syntax import CODE
-
     cfg, _settings, warnings = _load_file(folder / MAIN_FILE)
     types = list(cfg.types)
     parts, named = cfg.parts, cfg.named_shapes
@@ -450,33 +470,36 @@ def _load_dir(folder: Path) -> tuple[Config, list[str]]:
                         if f.suffix == ".conf" and f.name != MAIN_FILE)
     except OSError as exc:
         return cfg, warnings + [f"{folder}: could not be listed ({exc!r})"]
-    others.sort(key=lambda f: f.stem.lower() != "code")
+    # the layers a [files] line names first come first, so a later one's
+    # parts and shapes may use theirs ("code python": python after code)
+    rank = {name: i for ext, layers in cfg.files for i, name in enumerate(layers)}
+    others.sort(key=lambda f: (rank.get(f.stem.lower(), len(rank)), f.name))
     for file in others:
         name = file.stem.lower()
         if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
-            warnings.append(f"{file}: ignored; a language file is named after "
-                            f"its grammar, as python.conf")
+            warnings.append(f"{file}: ignored; a layer's file is named after "
+                            f"its layer, as python.conf")
             continue
-        own, settings, own_warnings = _load_file(file, parts, named)
+        own, settings, own_warnings = _load_file(file, parts, named, layer=name)
         warnings += own_warnings
-        key = CODE if name == "code" else name
-        types.append(FileType(key, tuple(settings.items()), own.pronunciations,
+        types.append(FileType(name, tuple(settings.items()), own.pronunciations,
                               own.shapes, own.named_shapes, own.parts,
                               own.syntax))
         types.extend(own.types)
-        if name == "code":
-            parts, named = parts + own.parts, named + own.named_shapes
+        parts, named = parts + own.parts, named + own.named_shapes
     cfg.types = tuple(types)
     return cfg, warnings
 
 
 def _load_file(target: Path,
                known_parts: tuple[tuple[str, str], ...] = (),
-               known_named: tuple[tuple[str, str, str], ...] = ()
+               known_named: tuple[tuple[str, str, str], ...] = (),
+               layer: str | None = None,
                ) -> tuple[Config, dict[str, object], list[str]]:
     """`load` for one file: ``(config, the settings it names, warnings)``.
     Its parts and shapes may use the `known_parts` and `known_named` shapes
-    of the files before it."""
+    of the files before it.  A `layer`'s file (``python.conf``) has no
+    ``[files]`` of its own: that is the main file's to say."""
     cfg = Config()
     try:
         text, warnings = _read_text(target)
@@ -506,6 +529,16 @@ def _load_file(target: Path,
         except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
             rules = ()
             notes.append(f"[{SYNTAX}] could not be used ({exc!r})")
+        files: tuple[tuple[str, tuple[str, ...]], ...] = ()
+        try:
+            if layer is not None and lifted.get(FILES):
+                problems.append(f"[{FILES}] belongs in {MAIN_FILE}, not in "
+                                f"{layer}.conf; ignored")
+            else:
+                files, file_problems = _parse_files(lifted.get(FILES, []))
+                problems += file_problems
+        except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
+            notes.append(f"[{FILES}] could not be used ({exc!r})")
         try:
             typed = _parse_types(lifted, known_parts + parts,
                                  known_named + named, problems)
@@ -520,6 +553,8 @@ def _load_file(target: Path,
         cfg.named_shapes = named
         cfg.parts = parts
         cfg.syntax = rules
+        if files:
+            cfg.files = files
         warnings += [f"{target}: {note}" for note in notes]
 
         parser, parse_warnings = _parse(ini, target)
@@ -529,9 +564,9 @@ def _load_file(target: Path,
         if parser is not None:
             general, settings = _read_settings(parser, cfg, target, warnings)
         cfg.types = tuple(
-            FileType(suffix, tuple(settings.get(suffix, {}).items()),
-                     **typed.get(suffix, {}))
-            for suffix in dict.fromkeys([*typed, *settings]))
+            FileType(name, tuple(settings.get(name, {}).items()),
+                     **typed.get(name, {}))
+            for name in dict.fromkeys([*typed, *settings]))
         warnings += [f"{target}: {problem}" for problem in problems]
         return cfg, general, warnings
     except Exception as exc:  # noqa: BLE001 - the whole point: never raise
@@ -739,16 +774,16 @@ def _lifted(header: re.Match[str]) -> str | None:
 
 
 #: A section for one file type: ``shapes.py``, the section and an extension.
-_TYPE_RE = re.compile(r"(?P<base>[a-z]+)\.(?P<ext>[a-z0-9_+-]+)")
+_TYPE_RE = re.compile(r"(?P<base>[a-z]+)\.(?P<name>[a-z][a-z0-9_]*)")
 
 
 def _typed(name: str) -> tuple[str, str] | None:
-    """``(section, suffix)`` when `name` is a section for one file type,
-    such as ``("shapes", ".py")`` for ``[Shapes.PY]``."""
+    """``(section, layer)`` when `name` is a section of one layer, such as
+    ``("shapes", "python")`` for ``[Shapes.Python]``."""
     match = _TYPE_RE.fullmatch(name.strip().lower())
-    if match is None or match["base"] not in (SECTION, *_LIFTED):
+    if match is None or match["base"] not in (SECTION, *_LIFTED) or match["base"] == FILES:
         return None
-    return match["base"], "." + match["ext"]
+    return match["base"], match["name"]
 
 
 def _unknown_section(name: str) -> str:
@@ -1096,21 +1131,19 @@ def _parse_types(lifted: dict[str, list[tuple[int, str]]],
                  parts: tuple[tuple[str, str], ...],
                  named: tuple[tuple[str, str, str], ...],
                  problems: list[str]) -> dict[str, dict[str, tuple]]:
-    """The ``[pronunciations.py]``, ``[parts.py]`` and ``[shapes.py]`` lines
-    by suffix, as `FileType` fields; their problems go on `problems`.  A
-    type's parts and shapes may use the general parts and named shapes."""
+    """The ``[pronunciations.code]``, ``[parts.python]`` and so on lines by
+    layer name, as `FileType` fields; their problems go on `problems`.  A
+    layer's parts and shapes may use the general parts and named shapes,
+    and those of the layers headed before it."""
     out: dict[str, dict[str, tuple]] = {}
-    # the sections every source file shares come first, so a suffix's own
-    # parts and shapes may use theirs
-    labels = sorted(lifted, key=lambda label: (_typed(label) or ("", ""))[1] != ".code")
-    for label in labels:
+    for label in lifted:
         kind = _typed(label)
         if kind is None or kind[1] in out:
             continue
-        suffix = kind[1]
-        if suffix != ".code" and ".code" in out:
-            parts = parts + out[".code"]["parts"]
-            named = named + out[".code"]["named_shapes"]
+        suffix = "." + kind[1]
+        if out:
+            parts = parts + out[list(out)[-1]]["parts"]
+            named = named + out[list(out)[-1]]["named_shapes"]
 
         def lines(base: str) -> list[tuple[int, str]]:
             return lifted.get(base + suffix, [])
@@ -1128,10 +1161,62 @@ def _parse_types(lifted: dict[str, list[tuple[int, str]]],
         problems += relabelled(found, SHAPES)
         rules, found = _parse_syntax(lines(SYNTAX))
         problems += relabelled(found, SYNTAX)
-        out[suffix] = {"pronunciations": pairs, "parts": own_parts,
-                       "shapes": shapes, "named_shapes": own_named,
-                       "syntax": rules}
+        out[kind[1]] = {"pronunciations": pairs, "parts": own_parts,
+                        "shapes": shapes, "named_shapes": own_named,
+                        "syntax": rules}
     return out
+
+
+#: An extension in a [files] line: a dot and the suffix, as Path.suffix has it.
+_EXTENSION_RE = re.compile(r"\.[A-Za-z0-9_+-]+")
+#: A layer's name: a config of the directory (python.conf) or a header's tail.
+_LAYER_RE = re.compile(r"[a-z][a-z0-9_]*")
+
+
+def _parse_files(lines: list[tuple[int, str]]
+                 ) -> tuple[tuple[tuple[str, tuple[str, ...]], ...], list[str]]:
+    """Return ``(files, problems)`` for the ``[files]`` lines.
+
+    A line is ``.ext .ext2 = layer layer``: the files with those extensions
+    are read with those layers, each laid over the one before, the last
+    naming the grammar.  `files` is ``(extension, layers)`` per extension,
+    in file order; the same extension twice is a problem, and the later line
+    wins.
+    """
+    usable: dict[str, tuple[int, tuple[str, ...]]] = {}
+    problems: list[str] = []
+    for n, raw in lines:
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        at = f"[{FILES}] line {n}: "
+        sides = _sides(line)
+        if sides is None:
+            problems.append(f'{at}{_shown(line)} has no "="; write it as: '
+                            f".ext = layer layer")
+            continue
+        exts, layers = sides
+        extensions = exts.split()
+        names = tuple(layers.lower().split())
+        bad = next((e for e in extensions if not _EXTENSION_RE.fullmatch(e)), None)
+        if not extensions or bad is not None:
+            problems.append(f"{at}{_shown(bad or line)} is not an extension: "
+                            f"write it with its dot, as .py")
+            continue
+        bad = next((l for l in names if not _LAYER_RE.fullmatch(l)), None)
+        if not names or bad is not None:
+            problems.append(f"{at}{_shown(bad or line)} is not a layer's name: "
+                            f"letters, digits and _, as code or python")
+            continue
+        for ext in extensions:
+            ext = ext.lower()
+            if ext in usable:
+                problems.append(f"{at}{ext} is also on line {usable[ext][0]}; "
+                                f"line {n} wins")
+                del usable[ext]
+            usable[ext] = (n, names)
+    return (tuple((ext, names) for ext, (_n, names) in usable.items()),
+            _capped(problems, FILES))
 
 
 #: A syntax rule's key: a node kind, an ancestor's kind and a kind, or a
@@ -1343,17 +1428,18 @@ def _is_directory(target: Path) -> bool:
     return target.suffix.lower() != ".conf"
 
 
-def _shipped() -> tuple[tuple[tuple[str, str], ...], ...]:
-    """The pronunciations, parts and shapes the shipped file holds."""
+def _shipped() -> tuple[tuple, ...]:
+    """The pronunciations, parts, shapes and [files] the shipped file holds."""
     _ini, sections, _warnings = _split_sections(template())
     pairs, _ = _parse_pronunciations(sections[PRONUNCIATIONS])
     parts, _ = _parse_parts(sections[PARTS])
     shapes, _named, _ = _parse_shapes(sections[SHAPES], parts)
-    return pairs, parts, shapes
+    files, _ = _parse_files(sections[FILES])
+    return pairs, parts, shapes, files
 
 
 #: What the shipped file holds, as `load` reads it.
-TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES = _shipped()
+TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES, TEMPLATE_FILES = _shipped()
 
 
 #: A line that is nothing but a section header, its inline comment aside.
@@ -1369,12 +1455,15 @@ def split_legacy(text: str) -> dict[str, str]:
     taken off their headers: ``[pronunciations.code]`` to ``code.conf`` as
     ``[pronunciations]``, ``[syntax.py]`` to ``python.conf`` as
     ``[syntax]``.  The comment lines right above a header move with it.
-    Everything else, a type whose language readaloud does not know
-    included, stays in `MAIN_FILE` as it was.  The ``markdown`` setting of
-    2.0 becomes ``format``: ``markdown = no`` is ``format = code``, and a
-    ``markdown = yes`` goes, being the default.
+    Everything else stays in `MAIN_FILE` as it was: the sections headed
+    with a layer's name (``[config.code]``), which the directory's main file
+    holds too, and an extension the shipped ``[files]`` does not know.  The
+    ``markdown`` setting of 2.0 becomes ``format``: ``markdown = no`` is
+    ``format = code``, and a ``markdown = yes`` goes, being the default.
     """
-    from .syntax import language_for
+    def language_for(suffix: str) -> str | None:
+        layers = dict(TEMPLATE_FILES).get(suffix.lower(), ())
+        return layers[-1] if layers else None
 
     files: dict[str, list[str]] = {MAIN_FILE: []}
     current = MAIN_FILE
@@ -1392,8 +1481,8 @@ def split_legacy(text: str) -> dict[str, str]:
             kind = _typed(name)
             current = MAIN_FILE
             if kind is not None:
-                base, suffix = kind
-                language = "code" if suffix == ".code" else language_for(suffix)
+                base, tail = kind
+                language = language_for("." + tail)
                 if language is not None:
                     current = f"{language}.conf"
                     line = line.replace(f"[{name}]", f"[{base}]", 1)

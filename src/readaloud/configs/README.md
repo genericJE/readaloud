@@ -4,14 +4,14 @@ The files a first run copies into `~/.readaloud/`, and what `--write-config` rew
 
 | File | Applies to |
 | --- | --- |
-| `readaloud.conf` | everything: the settings, the shapes and parts, the words Kokoro gets wrong |
-| `code.conf` | every source file: `markdown = no`, the words for the operators |
+| `readaloud.conf` | everything: the settings, the shapes and parts, the words Kokoro gets wrong; the `[files]` map from extensions to configs; the `code` layer every source file shares (`format = code`, the words for the operators) |
+| `markdown.conf` | Markdown files: drawn by mdcat when installed, tables read cell by cell |
 | `python.conf` | Python files: how a `def`, a decorator or an attribute is said |
 
 A language's file is named after its grammar (`python`, `rust`, `javascript`: the name
 after `tree-sitter-` in the package, and in Neovim's `parser/`), and holds plain
 `[config]`, `[pronunciations]`, `[shapes]`, `[parts]` and `[syntax]` sections that apply to
-that language's files alone. See [Configuration](../../../docs/configuration.md#file-types)
+the files the `[files]` section of `readaloud.conf` sends to it (`.rs = code rust`). See [Configuration](../../../docs/configuration.md#file-types)
 and [Syntax](../../../docs/pronunciations.md#syntax).
 
 ## Sharing a language
