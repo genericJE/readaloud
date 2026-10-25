@@ -145,6 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="print the available voices and exit")
     p.add_argument("--list-devices", action="store_true",
                    help="print the available audio output devices and exit")
+    p.add_argument("--tree", action="store_true",
+                   help="print the syntax tree of FILE (the node kinds and fields a "
+                        "[syntax] rule can name) and exit")
     p.add_argument("--version", action="version", version=f"readaloud {__version__}")
     return p
 
@@ -227,6 +230,34 @@ def input_file(args: argparse.Namespace) -> str | None:
     if isinstance(markdown, str):
         return markdown
     return getattr(args, "file", None)
+
+
+def print_tree(args: argparse.Namespace, cfg) -> int:
+    """``--tree``: print the syntax tree of the named file through its
+    grammar, one node per line, for writing ``[syntax]`` rules."""
+    from . import syntax
+
+    if (args.file is None and not isinstance(args.markdown, str)
+            and len(args.text) == 1 and os.path.isfile(args.text[0])):
+        args.file, args.text = args.text[0], []
+    path = input_file(args)
+    if not path or path == "-":
+        _err("--tree needs a file: readaloud --tree app.py")
+        return EXIT_USAGE
+    suffix = Path(path).suffix
+    language = syntax.language_for(suffix, cfg.language)
+    if language is None:
+        _err(f"no grammar is known for {suffix or 'a file without a suffix'}; "
+             f"set language under [config{suffix.lower()}]")
+        return EXIT_ERROR
+    try:
+        grammar = syntax.grammar_for(language, cfg.parsers)
+        text = read_input(args)
+    except (syntax.GrammarError, OSError) as exc:
+        _err(str(exc))
+        return EXIT_ERROR
+    print(syntax.outline(text, grammar), end="")
+    return EXIT_OK
 
 
 def grammar_for_input(args: argparse.Namespace, cfg):
@@ -550,7 +581,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     # warnings through the status bar instead (see `notices=` below), because a
     # print() lands on top of the curses screen.
     headless = bool(args.save or args.write_config or args.list_voices
-                    or args.list_devices)
+                    or args.list_devices or args.tree)
     if headless:
         for warning in warnings:
             _err(warning)
@@ -576,6 +607,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
         from .player import format_devices
         print(format_devices())
         return EXIT_OK
+
+    if args.tree:
+        return print_tree(args, cfg)
 
     lang = lang_for(args.voice, args.lang)
 

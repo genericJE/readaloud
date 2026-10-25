@@ -930,6 +930,25 @@ def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
     assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
 
 
+def test_tree_prints_the_files_syntax_tree_and_exits(tmp_path, capsys, launched):
+    pytest.importorskip("tree_sitter_python")
+    source = tmp_path / "x.py"
+    source.write_text("def f(a):\n    pass\n", encoding="utf-8")
+    assert cli.main(["--no-config", "--tree", str(source)]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert out.startswith("module [0..")
+    assert "  function_definition [0..18]\n" in out
+    assert '    name: identifier [4..5]  "f"\n' in out
+    assert launched == {}                       # the TUI never ran
+    assert cli.main(["--no-config", "-f", str(source), "--tree"]) == cli.EXIT_OK
+    assert "function_definition" in capsys.readouterr().out
+    (tmp_path / "x.xyz").write_text("def f(): pass\n", encoding="utf-8")
+    assert cli.main(["--no-config", "--tree", str(tmp_path / "x.xyz")]) == cli.EXIT_ERROR
+    assert "no grammar is known for .xyz" in capsys.readouterr().err
+    assert cli.main(["--no-config", "--tree"]) == cli.EXIT_USAGE
+    assert "--tree needs a file" in capsys.readouterr().err
+
+
 def test_a_file_with_no_known_grammar_is_read_without_one(tmp_path, launched):
     conf = write_conf(tmp_path, "[syntax.xyz]\nfunction_definition = f $name\n")
     (tmp_path / "x.xyz").write_text("def f(): pass\n", encoding="utf-8")

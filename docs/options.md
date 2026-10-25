@@ -25,6 +25,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--no-config` | | ignore the config file; built-in defaults only |
 | `--write-config` | | write the shipped config file (overwriting) and exit |
 | `--list-voices` | | print the voices for the chosen language |
+| `--tree` | | print the syntax tree of `FILE` through its grammar, the node kinds and fields a `[syntax]` rule can name, and exit (see [Syntax](pronunciations.md#syntax)) |
 | `--list-devices` | | print the audio output devices |
 
 The "Default" column is the *built-in* default. Anything set in

@@ -265,8 +265,7 @@ for_file takes self and path type string or Path or None and returns type Config
 "and returns type Config"; `r1 = a | b` is left as it is, since that `|` is not under a
 type. A rule's key is:
 
-- **`kind`**: every node of that kind. `readaloud.syntax.outline` (or Neovim's
-  `:InspectTree`) shows the kinds and fields a grammar makes of a piece of text.
+- **`kind`**: every node of that kind, as `readaloud --tree` prints them (below).
 - **`ancestor/kind`**: such a node anywhere under a node of the first kind, which is how
   "or" is confined to the `|` of a type annotation.
 - **`kind.field`**: whatever node is that field of such a node, such as a `def`'s
@@ -287,6 +286,39 @@ and type names, in the terminal's own colours, from the `highlights.scm` query t
 package ships (or the one under `queries/<language>/` next to a Neovim `parser` directory).
 `highlight = no` under `[config]` or `[config.<ext>]`, or `--no-color`, leaves the file plain.
 Colouring needs no `[syntax]` rules: a grammar alone is enough.
+
+### Changing how a piece of code is read
+
+Every rule is yours: readaloud ships none, so a file is read as written until you say
+otherwise, and a wording you dislike is a line in your own `[syntax.py]`. To change how a
+kind of code is read, find its node kind and write a rule for it:
+
+```bash
+readaloud --tree app.py
+```
+
+prints the file's syntax tree, one node per line, indented by depth: the field the node
+is of its parent, its kind, its byte range, and a leaf's text. For `class A(Base):` it
+prints
+
+```
+class_definition [0..48]
+  class [0..5]  "class"
+  name: identifier [6..7]  "A"
+  superclasses: argument_list [7..13]
+    ( [7..8]  "("
+    identifier [8..12]  "Base"
+    ) [12..13]  ")"
+  body: block [19..48]
+```
+
+so a class is a `class_definition` with the fields `name`, `superclasses` and `body`, and
+`class_definition = class $name from $superclasses $body` says it that way. Then
+`readaloud -f app.py` again. A rule's key can also be the field alone
+(`class_definition.superclasses = based on $0`) or a context (`type/binary_operator`), as
+above. To have a kind read as written again, delete its line; to keep it as written and
+stop deeper rules too, give it an empty wording (`string =`). Neovim's `:InspectTree`
+shows the same tree.
 
 What a rule says goes through your entries and patterns once more, like a shape's wording:
 a pattern `/__(\w+)__/ = dunder $1` under `[pronunciations]` turns the `__init__` a `def`
