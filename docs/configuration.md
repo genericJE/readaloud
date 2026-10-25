@@ -8,7 +8,7 @@ The preferences are a directory of plain INI files:
 | File | Applies to |
 | --- | --- |
 | `~/.readaloud/readaloud.conf` | everything: the settings, the words Kokoro gets wrong, the shapes |
-| `~/.readaloud/code.conf` | every source file: `markdown = no`, the words for the operators |
+| `~/.readaloud/code.conf` | every source file: `format = code`, the words for the operators |
 | `~/.readaloud/python.conf`, `rust.conf`, ... | that language's files alone, named after the grammar |
 
 Most flags can also be preferences; the ones that pick the input or the output (`-f`,
@@ -37,8 +37,8 @@ Up to readaloud 2.0 the preferences were one file, `~/.readaloud.conf`. The firs
 newer readaloud moves it into the directory: the sections for a file type go to that
 language's file with the suffix taken off their headers (`[syntax.py]` becomes the
 `[syntax]` of `python.conf`, `[pronunciations.code]` the `[pronunciations]` of
-`code.conf`), the rest stays in `readaloud.conf`, and the old file is deleted; stderr
-says what moved where. Any shipped file that was not among them is added beside them.
+`code.conf`), the rest stays in `readaloud.conf`, a `markdown = no` becomes `format = code`, and the old
+file is deleted; stderr says what moved where. Any shipped file that was not among them is added beside them.
 
 ## Every setting
 
@@ -60,7 +60,7 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `color` | `true` | Render the input's colours. `false` is `--no-color`. Takes true/false, yes/no, on/off, 1/0. |
 | `follow_lead` | `20` | Extra rows follow mode scrolls past the strict minimum (see below). |
 | `follow_margin` | `5` | Rows kept between the spoken word and the top or bottom edge before follow mode scrolls. |
-| `markdown` | `true` | Strip Markdown syntax (`#`, `**`, `[text](url)`) from a plain file, a string or a pipe before it is spoken, and read an indented or fenced code block in one go. `false` reads it as written, cuts indented code into chunks of at most `chars` like any paragraph, and makes each operator (`==`, `<=`, `->`) a word of its own so it is lit while it is spoken, which suits source code. Coloured input and `-md` are never stripped. |
+| `format` | `markdown` | How plain input (a file, a string, a pipe without colours) is read. `markdown`: its Markdown syntax (`#`, `**`, `[text](url)`) is stripped before it is spoken and a fenced or indented block is read in one go. `code`: as written, indented lines cut into chunks of at most `chars` like any paragraph, and each operator (`==`, `<=`, `->`) lit while it is spoken. `plain`: as written, read as prose, for text whose `*asterisks*` are meant. Coloured input and `-md` are none of these. |
 | `highlight` | `true` | Colour a source file by its grammar (see [Syntax](pronunciations.md#syntax)): keywords, strings, comments, names. `false` reads it in the terminal's plain colours; `--no-color` does too. |
 | `language` | empty | The grammar a source file is read with, where that differs from what its suffix says (`py` is `python`, `rs` is `rust`, and so on). Set it under `[config.<ext>]`. |
 | `parsers` | empty | A directory of `<language>.so` parser files, as Neovim's `:TSInstall` builds them, tried when no `tree-sitter-<language>` package is installed. |
@@ -74,7 +74,7 @@ The sections of `readaloud.conf` apply to everything readaloud reads. The other 
 
 - **`code.conf`** applies to every source file: one whose suffix has a grammar readaloud
   knows (`.py`, `.rs`, `.js`, `.go`, `.c`, ... but not `.md` or `.html`, which are text).
-  That is where `markdown = no` and the words for operators belong (`== = is equal to`,
+  That is where `format = code` and the words for operators belong (`== = is equal to`,
   `-> = arrow`), since they hold for every language and would misfire in prose.
 - **`<language>.conf`** applies to that language's files, the language named after its
   grammar: `python.conf` for `.py` and `.pyi`, `rust.conf` for `.rs`, `javascript.conf`
@@ -319,8 +319,8 @@ PLAY     af_heart  1.00x  chunk 1/12  follow on  |  config: speed: 'maybe' is no
 # .go, .c, ... but not .md or .html, which are text.
 
 [config]
-# read as written: no Markdown stripping, indented code cut into chunks
-markdown = no
+# read as code: as written, indented lines cut into chunks, operators lit
+format = code
 
 [pronunciations]
 # the operators, which the voice would otherwise skip; said in every language

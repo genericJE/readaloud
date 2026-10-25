@@ -830,7 +830,7 @@ speed = 1.4
 
 [config.py]
 speed = 2
-markdown = no
+format = code
 
 [parts.py]
 ident = [A-Za-z_]\w*
@@ -860,7 +860,7 @@ def test_a_source_files_indented_lines_are_cut_into_chunks(tmp_path, launched):
     assert len(chunks) == 2 and chunks[1].kind == "code"
     assert len(chunks[1].text) > 380
     # as code, they are cut like a paragraph, at whole lines
-    assert cli.main(["--config", str(write_conf(tmp_path, "markdown = no\n")), "-f",
+    assert cli.main(["--config", str(write_conf(tmp_path, "format = code\n")), "-f",
                      str(source)]) == 0
     chunks = [c for c in launched["doc"].chunks if c.speakable]
     assert len(chunks) > 3 and all(len(c.text) <= 380 for c in chunks)
@@ -873,7 +873,7 @@ def test_operators_are_words_in_a_source_file(tmp_path, launched):
     source = tmp_path / "x.py"
     source.write_text("return line == self.line and self.start <= col < self.end\n",
                       encoding="utf-8")
-    assert cli.main(["--config", str(write_conf(tmp_path, "markdown = no\n")), "-f",
+    assert cli.main(["--config", str(write_conf(tmp_path, "format = code\n")), "-f",
                      str(source)]) == 0
     assert [w.text for w in launched["doc"].words] == [
         "return", "line", "==", "self.line", "and", "self.start", "<=", "col", "<",
@@ -966,7 +966,7 @@ def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
     pytest.importorskip("tree_sitter_python")
     source = tmp_path / "x.py"
     source.write_text("def f():\n    pass  # c\n", encoding="utf-8")
-    conf = write_conf(tmp_path, "[config.py]\nmarkdown = no\n")
+    conf = write_conf(tmp_path, "[config.py]\nformat = code\n")
     assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
     runs = [(r.text, r.style.fg) for r in launched["doc"].lines[0]]
     assert runs[:3] == [("def", 5), (" ", None), ("f", 4)]
@@ -974,7 +974,7 @@ def test_a_python_file_is_coloured_by_its_grammar(tmp_path, launched):
     # --no-color, and highlight = no, leave it plain
     assert cli.main(["--config", str(conf), "--no-color", "-f", str(source)]) == 0
     assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
-    conf = write_conf(tmp_path, "[config.py]\nmarkdown = no\nhighlight = no\n")
+    conf = write_conf(tmp_path, "[config.py]\nformat = code\nhighlight = no\n")
     assert cli.main(["--config", str(conf), "-f", str(source)]) == 0
     assert {r.style.fg for r in launched["doc"].lines[0]} == {None}
 

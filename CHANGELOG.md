@@ -14,7 +14,11 @@
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:
   find its kind in the tree, write the line, delete it to go back.
-- With `markdown = no`, a source file's indented lines are cut into chunks of at most
+- The `markdown = yes|no` setting of 2.0 is `format = markdown | code | plain`: how plain
+  input is read. `code` is what `code.conf` sets; `plain` is new, for text that is neither
+  Markdown nor code and should keep its `*asterisks*`. The first run rewrites an old
+  `markdown = no` as `format = code`.
+- With `format = code`, a source file's indented lines are cut into chunks of at most
   `chars` like any paragraph, at line ends, instead of being read as one code block: a
   class body no longer waits on one long synthesis.
 - In a source file, operators (`==`, `<=`, `->`, the `*` of `*args`) are words of their

@@ -529,9 +529,17 @@ def test_build_document_strips_markdown_but_keeps_ansi():
 def test_build_document_keeps_markdown_syntax_when_told_to():
     kept = cli.build_document("# Heading\n\n**bold** text\n", max_sentences=4,
                               max_chars=380, no_color=False,
-                              strip_markdown=False)
+                              format="code")
     assert kept.plain[0] == "# Heading"
     assert kept.plain[2] == "**bold** text"
+    # plain: as written too, but prose: no operator words, code blocks whole
+    plain = cli.build_document("x == y\n\n    a = 1\n    b = 2\n", max_sentences=4,
+                               max_chars=380, no_color=False, format="plain")
+    assert [w.text for w in plain.words] == ["x", "y", "a", "1", "b", "2"]
+    assert [c.kind for c in plain.chunks if c.speakable] == ["para", "code"]
+    code = cli.build_document("x == y\n\n    a = 1\n    b = 2\n", max_sentences=4,
+                              max_chars=380, no_color=False, format="code")
+    assert [w.text for w in code.words] == ["x", "==", "y", "a", "=", "1", "b", "=", "2"]
 
 
 def test_no_color_drops_colour_but_keeps_text():
@@ -716,13 +724,13 @@ def test_config_file_supplies_the_defaults(tmp_path, launched):
     assert launched["lang"] == "b"          # derived from the config's voice
 
 
-def test_markdown_off_reads_a_plain_file_as_written(tmp_path, launched):
+def test_format_code_reads_a_plain_file_as_written(tmp_path, launched):
     source = tmp_path / "x.py"
     source.write_text("# a comment\ndef f(*args): pass\n", encoding="utf-8")
     assert cli.main(["--config", write_conf(tmp_path, ""), "-f",
                      str(source)]) == 0
     assert launched["doc"].plain[0] == "a comment"
-    assert cli.main(["--config", write_conf(tmp_path, "markdown = no\n"), "-f",
+    assert cli.main(["--config", write_conf(tmp_path, "format = code\n"), "-f",
                      str(source)]) == 0
     assert launched["doc"].plain[:2] == ["# a comment", "def f(*args): pass"]
 

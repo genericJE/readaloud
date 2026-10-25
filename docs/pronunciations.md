@@ -242,7 +242,7 @@ and only a named file (`-f app.py`) has one: piped text has no suffix. Without a
 or with a rule the grammar has no node or field for, the status bar says so and the file is
 read without the rules.
 
-The shipped `~/.readaloud/python.conf` (with `markdown = no` coming from `code.conf`):
+The shipped `~/.readaloud/python.conf` (with `format = code` coming from `code.conf`):
 
 ```ini
 [syntax]

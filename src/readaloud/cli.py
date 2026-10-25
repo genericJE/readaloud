@@ -387,13 +387,15 @@ def read_input(args: argparse.Namespace) -> str:
 
 def build_document(data: str, *, max_sentences: int, max_chars: int,
                    no_color: bool, pronunciations=None,
-                   strip_markdown: bool = True, highlighter=None):
+                   format: str = "markdown", highlighter=None):
     """Parse `data` (ANSI or raw markdown) into a `Document`.
 
-    Plain input has its Markdown syntax stripped unless `strip_markdown` is
-    false (the config file's ``markdown = no``); ANSI input never does.
-    `highlighter`, from `readaloud.syntax`, colours plain input by its
-    grammar; coloured input keeps the colours it came with.
+    `format` is the config file's setting for plain input: ``markdown`` has
+    its syntax stripped and a code block read whole, ``code`` is read as
+    written with its indented lines cut like a paragraph and its operators
+    lit, ``plain`` is read as written as prose.  Coloured input is none of
+    these: it keeps what it came with.  `highlighter`, from
+    `readaloud.syntax`, colours plain input by its grammar.
 
     `pronunciations` is the config file's `readaloud.pronounce.Lexicon`, which
     the Document respells its chunks with.
@@ -402,20 +404,17 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
     from .document import Document
 
     lines = ansi.parse(data)
-    markdown = True
+    code = False
     if not ansi.has_ansi(data):
-        if strip_markdown:
+        if format == "markdown":
             lines = ansi.strip_markdown(lines)
-        else:
-            # a source file: its indented lines are not a code block to be
-            # read in one go, but cut like a paragraph
-            markdown = False
+        code = format == "code"
         if highlighter is not None:
             lines = highlighter(lines)
     if no_color:
         lines = _monochrome(lines)
     return Document(lines, max_sentences=max_sentences, max_chars=max_chars,
-                    pronunciations=pronunciations, markdown=markdown)
+                    pronunciations=pronunciations, markdown=not code)
 
 
 def build_markdown_document(data: str, *, mdcat: str, columns: int,
@@ -728,7 +727,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
             max_chars=args.chars,
             no_color=no_color,
             pronunciations=pronunciations,
-            strip_markdown=cfg.markdown,
+            format=cfg.format,
             highlighter=highlighter,
         )
     if not doc.speakable_chunks:

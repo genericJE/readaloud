@@ -65,6 +65,7 @@ __all__ = [
     "Config",
     "FileType",
     "DEFAULT_PATH",
+    "FORMATS",
     "LEGACY_PATH",
     "MAIN_FILE",
     "SHIPPED_FILES",
@@ -155,7 +156,7 @@ class Config:
     follow_lead: int = 20          # extra rows to scroll ahead in follow mode
     follow_margin: int = 5
     media_keys: bool = True        # claim the system play/pause button
-    markdown: bool = True          # strip Markdown syntax from plain input
+    format: str = "markdown"       # how plain input is read: markdown, code or plain
     highlight: bool = True         # colour a source file by its grammar
     language: str = ""             # the grammar's name; "" = from the suffix
     parsers: str = ""              # a directory of parser/<language>.so files
@@ -240,6 +241,13 @@ class _Field:
     kind: str                      # "str" | "int" | "float" | "bool"
     lo: float | None = None
     hi: float | None = None
+    choices: tuple[str, ...] = ()  # a "str" that must be one of these
+
+
+#: How plain input is read, the `format` setting: Markdown syntax stripped and
+#: a code block read whole; code, as written, its indented lines cut like a
+#: paragraph and its operators lit; or plain prose, as written.
+FORMATS = ("markdown", "code", "plain")
 
 
 _FIELDS: tuple[_Field, ...] = (
@@ -255,7 +263,7 @@ _FIELDS: tuple[_Field, ...] = (
     _Field("follow_lead", "int", lo=0),
     _Field("follow_margin", "int", lo=0),
     _Field("media_keys", "bool"),
-    _Field("markdown", "bool"),
+    _Field("format", "str", choices=FORMATS),
     _Field("highlight", "bool"),
     _Field("language", "str"),
     _Field("parsers", "str"),
@@ -358,7 +366,12 @@ def _coerce(field: _Field, raw: str, path: Path,
     value = _unquote(raw)
 
     if field.kind == "str":
-        return value
+        if field.choices and value.strip().lower() not in field.choices:
+            warnings.append(
+                f"{path}: {where}{field.name}: {raw.strip()!r} is not one of "
+                f"{', '.join(field.choices)}; using {default}")
+            return None
+        return value.strip().lower() if field.choices else value
 
     if field.kind == "bool":
         try:
@@ -568,6 +581,9 @@ def _read_section(items, path: Path, warnings: list[str], where: str = ""
                                              n=1, cutoff=0.6)
             hint = ("" if like else
                     f"; a pronunciation goes under [{PRONUNCIATIONS}]")
+            if key.strip().lower() == "markdown":
+                # the setting up to 2.0; `split_legacy` rewrites it
+                hint = f"; it is format = {' | '.join(FORMATS)} now"
             warnings.append(f"{path}: {where}unknown key {key!r} "
                             f"(ignored{hint})")
             continue
@@ -1342,6 +1358,8 @@ TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES = _shipped()
 
 #: A line that is nothing but a section header, its inline comment aside.
 _HEADER_LINE_RE = re.compile(r"\[(?P<name>[^\]]+)\]")
+#: The ``markdown = yes|no`` setting of 2.0, which `split_legacy` rewrites.
+_OLD_MARKDOWN_RE = re.compile(r"(?P<indent>\s*)markdown\s*=\s*(?P<value>\S+)(?P<rest>.*)$")
 
 
 def split_legacy(text: str) -> dict[str, str]:
@@ -1352,7 +1370,9 @@ def split_legacy(text: str) -> dict[str, str]:
     ``[pronunciations]``, ``[syntax.py]`` to ``python.conf`` as
     ``[syntax]``.  The comment lines right above a header move with it.
     Everything else, a type whose language readaloud does not know
-    included, stays in `MAIN_FILE` as it was.
+    included, stays in `MAIN_FILE` as it was.  The ``markdown`` setting of
+    2.0 becomes ``format``: ``markdown = no`` is ``format = code``, and a
+    ``markdown = yes`` goes, being the default.
     """
     from .syntax import language_for
 
@@ -1362,6 +1382,11 @@ def split_legacy(text: str) -> dict[str, str]:
     for line in text.split("\n"):
         bare = line[:_comment_start(line)].strip()
         header = _HEADER_LINE_RE.fullmatch(bare)
+        if (old := _OLD_MARKDOWN_RE.match(line)) and not header:
+            if old.group("value").lower() in _BOOLEANS and not _BOOLEANS[old.group("value").lower()]:
+                line = f"{old.group('indent')}format = code{old.group('rest')}"
+            else:
+                continue
         if header:
             name = header.group("name")
             kind = _typed(name)

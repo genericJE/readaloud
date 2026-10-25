@@ -101,7 +101,7 @@ def test_config_dataclass_defaults():
         voice="af_heart", speed=1.0, lang="", chars=380,
         repo="mlx-community/Kokoro-82M-4bit", sentences=4, prefetch=2,
         device="", color=True, follow_lead=20, follow_margin=5,
-        media_keys=True, markdown=True, highlight=True, language="",
+        media_keys=True, format="markdown", highlight=True, language="",
         parsers="",
     )
 
@@ -125,7 +125,7 @@ color = false
 follow_lead = 12
 follow_margin = 5
 media_keys = false
-markdown = no
+format = code
 highlight = no
 language = python
 parsers = ~/.local/share/nvim/lazy/nvim-treesitter/parser
@@ -139,12 +139,12 @@ def test_every_key_is_read(tmp_path):
         voice="bf_emma", speed=1.25, lang="b", repo="hexgrad/Kokoro-82M",
         sentences=7, chars=500, prefetch=0, device="MacBook Pro Speakers",
         color=False, follow_lead=12, follow_margin=5, media_keys=False,
-        markdown=False, highlight=False, language="python",
+        format="code", highlight=False, language="python",
         parsers="~/.local/share/nvim/lazy/nvim-treesitter/parser",
     )
 
 
-@pytest.mark.parametrize("key", ["color", "media_keys", "markdown", "highlight"])
+@pytest.mark.parametrize("key", ["color", "media_keys", "highlight"])
 @pytest.mark.parametrize("raw,expected", [
     ("true", True), ("True", True), ("yes", True), ("on", True), ("1", True),
     ("false", False), ("FALSE", False), ("no", False), ("off", False),
@@ -234,7 +234,6 @@ def test_clamping_one_key_leaves_the_others_alone(tmp_path):
     ("follow_margin", "?"),
     ("color", "maybe"),
     ("media_keys", "sometimes"),
-    ("markdown", "mostly"),
 ])
 def test_malformed_value_falls_back_to_default_and_warns(tmp_path, key, given):
     body = f"[config]\n{key} = {given}\n"
@@ -838,7 +837,7 @@ voice = bf_emma
 
 [config.py]
 speed = 2
-markdown = no
+format = code
 
 [parts]
 num = \\d+
@@ -872,14 +871,14 @@ def test_a_type_section_is_read_for_each_section(tmp_path):
         f"is not a part"]
     (py,) = cfg.types
     assert py == config.FileType(
-        ".py", settings=(("speed", 2.0), ("markdown", False)),
+        ".py", settings=(("speed", 2.0), ("format", "code")),
         pronunciations=(("api", "A P I"),),
         shapes=((r"/\[(?<l>[^\]]+)\]/", "list ${l|item|,=and}"),
                 (r"/(?<w>%{word}):(?<n>%{num})/", "$w at $n")),
         named_shapes=(("item", r"/(?<n>%{num})/", "item $n"),),
         parts=(("word", "[a-z]+"),))
     # the general config is untouched
-    assert (cfg.speed, cfg.markdown) == (1.2, True)
+    assert (cfg.speed, cfg.format) == (1.2, "markdown")
     assert cfg.pronunciations == (("id", "I D"), ("api", "general"))
     assert cfg.shapes == ((r"/(?<n>%{num})/", "general $n"),)
 
@@ -887,8 +886,8 @@ def test_a_type_section_is_read_for_each_section(tmp_path):
 def test_for_suffix_lays_the_type_over_the_general_config(tmp_path):
     cfg, _ = config.load(write(tmp_path / "c.conf", TYPED))
     py = cfg.for_suffix(".PY")
-    assert (py.speed, py.voice, py.markdown, py.types) == (
-        2.0, "bf_emma", False, ())
+    assert (py.speed, py.voice, py.format, py.types) == (
+        2.0, "bf_emma", "code", ())
     # a type's shapes are tried first; its pronunciations and parts follow
     # the general ones, so the type's win a tie
     assert py.shapes == cfg.types[0].shapes + cfg.shapes
@@ -915,7 +914,7 @@ CODE = """\
 [config]
 speed = 1.2
 [config.code]
-markdown = no
+format = code
 speed = 1.5
 [config.py]
 speed = 2
@@ -937,18 +936,18 @@ def test_the_code_type_lies_between_the_general_and_the_suffixs_own(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf", CODE))
     assert warnings == []
     py = cfg.for_suffix(".py")
-    assert (py.speed, py.markdown) == (2.0, False)
+    assert (py.speed, py.format) == (2.0, "code")
     assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
                                  ("|", "or"))
     assert py.parts == (("op", "[=<>]+"),)          # a .py shape may use a .code part
     assert py.shape_patterns == (("(?<o>(?:[=<>]+))", "op $o"),)
     rs = cfg.for_suffix(".rs")                      # code, no sections of its own
-    assert (rs.speed, rs.markdown) == (1.5, False)
+    assert (rs.speed, rs.format) == (1.5, "code")
     assert rs.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"))
     for text in (".md", ".html", ".txt"):           # text, or no grammar: not code
         assert cfg.for_suffix(text).speed == 1.2
     assert cfg.for_suffix(".md").pronunciations == (("id", "I D"),)
-    assert cfg.for_file("notes.md").markdown is True
+    assert cfg.for_file("notes.md").format == "markdown"
 
 
 def test_the_language_setting_makes_a_suffix_code(tmp_path):
@@ -972,7 +971,7 @@ def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
         tmp_path,
         readaloud_conf="[config]\nspeed = 1.2\n[parts]\nident = [a-z]+\n"
                        "[pronunciations]\nid = I D\n",
-        code_conf="[config]\nmarkdown = no\n[parts]\nop = [=<>]+\n"
+        code_conf="[config]\nformat = code\n[parts]\nop = [=<>]+\n"
                   "[pronunciations]\n== = is equal to\n| = pipe\n",
         python_conf="[config]\nspeed = 2\n[shapes]\n/(?<o>%{op})(?<i>%{ident})/ = $o $i\n"
                     "[syntax]\nfunction_definition = function $name\n"
@@ -980,17 +979,17 @@ def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
     )
     cfg, warnings = config.load(d)
     assert warnings == []
-    assert (cfg.speed, cfg.markdown, cfg.pronunciations) == (1.2, True, (("id", "I D"),))
+    assert (cfg.speed, cfg.format, cfg.pronunciations) == (1.2, "markdown", (("id", "I D"),))
     assert [t.suffix for t in cfg.types] == [".code", "python"]
     py = cfg.for_file("app.py")
-    assert (py.speed, py.markdown) == (2.0, False)
+    assert (py.speed, py.format) == (2.0, "code")
     assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
                                  ("|", "or"))
     # a language file's shapes may use the general and the code parts
     assert py.shape_patterns == (("(?<o>(?:[=<>]+))(?<i>(?:[a-z]+))", "$o $i"),)
     assert py.syntax == (("function_definition", "function $name"),)
     rs = cfg.for_file("lib.rs")
-    assert (rs.speed, rs.markdown, rs.syntax) == (1.2, False, ())
+    assert (rs.speed, rs.format, rs.syntax) == (1.2, "code", ())
     assert rs.pronunciations[-1] == ("|", "pipe")
     assert cfg.for_file("notes.md").pronunciations == (("id", "I D"),)
 
@@ -1052,13 +1051,32 @@ def test_split_legacy_sends_each_types_sections_to_its_file():
     # the comment above a header moves with it; the suffix comes off; a
     # "[1] = one" line is an entry, not a header
     assert files["code.conf"] == (
-        "# source files: read as written\n[config]\nmarkdown = no\n\n"
+        "# source files: read as written\n[config]\nformat = code\n\n"
         "[pronunciations]\n== = is equal to\n[1] = one\n")
     assert files["python.conf"] == (
         "[syntax]  # the def rules\nfunction_definition = function $name $body\n"
         "[pronunciations]\nstr = string\n")
     assert config.split_legacy("") == {}
     assert config.split_legacy("speed = 2\n") == {"readaloud.conf": "speed = 2\n"}
+
+
+def test_format_takes_one_of_three_words(tmp_path):
+    for raw, want in [("code", "code"), ("Plain", "plain"), (" markdown ", "markdown")]:
+        cfg, warnings = config.load(write(tmp_path / "c.conf", f"[config]\nformat = {raw}\n"))
+        assert (cfg.format, warnings) == (want, [])
+    path = write(tmp_path / "c.conf", "[config]\nformat = html\nmarkdown = no\n")
+    cfg, warnings = config.load(path)
+    assert cfg.format == "markdown"
+    assert warnings == [
+        f"{path}: format: 'html' is not one of markdown, code, plain; using markdown",
+        f"{path}: unknown key 'markdown' (ignored; it is format = markdown | code | plain now)"]
+
+
+def test_split_legacy_rewrites_the_markdown_setting():
+    files = config.split_legacy("[config]\nmarkdown = yes\nspeed = 2\n[config.py]\n"
+                                "markdown = no  # as written\n")
+    assert files["readaloud.conf"] == "[config]\nspeed = 2\n"
+    assert files["python.conf"] == "[config]\nformat = code  # as written\n"
 
 
 def test_migrate_splits_the_old_file_into_the_directory_and_deletes_it(tmp_path):
@@ -1076,7 +1094,7 @@ def test_migrate_splits_the_old_file_into_the_directory_and_deletes_it(tmp_path)
     assert warnings == []
     assert (cfg.speed, cfg.parts) == (1.3, (("ext", "py|rs"),))
     py = cfg.for_file("a.py")
-    assert py.markdown is False and ("str", "string") in py.pronunciations
+    assert py.format == "code" and ("str", "string") in py.pronunciations
     assert py.syntax == (("function_definition", "function $name $body"),)
     assert ("odd", "words") in cfg.for_file("a.xyz").pronunciations
     # nothing to do a second time, or when the directory is already there
@@ -1157,11 +1175,11 @@ def test_a_repeated_type_header_is_read_as_one(tmp_path):
     cfg, warnings = config.load(write(tmp_path / "c.conf",
                                       "[config.py]\nspeed = 2\n"
                                       "[pronunciations.py]\na = b\n"
-                                      "[config.py]\nmarkdown = no\n"
+                                      "[config.py]\nformat = code\n"
                                       "[pronunciations.py]\nc = d\n"))
     assert warnings == []
     (py,) = cfg.types
-    assert py.settings == (("speed", 2.0), ("markdown", False))
+    assert py.settings == (("speed", 2.0), ("format", "code"))
     assert py.pronunciations == (("a", "b"), ("c", "d"))
 
 
@@ -1366,10 +1384,10 @@ def test_the_shipped_directory_loads_clean_and_lays_python_over_code(tmp_path):
     assert warnings == []
     assert [t.suffix for t in cfg.types] == [".code", "python"]
     py = cfg.for_file("app.py")
-    assert py.markdown is False and ("==", "is equal to") in py.pronunciations
+    assert py.format == "code" and ("==", "is equal to") in py.pronunciations
     assert ("str", "string") in py.pronunciations and py.syntax
-    assert cfg.for_file("lib.rs").markdown is False and not cfg.for_file("lib.rs").syntax
-    assert cfg.for_file("notes.md").markdown is True
+    assert cfg.for_file("lib.rs").format == "code" and not cfg.for_file("lib.rs").syntax
+    assert cfg.for_file("notes.md").format == "markdown"
     assert config.write_template(tmp_path / "one.conf") == tmp_path / "one.conf"
     assert (tmp_path / "one.conf").read_text(encoding="utf-8") == config.template()
 

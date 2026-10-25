@@ -84,7 +84,7 @@ brew install mdcat
 # the primary path for Markdown: drawn by mdcat, tables read one cell at a time
 readaloud -md notes.md
 
-# a file, no mdcat needed (most Markdown syntax is stripped before it is spoken, unless `markdown = no`)
+# a file, no mdcat needed (most Markdown syntax is stripped before it is spoken, unless `format = code` or `plain`)
 readaloud -f README.md
 
 # a string
