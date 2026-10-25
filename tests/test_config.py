@@ -346,12 +346,12 @@ def test_nonsense_text_does_not_raise(tmp_path):
     assert warnings
 
 
-def test_directory_where_the_file_should_be(tmp_path):
+def test_an_empty_directory_is_a_preferences_directory_with_nothing_in_it(tmp_path):
     d = tmp_path / "c.conf"
     d.mkdir()
     cfg, warnings = config.load(d)
     assert cfg == DEFAULTS
-    assert len(warnings) == 1 and str(d) in warnings[0]
+    assert warnings == []
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
@@ -955,6 +955,64 @@ def test_the_language_setting_makes_a_suffix_code(tmp_path):
                                "[config.code]\nspeed = 1.5\n[config.xyz]\nlanguage = rust\n"))
     assert cfg.for_suffix(".xyz").speed == 1.5
     assert cfg.for_suffix(".abc").speed == 1.0
+
+
+def folder(tmp_path, **files: str) -> Path:
+    """A preferences directory holding `files` (``readaloud_conf="..."``)."""
+    d = tmp_path / "prefs"
+    d.mkdir(exist_ok=True)
+    for name, body in files.items():
+        (d / name.replace("_conf", ".conf")).write_text(body, encoding="utf-8")
+    return d
+
+
+def test_a_directory_holds_the_general_code_and_language_files(tmp_path):
+    d = folder(
+        tmp_path,
+        readaloud_conf="[config]\nspeed = 1.2\n[parts]\nident = [a-z]+\n"
+                       "[pronunciations]\nid = I D\n",
+        code_conf="[config]\nmarkdown = no\n[parts]\nop = [=<>]+\n"
+                  "[pronunciations]\n== = is equal to\n| = pipe\n",
+        python_conf="[config]\nspeed = 2\n[shapes]\n/(?<o>%{op})(?<i>%{ident})/ = $o $i\n"
+                    "[syntax]\nfunction_definition = function $name\n"
+                    "[pronunciations]\n| = or\n",
+    )
+    cfg, warnings = config.load(d)
+    assert warnings == []
+    assert (cfg.speed, cfg.markdown, cfg.pronunciations) == (1.2, True, (("id", "I D"),))
+    assert [t.suffix for t in cfg.types] == [".code", "python"]
+    py = cfg.for_file("app.py")
+    assert (py.speed, py.markdown) == (2.0, False)
+    assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
+                                 ("|", "or"))
+    # a language file's shapes may use the general and the code parts
+    assert py.shape_patterns == (("(?<o>(?:[=<>]+))(?<i>(?:[a-z]+))", "$o $i"),)
+    assert py.syntax == (("function_definition", "function $name"),)
+    rs = cfg.for_file("lib.rs")
+    assert (rs.speed, rs.markdown, rs.syntax) == (1.2, False, ())
+    assert rs.pronunciations[-1] == ("|", "pipe")
+    assert cfg.for_file("notes.md").pronunciations == (("id", "I D"),)
+
+
+def test_a_directory_without_the_main_file_and_odd_files(tmp_path):
+    d = folder(tmp_path, python_conf="[config]\nspeed = 2\n")
+    (d / "Rust Lang.conf").write_text("[config]\nspeed = 3\n", encoding="utf-8")
+    (d / "notes.txt").write_text("not a config\n", encoding="utf-8")
+    cfg, warnings = config.load(d)
+    assert cfg.speed == 1.0 and cfg.for_file("a.py").speed == 2.0
+    assert warnings == [f"{d / 'Rust Lang.conf'}: ignored; a language file is "
+                        f"named after its grammar, as python.conf"]
+
+
+def test_a_problem_in_a_language_file_names_that_file(tmp_path):
+    d = folder(tmp_path, readaloud_conf="[config]\nspeed = 1.2\n",
+               python_conf="[config]\nspeed = fast\n[shapes]\n/x*/ = ex\n")
+    cfg, warnings = config.load(d)
+    assert cfg.for_file("a.py").speed == 1.2
+    assert warnings == [
+        f"{d / 'python.conf'}: speed: 'fast' is not a number; using 1.0",
+        f"{d / 'python.conf'}: [shapes] line 4: the shape /x*/ cannot be used: "
+        f"it can match empty text"]
 
 
 def test_type_headers_ignore_case_and_take_one_extension(tmp_path):

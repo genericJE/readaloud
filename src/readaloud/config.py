@@ -65,6 +65,7 @@ __all__ = [
     "Config",
     "FileType",
     "DEFAULT_PATH",
+    "MAIN_FILE",
     "PRONUNCIATIONS",
     "PARTS",
     "SHAPES",
@@ -79,6 +80,10 @@ __all__ = [
     "template",
     "write_template",
 ]
+
+#: The general file inside a preferences directory, beside ``code.conf``
+#: and a ``<language>.conf`` per language.
+MAIN_FILE = "readaloud.conf"
 
 #: Where the preferences live.  Resolved at call time (``path or DEFAULT_PATH``)
 #: so tests can point the module elsewhere.
@@ -168,15 +173,18 @@ class Config:
         first, and their pronunciations, parts, named shapes and syntax
         rules come after the general ones, so the type's win.  A source
         file (one with a grammar that is not a text format's) first gets
-        the ``.code`` sections, which every source file shares, and its
-        own suffix's sections over those."""
-        from .syntax import CODE, is_code
+        the ``.code`` sections, which every source file shares, then its
+        language's (a ``python.conf``, keyed by the grammar's name), then
+        its own suffix's sections over those."""
+        from .syntax import CODE, is_code, language_for
 
         suffix = suffix.lower()
         own = next((t for t in self.types if t.suffix == suffix), None)
-        language = dict(own.settings).get("language", self.language) if own else self.language
+        override = dict(own.settings).get("language", self.language) if own else self.language
+        language = language_for(suffix, override)
         layers = [t for t in self.types
-                  if t.suffix == CODE and suffix != CODE and is_code(suffix, language)]
+                  if t.suffix == CODE and suffix != CODE and is_code(suffix, override)]
+        layers += [t for t in self.types if language and t.suffix == language]
         layers += [own] if own else []
         if not layers:
             return self
@@ -379,7 +387,12 @@ _BOOLEANS = {
 
 
 def load(path: Path | None = None) -> tuple[Config, list[str]]:
-    """Parse the file.  Returns ``(config, warnings)``.
+    """Parse the preferences.  Returns ``(config, warnings)``.
+
+    `path` is a file, or a directory holding `MAIN_FILE` for what applies to
+    everything, ``code.conf`` for every source file and a ``<language>.conf``
+    (``python.conf``) for each language, whose plain sections apply to that
+    language's files alone; see `Config.for_file`.
 
     A missing file is NOT a warning -- it yields plain defaults.  A malformed
     value IS a warning and falls back to the default for that key; one bad key
@@ -388,11 +401,61 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
     skipped, and the settings never depend on that section being right.
     """
     target = Path(path) if path is not None else DEFAULT_PATH
+    try:
+        if target.is_dir():
+            return _load_dir(target)
+    except OSError:
+        pass
+    cfg, _settings, warnings = _load_file(target)
+    return cfg, warnings
+
+
+def _load_dir(folder: Path) -> tuple[Config, list[str]]:
+    """`load` for a directory: `MAIN_FILE`, then ``code.conf``, then each
+    other ``<language>.conf``, whose parts and named shapes may use those of
+    the files before them."""
+    from .syntax import CODE
+
+    cfg, _settings, warnings = _load_file(folder / MAIN_FILE)
+    types = list(cfg.types)
+    parts, named = cfg.parts, cfg.named_shapes
+    try:
+        others = sorted(f for f in folder.iterdir()
+                        if f.suffix == ".conf" and f.name != MAIN_FILE)
+    except OSError as exc:
+        return cfg, warnings + [f"{folder}: could not be listed ({exc!r})"]
+    others.sort(key=lambda f: f.stem.lower() != "code")
+    for file in others:
+        name = file.stem.lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+            warnings.append(f"{file}: ignored; a language file is named after "
+                            f"its grammar, as python.conf")
+            continue
+        own, settings, own_warnings = _load_file(file, parts, named)
+        warnings += own_warnings
+        key = CODE if name == "code" else name
+        types.append(FileType(key, tuple(settings.items()), own.pronunciations,
+                              own.shapes, own.named_shapes, own.parts,
+                              own.syntax))
+        types.extend(own.types)
+        if name == "code":
+            parts, named = parts + own.parts, named + own.named_shapes
+    cfg.types = tuple(types)
+    return cfg, warnings
+
+
+def _load_file(target: Path,
+               known_parts: tuple[tuple[str, str], ...] = (),
+               known_named: tuple[tuple[str, str, str], ...] = ()
+               ) -> tuple[Config, dict[str, object], list[str]]:
+    """`load` for one file: ``(config, the settings it names, warnings)``.
+    Its parts and shapes may use the `known_parts` and `known_named` shapes
+    of the files before it."""
     cfg = Config()
     try:
         text, warnings = _read_text(target)
         if text is None:
-            return cfg, warnings
+            return cfg, {}, warnings
 
         lifted: dict[str, list[tuple[int, str]]] = {}
         try:
@@ -402,9 +465,10 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             ini, pairs, problems = text, (), []
             notes = [f"[{PRONUNCIATIONS}] could not be used ({exc!r})"]
         try:
-            parts, part_problems = _parse_parts(lifted.get(PARTS, []))
+            parts, part_problems = _parse_parts(lifted.get(PARTS, []),
+                                                known=known_parts)
             shapes, named, shape_problems = _parse_shapes(
-                lifted.get(SHAPES, []), parts)
+                lifted.get(SHAPES, []), known_parts + parts, known_named)
             problems += part_problems + shape_problems
         except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
             parts, shapes, named = (), (), ()
@@ -417,7 +481,8 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
             rules = ()
             notes.append(f"[{SYNTAX}] could not be used ({exc!r})")
         try:
-            typed = _parse_types(lifted, parts, named, problems)
+            typed = _parse_types(lifted, known_parts + parts,
+                                 known_named + named, problems)
         except Exception as exc:  # noqa: BLE001 - lose these, keep the rest
             typed = {}
             notes.append(f"the sections for file types could not be used "
@@ -433,25 +498,27 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
 
         parser, parse_warnings = _parse(ini, target)
         warnings += parse_warnings
+        general: dict[str, object] = {}
         settings: dict[str, dict[str, object]] = {}
         if parser is not None:
-            settings = _read_settings(parser, cfg, target, warnings)
+            general, settings = _read_settings(parser, cfg, target, warnings)
         cfg.types = tuple(
             FileType(suffix, tuple(settings.get(suffix, {}).items()),
                      **typed.get(suffix, {}))
             for suffix in dict.fromkeys([*typed, *settings]))
         warnings += [f"{target}: {problem}" for problem in problems]
-        return cfg, warnings
+        return cfg, general, warnings
     except Exception as exc:  # noqa: BLE001 - the whole point: never raise
-        return Config(), [f"{target}: could not be used ({exc!r}); "
-                          f"using defaults"]
+        return Config(), {}, [f"{target}: could not be used ({exc!r}); "
+                              f"using defaults"]
 
 
 def _read_settings(parser: configparser.ConfigParser, cfg: Config,
                    path: Path, warnings: list[str]
-                   ) -> dict[str, dict[str, object]]:
+                   ) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
     """Set the ``[config]`` keys in `parser` on `cfg`, warning as it goes,
-    and return each ``[config.<ext>]`` section's settings by suffix."""
+    and return them by name, with each ``[config.<ext>]`` section's settings
+    by suffix."""
     typed: list[tuple[str, str]] = []
     for name in parser.sections():
         kind = _typed(name)
@@ -460,9 +527,10 @@ def _read_settings(parser: configparser.ConfigParser, cfg: Config,
         elif name != SECTION:
             warnings.append(f"{path}: ignoring unknown section [{name}]")
 
+    general: dict[str, object] = {}
     if parser.has_section(SECTION):
-        for field, value in _read_section(parser.items(SECTION), path,
-                                          warnings).items():
+        general = _read_section(parser.items(SECTION), path, warnings)
+        for field, value in general.items():
             setattr(cfg, field, value)
     settings: dict[str, dict[str, object]] = {}
     for name, suffix in typed:
@@ -470,7 +538,7 @@ def _read_settings(parser: configparser.ConfigParser, cfg: Config,
         own = parser._sections[name].items()  # noqa: SLF001
         settings.setdefault(suffix, {}).update(
             _read_section(own, path, warnings, f"[{name.lower()}] "))
-    return settings
+    return general, settings
 
 
 def _read_section(items, path: Path, warnings: list[str], where: str = ""

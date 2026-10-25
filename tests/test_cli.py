@@ -883,7 +883,23 @@ def test_operators_are_words_in_a_source_file(tmp_path, launched):
     assert "==" not in [w.text for w in launched["doc"].words]
 
 
-def test_a_type_section_applies_to_the_file_it_names(tmp_path, launched):
+def test_config_may_be_a_directory(tmp_path, launched):
+    d = tmp_path / "prefs"
+    d.mkdir()
+    (d / "readaloud.conf").write_text("[config]\nspeed = 1.4\n", encoding="utf-8")
+    (d / "python.conf").write_text("[config]\nspeed = 2\n[pronunciations]\nid ID\n",
+                                   encoding="utf-8")
+    (tmp_path / "x.py").write_text("hello\n", encoding="utf-8")
+    assert cli.main(["--config", str(d), "-f", str(tmp_path / "x.py")]) == 0
+    assert launched["speed"] == 2.0
+    assert launched["notices"] == [
+        "config: python.conf: [pronunciations] line 4: 'id ID' has no \"=\"; "
+        "write it as: text = how to say it"]
+    assert cli.main(["--config", str(d)]) == 0
+    assert launched["speed"] == 1.4
+
+
+
     conf = write_conf(tmp_path, TYPE_CONF)
     for name, speed in [("x.py", 2.0), ("x.md", 1.4)]:
         (tmp_path / name).write_text("hello\n", encoding="utf-8")

@@ -842,9 +842,13 @@ def test_config_warnings_go_to_stderr_for_save(tmp_path, monkeypatch, capsys,
 
 
 def test_an_unreadable_config_does_not_stop_the_run(tmp_path, launched):
-    conf = tmp_path / "adirectory.conf"
-    conf.mkdir()
-    assert cli.main(["--config", str(conf)]) == 0
+    conf = tmp_path / "locked.conf"
+    conf.write_text("[config]\nspeed = 2\n", encoding="utf-8")
+    conf.chmod(0)
+    try:
+        assert cli.main(["--config", str(conf)]) == 0
+    finally:
+        conf.chmod(0o600)
     assert launched["speed"] == 1.0
     assert any("could not be read" in n for n in launched["notices"])
 

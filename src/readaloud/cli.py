@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-media-keys", dest="media_keys", action="store_false",
                    help="leave the system play/pause button alone")
     p.add_argument("--config", default=None, metavar="PATH",
-                   help=f"read defaults from PATH instead of {_CONFIG_HINT}")
+                   help=f"read defaults from PATH, a file or a directory, instead of {_CONFIG_HINT}")
     p.add_argument("--no-config", action="store_true",
                    help="ignore the config file entirely (built-in defaults only)")
     p.add_argument("--write-config", action="store_true",
@@ -184,7 +184,9 @@ def short_notices(warnings: Sequence[str], target: Path) -> list[str]:
     word "config": the reader only has one config file open.
     """
     prefix = f"{target}: "
-    return [f"config: {w[len(prefix):]}" if w.startswith(prefix) else w
+    inside = f"{target}/"            # a file of the preferences directory
+    return [f"config: {w[len(prefix):]}" if w.startswith(prefix)
+            else f"config: {w[len(inside):]}" if w.startswith(inside) else w
             for w in warnings]
 
 
