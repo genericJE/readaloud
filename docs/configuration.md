@@ -72,6 +72,16 @@ They are laid over the general sections rather than replacing them:
   [Syntax](pronunciations.md#syntax)); a type's rules come after the general `[syntax]`
   ones, so the type's win.
 
+One more type stands for every source file at once: `code`. `[config.code]`,
+`[pronunciations.code]`, `[shapes.code]`, `[parts.code]` and `[syntax.code]` apply to any
+file whose suffix has a grammar readaloud knows (`.py`, `.rs`, `.js`, `.go`, `.c`, ... but
+not `.md` or `.html`, which are text), between the general sections and the suffix's own:
+general, then `.code`, then `.py`, each winning over the one before. That is where the
+words for operators belong (`== = is equal to`, `-> = arrow`), since they hold for every
+language and would misfire in prose, while `[pronunciations.py]` keeps what is Python's
+alone (`str = string`, `:= = walrus`). A `.py` part or shape may use the `.code` parts and
+named shapes.
+
 A problem in one of them is reported with its section, as in `[shapes.py] line 12: ...`.
 This reads Python source as written and says a function signature, on one line or
 spread over several, the way it would be described (see

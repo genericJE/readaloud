@@ -169,9 +169,15 @@ README.md = readme dot M D
 # what the punctuation of code is called
 != = not equals
 
-# Python files (-f x.py): read as written, through the tree-sitter-python grammar
-[config.py]
+# source files (-f x.py, x.rs, ...): read as written, with words for the operators
+[config.code]
 markdown = no
+
+[pronunciations.code]
+== = is equal to
+| = pipe
+
+# Python files: said through the tree-sitter-python grammar
 
 [syntax.py]
 # node kind = wording; $field is that part of the node, $* its parts, $0 the whole
@@ -185,7 +191,7 @@ attribute = $object dot $attribute
 
 [pronunciations.py]
 str = string
-| = pipe
+:= = walrus
 ```
 
 With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 283",
@@ -193,8 +199,9 @@ With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 2
 whole file, with every part, shape and pronunciation, is in
 [Configuration](docs/configuration.md#the-file-a-first-run-writes).
 
-The sections ending in `.py` apply to a Python file only (`readaloud -f app.py`), which is
-read through a real parser, coloured, and said node by node: `def for_file(self, path:
+The sections ending in `.code` apply to every source file, those ending in `.py` to a Python
+file only (`readaloud -f app.py`), which is read through a real parser, coloured, and said
+node by node: `def for_file(self, path:
 str | None) -> Config:` is "function for_file takes self and path type string or None and
 returns type Config", `self.rate` is "self dot rate", and `a | b` between two sets stays
 "a pipe b". The Homebrew install has the Python grammar; another language is its

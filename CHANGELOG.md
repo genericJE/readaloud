@@ -12,6 +12,9 @@
   own, lit while they are spoken; before, their speech ran under the neighbouring word.
   A rule's opening words light the token before the node, so "and returns type" lights
   the `->` and "with a default of" the `=`.
+- A `code` file type: `[pronunciations.code]`, `[config.code]` and the other sections
+  ending in `.code` apply to every source file, between the general sections and the
+  suffix's own, so the words for operators are written once for all languages.
 
 ## 2.0.0 (2026-10-24)
 

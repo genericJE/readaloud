@@ -26,9 +26,10 @@ from pathlib import Path
 from . import _core
 from .ansi import Run, Style
 
-__all__ = ["Grammar", "GrammarError", "LANGUAGES", "PALETTE", "check_rules",
-           "coloured", "from_file", "from_module", "grammar_for", "highlighter",
-           "highlights_for", "language_for", "outline"]
+__all__ = ["CODE", "Grammar", "GrammarError", "LANGUAGES", "PALETTE",
+           "PROSE_LANGUAGES", "check_rules", "coloured", "from_file",
+           "from_module", "grammar_for", "highlighter", "highlights_for",
+           "is_code", "language_for", "outline"]
 
 Grammar = _core.Grammar
 
@@ -46,6 +47,21 @@ LANGUAGES = {
     ".sql": "sql", ".hs": "haskell", ".ex": "elixir", ".exs": "elixir",
     ".zig": "zig", ".nix": "nix",
 }
+
+
+#: Grammars of text rather than code: a `[... .code]` section is not for them.
+PROSE_LANGUAGES = frozenset({"markdown", "html"})
+
+#: The pseudo-suffix of the sections for every source file, ``[config.code]``.
+CODE = ".code"
+
+
+def is_code(suffix: str, override: str = "") -> bool:
+    """Whether a file with `suffix` is source code: it has a grammar
+    readaloud knows (or `override`, the ``language`` setting, names one) and
+    that grammar is not one of a text format."""
+    language = language_for(suffix, override)
+    return language is not None and language not in PROSE_LANGUAGES
 
 
 def language_for(suffix: str, override: str = "") -> str | None:

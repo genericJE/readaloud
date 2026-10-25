@@ -166,19 +166,31 @@ class Config:
         """This config with the sections for `suffix` (``.py``) laid over
         it: their settings replace the general ones, their shapes are tried
         first, and their pronunciations, parts, named shapes and syntax
-        rules come after the general ones, so the type's win."""
-        typed = next((t for t in self.types if t.suffix == suffix.lower()),
-                     None)
-        if typed is None:
+        rules come after the general ones, so the type's win.  A source
+        file (one with a grammar that is not a text format's) first gets
+        the ``.code`` sections, which every source file shares, and its
+        own suffix's sections over those."""
+        from .syntax import CODE, is_code
+
+        suffix = suffix.lower()
+        own = next((t for t in self.types if t.suffix == suffix), None)
+        language = dict(own.settings).get("language", self.language) if own else self.language
+        layers = [t for t in self.types
+                  if t.suffix == CODE and suffix != CODE and is_code(suffix, language)]
+        layers += [own] if own else []
+        if not layers:
             return self
-        return replace(
-            self, **dict(typed.settings),
-            pronunciations=self.pronunciations + typed.pronunciations,
-            shapes=typed.shapes + self.shapes,
-            named_shapes=self.named_shapes + typed.named_shapes,
-            parts=self.parts + typed.parts,
-            syntax=self.syntax + typed.syntax,
-            types=())
+        out = self
+        for typed in layers:
+            out = replace(
+                out, **dict(typed.settings),
+                pronunciations=out.pronunciations + typed.pronunciations,
+                shapes=typed.shapes + out.shapes,
+                named_shapes=out.named_shapes + typed.named_shapes,
+                parts=out.parts + typed.parts,
+                syntax=out.syntax + typed.syntax,
+                types=())
+        return out
 
     @property
     def shape_patterns(self) -> tuple[tuple[str, str], ...]:
@@ -991,11 +1003,17 @@ def _parse_types(lifted: dict[str, list[tuple[int, str]]],
     by suffix, as `FileType` fields; their problems go on `problems`.  A
     type's parts and shapes may use the general parts and named shapes."""
     out: dict[str, dict[str, tuple]] = {}
-    for label in lifted:
+    # the sections every source file shares come first, so a suffix's own
+    # parts and shapes may use theirs
+    labels = sorted(lifted, key=lambda label: (_typed(label) or ("", ""))[1] != ".code")
+    for label in labels:
         kind = _typed(label)
         if kind is None or kind[1] in out:
             continue
         suffix = kind[1]
+        if suffix != ".code" and ".code" in out:
+            parts = parts + out[".code"]["parts"]
+            named = named + out[".code"]["named_shapes"]
 
         def lines(base: str) -> list[tuple[int, str]]:
             return lifted.get(base + suffix, [])

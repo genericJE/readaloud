@@ -910,6 +910,53 @@ def test_for_file_goes_by_the_suffix(tmp_path):
     assert cfg.for_file("src/A.PY").speed == 2.0
 
 
+CODE = """\
+[config]
+speed = 1.2
+[config.code]
+markdown = no
+speed = 1.5
+[config.py]
+speed = 2
+[parts.code]
+op = [=<>]+
+[shapes.py]
+/(?<o>%{op})/ = op $o
+[pronunciations]
+id = I D
+[pronunciations.code]
+== = is equal to
+| = pipe
+[pronunciations.py]
+| = or
+"""
+
+
+def test_the_code_type_lies_between_the_general_and_the_suffixs_own(tmp_path):
+    cfg, warnings = config.load(write(tmp_path / "c.conf", CODE))
+    assert warnings == []
+    py = cfg.for_suffix(".py")
+    assert (py.speed, py.markdown) == (2.0, False)
+    assert py.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"),
+                                 ("|", "or"))
+    assert py.parts == (("op", "[=<>]+"),)          # a .py shape may use a .code part
+    assert py.shape_patterns == (("(?<o>(?:[=<>]+))", "op $o"),)
+    rs = cfg.for_suffix(".rs")                      # code, no sections of its own
+    assert (rs.speed, rs.markdown) == (1.5, False)
+    assert rs.pronunciations == (("id", "I D"), ("==", "is equal to"), ("|", "pipe"))
+    for text in (".md", ".html", ".txt"):           # text, or no grammar: not code
+        assert cfg.for_suffix(text).speed == 1.2
+    assert cfg.for_suffix(".md").pronunciations == (("id", "I D"),)
+    assert cfg.for_file("notes.md").markdown is True
+
+
+def test_the_language_setting_makes_a_suffix_code(tmp_path):
+    cfg, _ = config.load(write(tmp_path / "c.conf",
+                               "[config.code]\nspeed = 1.5\n[config.xyz]\nlanguage = rust\n"))
+    assert cfg.for_suffix(".xyz").speed == 1.5
+    assert cfg.for_suffix(".abc").speed == 1.0
+
+
 def test_type_headers_ignore_case_and_take_one_extension(tmp_path):
     path = write(tmp_path / "c.conf",
                  "[Shapes.PY]\n/x+/ = ex\n[config.]\n[.py]\n[shapes.tar.gz]\n")
