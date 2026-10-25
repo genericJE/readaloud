@@ -11,7 +11,7 @@ to jump playback there. Nothing leaves the machine.
 readaloud notes.md
 ```
 
-https://github.com/user-attachments/assets/381863d3-1029-4041-88a0-f2e0a8e5d97b
+https://github.com/user-attachments/assets/70e17dc8-1e94-42fc-9c02-bac6cd40436a
 
 
 ## What it does
