@@ -74,6 +74,14 @@ otherwise shred the display. It is replayed only if the app crashes. Set
 `READALOUD_DEBUG=1` to also report a synthesis worker still busy at exit (harmless: it is
 a daemon thread).
 
+## Recording the demo
+
+`docs/demo/build.sh` records `docs/demo.mp4`: a Markdown file drawn by mdcat and read
+cell by cell, then a Python file read through its grammar, with the speech muxed in. It
+needs [vhs][vhs], ffmpeg, mdcat and the model weights, and it really speaks out loud. The
+script's header carries what the recording taught: vhs captures no audio, so `tap.py`
+writes what the player plays and `align.py` lines it up with the first word that lights.
+
 ## Cutting a release
 
 Add the release to `CHANGELOG.md`, bump `version` in `pyproject.toml` and `__version__`
@@ -91,5 +99,6 @@ minimum every user needs. Building on a newer machine silently excludes older on
 [uv]: https://docs.astral.sh/uv/
 [rustup]: https://rustup.rs/
 [maturin]: https://www.maturin.rs/
+[vhs]: https://github.com/charmbracelet/vhs
 
 [Back to the README](../README.md)
