@@ -174,6 +174,15 @@ def test_replacements_stay_at_their_level_and_comments_are_no_parts(python):
                         "to 2 and returns type None\npass")
 
 
+def test_a_comment_the_grammar_hangs_on_the_def_itself_is_still_said(python):
+    # a comment leading a body is a child of the function_definition, between
+    # the : and the block, so no field of the rule's wording reaches it
+    (chunk,) = read("def f(path):\n    # the limit\n    return 1\n", python,
+                    RULES + [("comment", "${0|#=}")])
+    assert chunk[0] == "function f takes path\nthe limit\nreturn 1"
+    assert ("the", "the") in chunk[1] and ("limit", "limit") in chunk[1]
+
+
 def test_a_wording_word_is_kept_apart_from_punctuation_but_text_is_not(python):
     rules = [("attribute", "$object dot $attribute")]
     (chunk,) = read('x = foo().bar().value\ny = f(a, "x.y")\nz = Sequence[str]\n',

@@ -433,6 +433,12 @@ impl Syntax {
                 prev_end = lead.start_byte() - base;
             }
         }
+        // the comments the grammar hangs on the node itself rather than in
+        // a field (one leading a def's body sits between the `:` and the
+        // block): each is said before the first field child after it
+        let mut cursor = node.walk();
+        let extras: Vec<Node> = node.children(&mut cursor).filter(|c| c.is_extra()).collect();
+        let mut extras_done = node.start_byte();
         let mut rest = wording;
         while let Some(dollar) = rest.find('$') {
             own(out, &rest[..dollar], prev_end);
@@ -472,6 +478,15 @@ impl Syntax {
                     let children: Vec<Node> = node.children_by_field_name(field, &mut cursor).collect();
                     let mut prev = None;
                     for child in children {
+                        let before: Vec<Node> = extras
+                            .iter()
+                            .copied()
+                            .filter(|e| e.start_byte() >= extras_done && e.end_byte() <= child.start_byte())
+                            .collect();
+                        for extra in before {
+                            self.say_node(p, extra, base, depth + 1, &mut said, &[]);
+                            extras_done = extra.end_byte();
+                        }
                         if let Some(prev) = prev {
                             swapped(&p.text[prev..child.start_byte()], &swaps, prev - base, node.end_byte() - base, &mut said);
                         }

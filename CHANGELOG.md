@@ -26,6 +26,8 @@
   A rule may say nothing, and the text it covers is then neither read nor reached by an
   entry; a rule beats an entry of the same length, where a shape loses to one. The two
   "triple quote" entries are gone from the shipped `readaloud.conf`.
+- A comment leading a `def`'s body, which the grammar hangs on the `def` itself rather
+  than in the body, is said before the body instead of being dropped by the rule.
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:
   find its kind in the tree, write the line, delete it to go back.

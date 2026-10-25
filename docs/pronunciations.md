@@ -289,7 +289,9 @@ in full the same way, and `$*` its named parts in order with the text between th
 `|from=to` replacements apply to the text said as written at that level, between the parts
 and a field's own, never inside a part (the comma of a `dict[str, int]` is not a
 parameter's comma) and never to a rule's own words. A field left out of the wording is left
-unsaid, so a `def`'s rule names `$body` to keep its body. An empty wording says the node as
+unsaid, so a `def`'s rule names `$body` to keep its body; a comment the grammar hangs on the
+node itself rather than in a field (one leading a `def`'s body) is said before the field
+that follows it. An empty wording says the node as
 written and keeps every rule off it; a wording whose replacements leave nothing
 (`comment = ${0|#=}` on a bare `#`) says nothing, and the text is then neither read nor
 reached by an entry.
