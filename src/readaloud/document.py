@@ -760,13 +760,15 @@ def build_chunks(plain: Sequence[str], words: Sequence[Word],
                  max_sentences: int = DEFAULT_MAX_SENTENCES,
                  max_chars: int = DEFAULT_MAX_CHARS, *,
                  tables: Sequence[Table] = (),
-                 cells: Sequence[Sequence[Sequence[int]]] = ()
-                 ) -> list[Chunk]:
+                 cells: Sequence[Sequence[Sequence[int]]] = (),
+                 markdown: bool = True) -> list[Chunk]:
     """Group lines into chunks: paragraphs first, then sentence splits.
 
     Blank runs, horizontal rules and code blocks are kept as chunks so the
     chunk list still covers every line; the ones with nothing to say come back
-    with ``speakable=False``.
+    with ``speakable=False``.  A code block is one chunk only while the text
+    is `markdown`; in a source file its indented lines are structure, not a
+    fence, and are cut like a paragraph, at `max_chars`.
 
     Each table becomes rule and cell chunks instead (see :class:`Document`).
     `tables`, `words` and `cells` then come from the Document's table layout:
@@ -805,7 +807,7 @@ def build_chunks(plain: Sequence[str], words: Sequence[Word],
     # readaloud._core: blank runs and code whole, paragraphs at sentences
     prose = iter(_core.prose_spans(
         list(plain), [(a, b) for a, b, ti in pieces if ti is None], word_at,
-        max_sentences, max_chars))
+        max_sentences, max_chars, not markdown))
 
     chunks: list[Chunk] = []
     wi = 0
@@ -1088,10 +1090,12 @@ class Document:
                  max_chars: int = DEFAULT_MAX_CHARS,
                  tables: Sequence[Table] = (),
                  references: bool = True,
-                 pronunciations: Lexicon | None = None) -> None:
+                 pronunciations: Lexicon | None = None,
+                 markdown: bool = True) -> None:
         self.max_sentences = int(max_sentences)
         self.max_chars = int(max_chars)
         self.references = bool(references)
+        self.markdown = bool(markdown)
         source = lines or ()
         tables = list(tables or ())
         self.lines: list[list[Run]]
@@ -1108,7 +1112,7 @@ class Document:
         self.tables, cells = _layout_tables(self.plain, self.words, tables)
         self.chunks: list[Chunk] = build_chunks(
             self.plain, self.words, self.max_sentences, self.max_chars,
-            tables=self.tables, cells=cells)
+            tables=self.tables, cells=cells, markdown=self.markdown)
         self.respell_failures = 0
         if pronunciations:
             self.respell_failures = self._respell(pronunciations)

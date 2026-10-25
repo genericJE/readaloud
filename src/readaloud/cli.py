@@ -400,15 +400,20 @@ def build_document(data: str, *, max_sentences: int, max_chars: int,
     from .document import Document
 
     lines = ansi.parse(data)
+    markdown = True
     if not ansi.has_ansi(data):
         if strip_markdown:
             lines = ansi.strip_markdown(lines)
+        else:
+            # a source file: its indented lines are not a code block to be
+            # read in one go, but cut like a paragraph
+            markdown = False
         if highlighter is not None:
             lines = highlighter(lines)
     if no_color:
         lines = _monochrome(lines)
     return Document(lines, max_sentences=max_sentences, max_chars=max_chars,
-                    pronunciations=pronunciations)
+                    pronunciations=pronunciations, markdown=markdown)
 
 
 def build_markdown_document(data: str, *, mdcat: str, columns: int,

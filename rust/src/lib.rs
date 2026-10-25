@@ -324,18 +324,20 @@ type PySpan = (usize, usize, &'static str, usize, usize);
 /// `(start, end, kind, line_start, line_end)` of every chunk outside the
 /// tables, one list per `(first, stop)` piece.
 #[pyfunction]
+#[pyo3(signature = (plain, pieces, word_at, max_sentences, max_chars, split_code = false))]
 fn prose_spans(
     plain: Vec<Bound<'_, PyString>>,
     pieces: Vec<(usize, usize)>,
     word_at: Vec<usize>,
     max_sentences: usize,
     max_chars: usize,
+    split_code: bool,
 ) -> PyResult<Vec<Vec<PySpan>>> {
     let lines = lines_of(&plain);
     if pieces.iter().any(|&(a, b)| a >= b || b > lines.len()) {
         return Err(PyValueError::new_err("prose_spans: a piece outside the lines"));
     }
-    Ok(words::prose_spans(&lines, &pieces, &word_at, max_sentences.max(1), max_chars.max(1))
+    Ok(words::prose_spans(&lines, &pieces, &word_at, max_sentences.max(1), max_chars.max(1), split_code)
         .into_iter()
         .map(|spans| spans.into_iter().map(|(a, b, k, ls, le)| (a, b, k.name(), ls, le)).collect())
         .collect())

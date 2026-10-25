@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
+  `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:
+  find its kind in the tree, write the line, delete it to go back.
+- With `markdown = no`, a source file's indented lines are cut into chunks of at most
+  `chars` like any paragraph, at line ends, instead of being read as one code block: a
+  class body no longer waits on one long synthesis.
+
 ## 2.0.0 (2026-10-24)
 
 The computational half of readaloud is now Rust, and a source file is read through its

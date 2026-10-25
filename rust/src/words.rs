@@ -562,6 +562,7 @@ pub fn prose_spans(
     word_at: &[usize],
     max_sentences: usize,
     max_chars: usize,
+    split_code: bool,
 ) -> Vec<Vec<Span>> {
     let nlines = lines.len();
     let mut line_offsets = Vec::with_capacity(nlines);
@@ -586,7 +587,10 @@ pub fn prose_spans(
             let lo = line_offsets[g_first];
             let hi = line_offsets[g_stop - 1] + lines[g_stop - 1].len();
             let has_words = bisect_left(word_at, lo) < bisect_left(word_at, hi);
-            if kind == Kind::Para && has_words {
+            // a code block is one chunk in Markdown; in a source file,
+            // where indentation is structure and not a fence, it is cut
+            // like a paragraph, so a class body is not one long chunk
+            if (kind == Kind::Para || (split_code && kind == Kind::Code)) && has_words {
                 for (a, b) in paragraph_spans(&flat, lo, hi, max_sentences, max_chars) {
                     let line_start = bisect_right(&line_offsets, a).saturating_sub(1);
                     let line_end = bisect_right(&line_offsets, if b > a { b - 1 } else { a });

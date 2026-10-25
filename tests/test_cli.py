@@ -850,6 +850,25 @@ str = string
 SIGNATURE = "def foo(\n    bar: int,\n    baz: str = '',\n) -> str:\n"
 
 
+def test_a_source_files_indented_lines_are_cut_into_chunks(tmp_path, launched):
+    body = "".join(f"    field{i}: int = {i}\n" for i in range(40))
+    source = tmp_path / "x.py"
+    source.write_text("class A:\n    x = 'doc'\n\n" + body, encoding="utf-8")
+    # as Markdown, the indented lines after a blank line are one code block
+    assert cli.main(["--config", str(write_conf(tmp_path, "")), "-f", str(source)]) == 0
+    chunks = [c for c in launched["doc"].chunks if c.speakable]
+    assert len(chunks) == 2 and chunks[1].kind == "code"
+    assert len(chunks[1].text) > 380
+    # as code, they are cut like a paragraph, at whole lines
+    assert cli.main(["--config", str(write_conf(tmp_path, "markdown = no\n")), "-f",
+                     str(source)]) == 0
+    chunks = [c for c in launched["doc"].chunks if c.speakable]
+    assert len(chunks) > 3 and all(len(c.text) <= 380 for c in chunks)
+    # cut at line ends: every chunk opens on a field and closes on its value
+    assert all(c.text.lstrip().startswith("field") and c.text.rstrip()[-1].isdigit()
+               for c in chunks[1:])
+
+
 def test_a_type_section_applies_to_the_file_it_names(tmp_path, launched):
     conf = write_conf(tmp_path, TYPE_CONF)
     for name, speed in [("x.py", 2.0), ("x.md", 1.4)]:
