@@ -59,7 +59,7 @@ _LANG_OF_VOICE = {
 
 
 #: shown in --help; the real path is resolved at call time, not import time
-_CONFIG_HINT = "~/.readaloud.conf"
+_CONFIG_HINT = "~/.readaloud/"
 
 
 def _err(msg: str) -> None:
@@ -599,16 +599,21 @@ def _main(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             _err(f"could not write {target}: {exc.strerror or exc}")
             return EXIT_ERROR
-        print(f"wrote {written}")
+        if written.is_dir():
+            print(f"wrote {', '.join(str(written / n) for n in config_mod.SHIPPED_FILES)}")
+        else:
+            print(f"wrote {written}")
         return EXIT_OK
 
     # First run: leave a fully commented template behind.  `ensure` never
     # raises and never overwrites, so an unwritable HOME just means no file.
-    if not args.no_config and config_mod.ensure(target):
+    if not args.no_config and (created := config_mod.ensure(target)):
         if not args.save:
             # --save's stdout is the machine-readable half; keep it clean and
             # say nothing there.  Before curses starts, stderr is still safe.
-            _err(f"created {target} -- your defaults live there now")
+            where = f"{target}/" if target.is_dir() else str(target)
+            _err(f"created {where} -- your defaults live there now"
+                 + (f" ({', '.join(p.name for p in created)})" if target.is_dir() else ""))
 
     if args.list_devices:
         from .player import format_devices

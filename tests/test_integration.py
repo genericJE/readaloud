@@ -2705,8 +2705,9 @@ def test_pty_start_flag_lands_on_that_chunk(stub_child):
 
 
 def test_pty_reads_the_config_file_from_home(stub_child, tmp_path):
-    """The whole chain in one run: ~/.readaloud.conf -> flags -> status bar."""
-    (tmp_path / ".readaloud.conf").write_text(
+    """The whole chain in one run: ~/.readaloud/ -> flags -> status bar."""
+    (tmp_path / ".readaloud").mkdir()
+    (tmp_path / ".readaloud" / "readaloud.conf").write_text(
         "[config]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
     body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
     with PtyRun(stub_argv(stub_child), stdin_bytes=body, cwd=REPO,
@@ -2720,7 +2721,8 @@ def test_pty_reads_the_config_file_from_home(stub_child, tmp_path):
 
 
 def test_pty_a_flag_still_beats_the_config_file(stub_child, tmp_path):
-    (tmp_path / ".readaloud.conf").write_text(
+    (tmp_path / ".readaloud").mkdir()
+    (tmp_path / ".readaloud" / "readaloud.conf").write_text(
         "[config]\nspeed = 1.4\nvoice = bm_george\n", encoding="utf-8")
     body = b"Alpha bravo charlie delta echo foxtrot golf hotel india juliet.\n"
     with PtyRun(stub_argv(stub_child, "--voice", "af_heart"), stdin_bytes=body,
@@ -2733,22 +2735,25 @@ def test_pty_a_flag_still_beats_the_config_file(stub_child, tmp_path):
 
 
 def test_pty_first_run_leaves_a_config_behind(stub_child, tmp_path):
-    conf = tmp_path / ".readaloud.conf"
+    conf = tmp_path / ".readaloud"
     with PtyRun(stub_argv(stub_child), stdin_bytes=b"Some words to read.\n",
                 cwd=REPO, home=str(tmp_path)) as p:
         assert p.wait_screen("Some words", 30)
         p.send("q", 0.5)
         st = p.wait(10)
     assert st is not None and os.WEXITSTATUS(st) == 0
-    assert conf.exists(), "the first run did not write ~/.readaloud.conf"
-    # the shipped file, as it is
-    assert conf.read_text(encoding="utf-8") == config.template()
+    assert conf.is_dir(), "the first run did not write ~/.readaloud/"
+    # the shipped files, as they are
+    assert sorted(p.name for p in conf.iterdir()) == sorted(config.SHIPPED_FILES)
+    for name in config.SHIPPED_FILES:
+        assert (conf / name).read_text(encoding="utf-8") == config.template(name)
     assert config.load(conf)[1] == []
 
 
 def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):
     """It must reach the user, and it must not be printed over the document."""
-    (tmp_path / ".readaloud.conf").write_text(
+    (tmp_path / ".readaloud").mkdir()
+    (tmp_path / ".readaloud" / "readaloud.conf").write_text(
         "[config]\nspeed = maybe\n", encoding="utf-8")
     # long enough that playback does not reach "end of document" and replace
     # the notice while the test is still looking for it
@@ -2758,7 +2763,7 @@ def test_pty_a_broken_config_shows_up_in_the_status_bar(stub_child, tmp_path):
     with PtyRun(stub_argv(stub_child), stdin_bytes=body,
                 cwd=REPO, home=str(tmp_path)) as p:
         assert p.wait_screen("Some words", 30), p.screen()
-        assert p.wait_screen("config: speed", 10, where=-1), p.screen()[-1]
+        assert p.wait_screen("config: readaloud.conf: spe", 10, where=-1), p.screen()[-1]
         assert "Some words" in "\n".join(p.screen()[:-1])
         p.send("q", 0.5)
         st = p.wait(10)

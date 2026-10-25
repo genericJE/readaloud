@@ -60,7 +60,7 @@ def write(path: Path, body: str) -> Path:
 
 
 def test_default_path_is_dot_readaloud_conf_in_home():
-    assert REAL_DEFAULT_PATH == Path.home() / ".readaloud.conf"
+    assert REAL_DEFAULT_PATH == Path.home() / ".readaloud"
 
 
 def test_the_real_conf_file_is_never_touched(tmp_path):
@@ -1146,7 +1146,8 @@ def test_an_empty_syntax_wording_and_a_repeat_are_read(tmp_path):
 # template
 # --------------------------------------------------------------------------- #
 
-SHIPPED_FILE = Path(config.__file__).with_name("readaloud.conf")
+SHIPPED_DIR = Path(config.__file__).with_name("configs")
+SHIPPED_FILE = SHIPPED_DIR / "readaloud.conf"
 
 
 def shipped() -> Config:
@@ -1220,29 +1221,29 @@ def test_write_template_with_no_argument_uses_default_path(tmp_path):
 
 def test_ensure_creates_the_template(tmp_path):
     path = tmp_path / "c.conf"
-    assert config.ensure(path) is True
+    assert config.ensure(path) == [path]
     assert path.read_text(encoding="utf-8") == config.template()
     assert config.load(path) == (SHIPPED, [])
 
 
 def test_ensure_is_idempotent_and_does_not_clobber(tmp_path):
     path = write(tmp_path / "c.conf", "[config]\nspeed = 2.5\n")
-    assert config.ensure(path) is False
-    assert config.ensure(path) is False
+    assert config.ensure(path) == []
+    assert config.ensure(path) == []
     assert path.read_text(encoding="utf-8") == "[config]\nspeed = 2.5\n"
     assert config.load(path)[0].speed == 2.5
 
 
 def test_ensure_on_a_second_call_after_creating(tmp_path):
     path = tmp_path / "c.conf"
-    assert config.ensure(path) is True
-    assert config.ensure(path) is False
+    assert config.ensure(path) == [path]
+    assert config.ensure(path) == []
 
 
 def test_ensure_with_no_argument_uses_default_path(tmp_path):
-    assert config.ensure() is True
+    assert config.ensure() == [tmp_path / "sandbox.conf"]
     assert (tmp_path / "sandbox.conf").exists()
-    assert config.ensure() is False
+    assert config.ensure() == []
 
 
 def test_ensure_never_raises_on_an_unwritable_home(tmp_path):
@@ -1250,19 +1251,50 @@ def test_ensure_never_raises_on_an_unwritable_home(tmp_path):
     home.mkdir()
     home.chmod(stat.S_IRUSR | stat.S_IXUSR)  # read + execute, no write
     try:
-        assert config.ensure(home / ".readaloud.conf") is False
+        assert config.ensure(home / ".readaloud.conf") == []
+        assert config.ensure(home / ".readaloud") == []
     finally:
         home.chmod(stat.S_IRWXU)
 
 
 def test_ensure_never_raises_on_a_missing_parent(tmp_path):
-    assert config.ensure(tmp_path / "no" / "such" / "dir" / "c.conf") is False
+    assert config.ensure(tmp_path / "no" / "such" / "dir" / "c.conf") == []
 
 
-def test_ensure_never_raises_on_a_directory(tmp_path):
+def test_ensure_fills_a_directory_with_the_shipped_files(tmp_path):
+    d = tmp_path / ".readaloud"
+    written = config.ensure(d)
+    assert [p.name for p in written] == list(config.SHIPPED_FILES)
+    assert sorted(p.name for p in d.iterdir()) == sorted(config.SHIPPED_FILES)
+    for name in config.SHIPPED_FILES:
+        assert (d / name).read_text(encoding="utf-8") == config.template(name)
+    # a second run writes only what is missing, and clobbers nothing
+    (d / "python.conf").unlink()
+    (d / "readaloud.conf").write_text("[config]\nspeed = 2\n", encoding="utf-8")
+    assert [p.name for p in config.ensure(d)] == ["python.conf"]
+    assert config.load(d)[0].speed == 2.0
+    assert config.ensure(d) == []
+
+
+def test_the_shipped_directory_loads_clean_and_lays_python_over_code(tmp_path):
+    d = tmp_path / "prefs"
+    config.write_template(d)
+    cfg, warnings = config.load(d)
+    assert warnings == []
+    assert [t.suffix for t in cfg.types] == [".code", "python"]
+    py = cfg.for_file("app.py")
+    assert py.markdown is False and ("==", "is equal to") in py.pronunciations
+    assert ("str", "string") in py.pronunciations and py.syntax
+    assert cfg.for_file("lib.rs").markdown is False and not cfg.for_file("lib.rs").syntax
+    assert cfg.for_file("notes.md").markdown is True
+    assert config.write_template(tmp_path / "one.conf") == tmp_path / "one.conf"
+    assert (tmp_path / "one.conf").read_text(encoding="utf-8") == config.template()
+
+
+def test_ensure_fills_an_existing_directory_whatever_its_name(tmp_path):
     d = tmp_path / "c.conf"
     d.mkdir()
-    assert config.ensure(d) is False
+    assert [p.name for p in config.ensure(d)] == list(config.SHIPPED_FILES)
     assert d.is_dir()
 
 

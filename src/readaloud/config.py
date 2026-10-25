@@ -66,6 +66,7 @@ __all__ = [
     "FileType",
     "DEFAULT_PATH",
     "MAIN_FILE",
+    "SHIPPED_FILES",
     "PRONUNCIATIONS",
     "PARTS",
     "SHAPES",
@@ -73,6 +74,7 @@ __all__ = [
     "TEMPLATE_PARTS",
     "TEMPLATE_PRONUNCIATIONS",
     "TEMPLATE_SHAPES",
+    "templates",
     "expand_parts",
     "SECTION",
     "ensure",
@@ -87,7 +89,11 @@ MAIN_FILE = "readaloud.conf"
 
 #: Where the preferences live.  Resolved at call time (``path or DEFAULT_PATH``)
 #: so tests can point the module elsewhere.
-DEFAULT_PATH = Path.home() / ".readaloud.conf"
+DEFAULT_PATH = Path.home() / ".readaloud"
+
+#: The files a first run writes into the directory, in `templates`' order:
+#: the general one first, then the code one, then a language's.
+SHIPPED_FILES = (MAIN_FILE, "code.conf", "python.conf")
 
 SECTION = "config"
 
@@ -1288,11 +1294,30 @@ def _shown(text: str, limit: int = 40) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def template() -> str:
-    """The file a first run and ``--write-config`` write: the one shipped in
-    the package as ``readaloud/readaloud.conf``, as it is."""
-    return (resources.files(__package__) / "readaloud.conf").read_text(
+def template(name: str = MAIN_FILE) -> str:
+    """One of the files a first run and ``--write-config`` write, shipped in
+    the package under ``readaloud/configs/``, as it is: `MAIN_FILE` by
+    default."""
+    return (resources.files(__package__) / "configs" / name).read_text(
         encoding="utf-8")
+
+
+def templates() -> dict[str, str]:
+    """Every file a first run writes, by name, in the order written."""
+    return {name: template(name) for name in SHIPPED_FILES}
+
+
+def _is_directory(target: Path) -> bool:
+    """Whether `target` is, or is meant to be, a preferences directory: one
+    that exists, or a path without a ``.conf`` suffix."""
+    try:
+        if target.is_dir():
+            return True
+        if target.exists():
+            return False
+    except OSError:
+        return False
+    return target.suffix.lower() != ".conf"
 
 
 def _shipped() -> tuple[tuple[tuple[str, str], ...], ...]:
@@ -1309,26 +1334,45 @@ TEMPLATE_PRONUNCIATIONS, TEMPLATE_PARTS, TEMPLATE_SHAPES = _shipped()
 
 
 def write_template(path: Path | None = None) -> Path:
-    """Write `template` to `path` (overwriting it) and return the path."""
+    """Write the shipped files to `path` (overwriting them) and return the
+    path: every file of `templates` into a directory, the general one alone
+    into a ``.conf`` file."""
     target = Path(path) if path is not None else DEFAULT_PATH
-    target.write_text(template(), encoding="utf-8")
+    if _is_directory(target):
+        target.mkdir(parents=True, exist_ok=True)
+        for name, text in templates().items():
+            (target / name).write_text(text, encoding="utf-8")
+    else:
+        target.write_text(template(), encoding="utf-8")
     return target
 
 
-def ensure(path: Path | None = None) -> bool:
-    """Create the template if absent.  True if it created one.
+def ensure(path: Path | None = None) -> list[Path]:
+    """Create the shipped files that are absent: the directory and each of
+    `templates` for a directory, the general file for a ``.conf`` path.
+    Returns the paths written, so an empty list when nothing was.
 
     Never raises -- an unwritable HOME must not stop the reader from starting.
     """
+    target = Path(path) if path is not None else DEFAULT_PATH
+    written: list[Path] = []
     try:
-        target = Path(path) if path is not None else DEFAULT_PATH
-        if target.exists():
-            return False
-        # "x" rather than write_template's truncate: two readaloud processes
-        # starting at once must not leave a half-written file, and an existing
-        # file is never clobbered even if it appears between the two calls.
-        with open(target, "x", encoding="utf-8") as fh:
-            fh.write(template())
-        return True
-    except Exception:  # noqa: BLE001 - unwritable HOME, directory in the way, ...
-        return False
+        if _is_directory(target):
+            target.mkdir(parents=True, exist_ok=True)
+            wanted = [(target / name, text) for name, text in templates().items()]
+        else:
+            wanted = [(target, template())]
+        for file, text in wanted:
+            try:
+                # "x" rather than write_template's truncate: two readaloud
+                # processes starting at once must not leave a half-written
+                # file, and an existing file is never clobbered even if it
+                # appears between the two calls.
+                with open(file, "x", encoding="utf-8") as fh:
+                    fh.write(text)
+                written.append(file)
+            except FileExistsError:
+                continue
+    except Exception:  # noqa: BLE001 - unwritable HOME, a file in the way, ...
+        pass
+    return written
