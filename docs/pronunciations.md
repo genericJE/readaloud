@@ -258,6 +258,7 @@ type/binary_operator = $left or $right
 list_splat_pattern = ${0|*=star}
 attribute = $object dot $attribute
 decorator = ${0|@=decorator}
+comment = ${0|#=}
 
 [pronunciations]
 str = string
@@ -323,6 +324,12 @@ so a class is a `class_definition` with the fields `name`, `superclasses` and `b
 above. To have a kind read as written again, delete its line; to keep it as written and
 stop deeper rules too, give it an empty wording (`string =`). Neovim's `:InspectTree`
 shows the same tree.
+
+The shipped `python.conf` reads a comment without its marker, `comment = ${0|#=}`: `x = 3
+# the limit` is "x equals 3 the limit", not "hash the limit", while a `#` inside a string,
+which is no comment node, stays. The marker is each language's own (`//` is a comment in
+Rust and floor division in Python), so the rule belongs in the language's file, as
+`comment = ${0|//=}` would in a `rust.conf`.
 
 What a rule says goes through your entries and patterns once more, like a shape's wording:
 a pattern `/__(\w+)__/ = dunder $1` under `[pronunciations]` turns the `__init__` a `def`

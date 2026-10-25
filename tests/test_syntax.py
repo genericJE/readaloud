@@ -192,6 +192,23 @@ def test_what_a_rule_says_goes_through_the_patterns_once(python):
                         "self dot dunder dict = dunder name")
 
 
+def test_the_shipped_code_layer_reads_a_comment_without_its_marker(tmp_path, python):
+    from readaloud import config
+    from readaloud.document import Document
+    from readaloud.pronounce import Lexicon
+
+    config.write_template(tmp_path / "prefs")
+    cfg = config.load(tmp_path / "prefs")[0].for_file("x.py")
+    assert ("comment", "${0|#=}") in cfg.syntax
+    assert not config.load(tmp_path / "prefs")[0].for_file("lib.rs").syntax
+    lex = Lexicon(cfg.pronunciations, cfg.shape_patterns, cfg.sub_patterns, python, cfg.syntax)
+    doc = Document.from_text("x = 3  # the limit, see #12 and a // b\ns = '# kept'\n",
+                             pronunciations=lex, markdown=False)
+    # the # goes; // is floor division in Python and stays as written
+    assert doc.chunks[0].text == ("x equals 3  the limit, see 12 and a floor divided by b\n"
+                                  "s equals '# kept'")
+
+
 def test_an_empty_rule_says_the_node_as_written_and_claims_it(python):
     (chunk,) = read("def f(a='x'):\n    pass\n", python, [("string", "")],
                     pairs=[("x", "ex"), ("f", "eff")])

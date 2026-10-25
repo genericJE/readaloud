@@ -20,6 +20,8 @@
   mdcat and reads its tables cell by cell, falling back to stripped text with a notice when
   mdcat is not installed. A pipe or TEXT gets the same with `--conf md`; `--conf NAME`
   reads any input with the configs of a `.NAME` file or the layer NAME.
+- A Python comment is read without its `#`: a `[syntax]` rule in the shipped
+  `python.conf`; a language's file carries its own marker.
 
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:

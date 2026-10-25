@@ -94,7 +94,9 @@ has files to copy and a place to share yours. The shipped layers:
   equal to`, `-> = arrow`), which hold for every language and would misfire in prose.
 - **`plain`**, in `readaloud.conf`: `format = plain`, for `.txt`.
 - **`markdown`**, in `markdown.conf`: `format = markdown` and `renderer = mdcat`.
-- **`python`**, in `python.conf`: how a `def`, a decorator or an attribute is said.
+- **`python`**, in `python.conf`: how a `def`, a decorator, an attribute or a comment is
+  said (a comment without its `#`; the marker is each language's own, so the rule is
+  the language's).
 
 A file gets its layers when readaloud reads it by name, `readaloud app.py` or `-f app.py`;
 piped input and TEXT have no name, so only `readaloud.conf` applies to them, unless
@@ -412,6 +414,8 @@ dictionary_splat_pattern = ${0|**=star star}
 attribute = $object dot $attribute
 decorator = ${0|@=decorator}
 dotted_name = ${*|.=dot}
+# a comment without its #: "the limit", not "hash the limit"; a // in it stays
+comment = ${0|#=}
 
 [pronunciations]
 # what is Python's alone; the operators every language shares are readaloud.conf's [pronunciations.code]
