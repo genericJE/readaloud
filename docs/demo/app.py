@@ -13,3 +13,7 @@ class Reader:
         if path is None:
             return self.default
         return self.configs[Path(path).suffix]
+
+
+def read(path: str) -> Reader:
+    return Reader(Path(path))

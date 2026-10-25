@@ -23,7 +23,7 @@ Enter
 
 # the model loads in about two seconds, shown as it is; the rest is the
 # reading, cut to length by align.py
-Sleep 34s
+Sleep 38s
 
 Hide
 Type "q"
