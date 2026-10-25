@@ -8,7 +8,7 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | --- | --- | --- |
 | `TEXT...` | | text to read, joined with spaces |
 | `-f`, `--file FILE` | | read `FILE` instead of stdin (`-` means stdin); a lone `TEXT` that names a file is read as that file too. The file's extension picks its configs and grammar through `[files]`, see [File types](configuration.md#file-types) |
-| `--conf NAME` | | read the input with the configs for a `.NAME` file (`--conf md`), or with the config `NAME` (`--conf python`), whatever it is called: a pipe of Markdown, a `.txt` of Python |
+| `--conf NAME` | | read the input with the configs for a `.NAME` file (`--conf md`, `--conf py`), or with the one layer `NAME` (`--conf python`), whatever it is called: a pipe of Markdown, a `.txt` of Python |
 | `-v`, `--voice NAME` | `af_heart` | Kokoro voice (see below) |
 | `-s`, `--speed X` | `1.0` | speech rate multiplier, 0.5 to 3.0 in the TUI |
 | `--sentences N` | `4` | max sentences per chunk |
@@ -23,10 +23,11 @@ Every command line flag readaloud takes, and the voices it can speak in.
 | `--media-keys` / `--no-media-keys` | on | take over the system play/pause button, or leave it alone |
 | `--config PATH` | `~/.readaloud/` | read the preferences from `PATH`, a directory or a single `.conf` file, instead |
 | `--no-config` | | ignore the preferences; built-in defaults only |
-| `--write-config` | | write the shipped files (`readaloud.conf`, `markdown.conf`, `python.conf`, overwriting) and exit |
+| `--write-config` | | write the shipped files (`readaloud.conf`, `markdown.conf`, `python.conf`, overwriting) and exit; into a `.conf` path, `readaloud.conf` alone |
 | `--list-voices` | | print the voices for the chosen language |
 | `--tree` | | print the syntax tree of `FILE` through its grammar, the node kinds and fields a `[syntax]` rule can name, and exit (see [Syntax](pronunciations.md#syntax)) |
 | `--list-devices` | | print the audio output devices |
+| `--version` | | print the version and exit |
 
 The "Default" column is the *built-in* default. Anything set in
 [`~/.readaloud/`](configuration.md) wins over it, and an explicit flag wins over both.
@@ -45,7 +46,7 @@ the first letter of the voice name unless you pass `--lang`.
 | Hindi (`h`) | `hf_alpha` `hf_beta` `hm_omega` `hm_psi` |
 | Italian (`i`) | `if_sara` `im_nicola` |
 | Japanese (`j`) | `jf_alpha` `jf_gongitsune` `jf_nezumi` `jf_tebukuro` `jm_kumo` |
-| Portuguese (`p`) | `pf_dora` `pm_alex` `pm_santa` |
+| Brazilian Portuguese (`p`) | `pf_dora` `pm_alex` `pm_santa` |
 | Mandarin (`z`) | `zf_xiaobei` `zf_xiaoni` `zf_xiaoxiao` `zf_xiaoyi` `zm_yunjian` `zm_yunxi` `zm_yunxia` `zm_yunyang` |
 
 `af_heart` is the default and the best-behaved. Non-English languages need misaki's extra

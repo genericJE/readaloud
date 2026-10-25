@@ -1,7 +1,8 @@
 # Pronunciations
 
-The `[pronunciations]` section of `~/.readaloud/readaloud.conf`: how to say a word or phrase your
-way.
+How readaloud says things your way: a word or phrase (`[pronunciations]`), a shape of text
+such as a file with its line number (`[shapes]`, `[parts]`), and source code through its
+grammar (`[syntax]`).
 
 Kokoro does not always say a word the way you would. It reads the `id` in `user.id` to
 rhyme with "kid" and runs `ASP.NET` together into "aspnet". The `[pronunciations]` section
@@ -30,12 +31,12 @@ A fresh `~/.readaloud/readaloud.conf` already holds about 125 of these, each one
 was measured saying wrongly: the common file types (`main.py` is "main dot pie",
 `config.yml` is "config dot yaml", `README.md` keeps its name instead of being spelled
 out), `id` and `ids`, the quotes that stand for nothing (`''` is "empty string"),
-languages and tools (`C#`, `.NET`, `json`, `YAML`, `systemd`,
-`journalctl`, `kubectl`, `k8s`, `redis`, `postgresql`, `PyPI`), and what the punctuation
-of code is called (`!=`, `->`, `=>`, `::`, `&&`, `||`), the URL schemes Kokoro says
-nothing for (`https`, `ssh`) and the common web domains (`.org`, `.io`, `.co.uk`). They are
-ordinary lines in your
-file: delete one to be rid of it, or edit it to say it your way. Anything readaloud
+languages and tools (`C#`, `.NET`, `YAML`, `systemd`, `journalctl`, `kubectl`, `k8s`,
+`redis`, `postgresql`, `PyPI`), code punctuation that turns up in prose (`!=`, `::`, `&&`,
+`||`; the operators of a source file, `->` and `==`, are the `code` layer's), the URL
+schemes Kokoro says nothing for (`https`, `ssh`) and the common web domains (`.org`, `.io`,
+`.uk`). They are ordinary lines in your file: delete one to be rid of it, or edit it to say
+it your way. Anything readaloud
 already says correctly is deliberately absent, so `SQL` stays "sequel", `nginx` stays
 "engine x" and `C++` stays "C plus plus".
 
@@ -126,7 +127,7 @@ slashes and says how to read it, naming what the pattern's groups matched:
 | --- | --- |
 | `https://example.com:8443/status?verbose=1` | H T T P S example dot com port 8443 slash status?verbose=1 |
 | `https://example.com:8443/docs/v2/index.html` | H T T P S example dot com port 8443 slash docs slash v2 slash index dot H T M L |
-| `localhost:8080`, `192.168.178.88:8123`, `example.com:443` | local host port 8080 |
+| `localhost:8080`, `192.168.178.88:8123`, `example.com:443` | local host port 8080; 192.168.178.88 port 8123; example dot com port 443 |
 | `main.rs:12:5` | main dot R S line 12, column 5 |
 | `settings.py:281-283` | settings dot pie lines 281 to 283 |
 | `settings.py:498` | settings dot pie line 498 |
@@ -135,8 +136,8 @@ slashes and says how to read it, naming what the pattern's groups matched:
 readaloud has no shape of its own: those seven lines are what a fresh `readaloud.conf`
 comes with, and you add, change and delete them like any other line. A file with no
 `[shapes]` section has none, which is the case for a file written by an older readaloud;
-copy this section and the `[parts]` section below into it, before `[pronunciations]`.
-`--no-config` reads with no shapes, as with no pronunciations.
+copy this section and the `[parts]` section below into it. `--no-config` reads with no
+shapes, as with no pronunciations.
 
 - **A shape starts where a word starts and ends where a word ends,** or just past the
   punctuation after a word, so it sees the whole of `settings.py:498`, both sides of the
@@ -165,17 +166,18 @@ copy this section and the `[parts]` section below into it, before `[pronunciatio
 - **An empty wording says the text as written.** That is not the same as no line: the
   shape still claims the text, so a pattern such as `/:(\d+)/` cannot reach into a time.
 - **Your entries win.** An entry for the same text (`settings.py:498 = the settings`)
-  beats the shape. A `[syntax]` rule is the other way round: the most specific word there
-  is for a node, it beats an entry for the same text (see [Syntax](#syntax)).
+  beats the shape. A `[syntax]` rule is the other way round: it beats an entry for the
+  same text (see [Syntax](#syntax)).
 
 In a wording, `$name` or `${name}` is what the group `(?<name>...)` matched, `$1` and so on
 a group by number, `$0` the whole match, and `$$` a dollar sign. `${name|from=to}` is the
 group with every `from` in it said as the word `to`, so `${path|/=slash}` says each slash
 of a path, however many there are; more replacements can follow, as in
 `${path|/=slash|.=dot}`, and each is made once, in what the group matched. The same works
-in the wording of a pattern under `[pronunciations]`. A line that cannot be used
-is reported with its line number and costs only itself: a pattern that will not compile or
-could match empty text, a group the pattern does not have, a part that does not exist.
+in the wording of a pattern under `[pronunciations]`. A line that cannot be used (a pattern
+that will not compile or could match empty text, a group the pattern does not have, a part
+that does not exist) is reported with its line number and skipped, like any other line
+readaloud cannot use (see [Patterns](#patterns)).
 
 ### Named shapes
 
@@ -214,10 +216,10 @@ nothing. A shape may name only the named shapes above it, one per `${...}`, and 
 shapes may call on one another eight deep. `dflt` is a named shape, not `|=...`, because
 a replacement cannot start with `=`. `[^,=)]` keeps the example short: a type such as
 `dict[str, int]` breaks at its comma, and `*args` keeps its star unless you add `|*=star`.
-A shape is found within one stretch of text: a blank line ends one, and so can a long
-paragraph, which is cut at about 380 characters. Shapes like these belong to one language,
-so they go in that language's file, `~/.readaloud/python.conf`, which applies only to
-`.py` files (see [file types](configuration.md#file-types)).
+A shape is found within one chunk of text: a blank line ends one, and so does the `chars`
+limit (380 characters by default). Shapes like these belong to one language, so they go
+in that language's file, `~/.readaloud/python.conf`, which applies to `.py` and `.pyi`
+files and to what `--conf py` reads (see [file types](configuration.md#file-types)).
 
 ## Syntax
 
@@ -226,26 +228,27 @@ For source code, a shape is the wrong tool: a parameter list can hold commas ins
 `~/.readaloud/python.conf` reads a `.py` file through a real parser instead, and says the
 parts of its syntax tree the way you describe them, node kind by node kind.
 
-readaloud ships the parser engine ([tree-sitter](https://tree-sitter.github.io/)) and no
-grammar. A language's grammar comes from the `tree-sitter-<language>` package, prebuilt
-for macOS, Linux and Windows, installed next to readaloud:
+readaloud ships the parser engine ([tree-sitter](https://tree-sitter.github.io/)) and, in
+the Homebrew install, the Python grammar (the `grammars` extra). Another language's
+grammar is its `tree-sitter-<language>` package, prebuilt for macOS, Linux and Windows,
+installed next to readaloud; from a checkout:
 
 ```bash
-uv tool install readaloud --with tree-sitter-python
+uv tool install --editable '.[mediakeys,grammars]' --with tree-sitter-rust
 ```
 
-The Homebrew install ships the Python grammar already (the `grammars` extra); for another
-language, `brew`'s readaloud needs that language's package installed into its own Python,
-or a `parsers` directory. Neovim users may point the `parsers` setting at their `nvim-treesitter/parser` directory
-instead and install nothing. The grammar is picked by the file's suffix (`.py` is `python`,
-`.rs` is `rust`, and so on, as the `[files]` table of `readaloud.conf` says; the
-`language` setting overrides it),
-and only a named file (`-f app.py`) has one: piped text has no suffix. Without a grammar,
-or with a rule the grammar has no node or field for, the status bar says so and the file is
-read without the rules.
+`brew`'s readaloud needs the package installed into its own Python, or a `parsers`
+directory: Neovim users may point that setting at their `nvim-treesitter/parser` directory
+and install nothing. The grammar is picked by the file's suffix (`.py` is `python`, `.rs`
+is `rust`, and so on, as the `[files]` table of `readaloud.conf` says; the `language`
+setting overrides it), so a named file (`readaloud app.py`) has one and a pipe has none
+unless `--conf py` gives it one. Without a grammar the status bar says so and the file is
+read without the rules; a rule the grammar has no node or field for is reported and
+dropped, the others still apply.
 
-The shipped `~/.readaloud/python.conf` (with `format = code` coming from the `code` layer
-of `readaloud.conf`, since `[files]` says `.py = code python`):
+Most of the shipped `~/.readaloud/python.conf` (in full in
+[Configuration](configuration.md#pythonconf); `format = code` comes from the `code` layer
+of `readaloud.conf`, since `[files]` says `.py .pyi = code python`):
 
 ```ini
 [syntax]
@@ -287,12 +290,15 @@ in full the same way, and `$*` its named parts in order with the text between th
 and a field's own, never inside a part (the comma of a `dict[str, int]` is not a
 parameter's comma) and never to a rule's own words. A field left out of the wording is left
 unsaid, so a `def`'s rule names `$body` to keep its body. An empty wording says the node as
-written and keeps every rule off it.
+written and keeps every rule off it; a wording whose replacements leave nothing
+(`comment = ${0|#=}` on a bare `#`) says nothing, and the text is then neither read nor
+reached by an entry.
 
 A file read through a grammar is also coloured by it: keywords, strings, comments, function
 and type names, in the terminal's own colours, from the `highlights.scm` query the grammar
 package ships (or the one under `queries/<language>/` next to a Neovim `parser` directory).
-`highlight = no` under `[config]` or `[config.<ext>]`, or `--no-color`, leaves the file plain.
+`highlight = no` under `[config]` or a layer's `[config.<name>]`, or `--no-color`, leaves the
+file plain.
 Colouring needs no `[syntax]` rules: a grammar alone is enough.
 
 ### Changing how a piece of code is read
@@ -328,22 +334,19 @@ above. To have a kind read as written again, delete its line; to keep it as writ
 stop deeper rules too, give it an empty wording (`string =`). Neovim's `:InspectTree`
 shows the same tree.
 
-The shipped `python.conf` reads a comment without its marker, `comment = ${0|#=}`: `x = 3
-# the limit` is "x equals 3 the limit", not "hash the limit", while a `#` inside a string,
-which is no comment node, stays. The `string_start` and `string_end` rules drop a
-docstring's triple quotes the same way: a rule may say nothing at all, and the text it
-covers is then neither read nor reached by an entry. The marker is each language's own (`//` is a comment in
-Rust and floor division in Python), so the rule belongs in the language's file, as
-`comment = ${0|//=}` would in a `rust.conf`.
+The shipped `python.conf` reads a comment without its marker, `comment = ${0|#=}`:
+`x = 3  # the limit` is "x equals 3 the limit", not "hash the limit", while a `#` inside a
+string, which is no comment node, stays. The `string_start` and `string_end` rules drop a
+triple-quoted string's quotes the same way. The marker is each language's own (`//` is a
+comment in Rust and floor division in Python), so the rule belongs in the language's file,
+as `comment = ${0|//=}` would in a `rust.conf`.
 
 What a rule says goes through your entries and patterns once more, like a shape's wording:
 a pattern `/__(\w+)__/ = dunder $1` under `[pronunciations]` turns the `__init__` a `def`
 rule says into "dunder init". Each spoken word lights the word it came from, as a shape's
-does, and a line break between two words is kept, so a body keeps its lines. A `def` whose body runs past the chunk being
-read is said as far as the chunk goes. Not in any tree: whether `a | b` is two sets or two
-integers; that takes a type checker, not a parser.
-
-### Parts
+does, and a line break between two words is kept, so a body keeps its lines. A `def` whose
+body runs past the chunk being read is said as far as the chunk goes. Not in any tree:
+whether `a | b` is two sets or two integers; that takes a type checker, not a parser.
 
 The shapes are built from parts: named pieces of pattern under `[parts]`, which a shape,
 or a part further down, uses as `%{name}`. A fresh file comes with these:
@@ -379,6 +382,42 @@ means one or the other however many `|` each holds. A part may hold named groups
 `hostport` does, so a shape using it can say `$host` and `$port`; such a part can appear
 once in a shape, since a name can only name one group.
 
+### Parts
+
+The shapes are built from parts: named pieces of pattern under `[parts]`, which a shape,
+or a part further down, uses as `%{name}`. A fresh file comes with these:
+
+```ini
+[parts]
+ext = [A-Za-z]\w*
+file = \S+\.%{ext}
+web = com|org|net|edu|gov|mil|int|info|biz|io|dev|ai|co|me|tv
+newweb = cloud|tech|online|site|xyz
+europe = de|uk|eu|fr|nl|ch|at|se|no|fi|dk|it|es|pt|pl|cz|be|ie
+world = jp|cn|kr|in|us|ca|au|nz|br|ru
+private = local|localdomain|lan|home|internal|intranet|corp
+reserved = arpa|test|example|invalid
+domain = %{web}|%{newweb}|%{europe}|%{world}|%{private}|%{reserved}
+name = [A-Za-z][\w-]*(?:\.[A-Za-z][\w-]*)*\.(?i:%{domain})
+octet = 25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d
+ipv4 = %{octet}\.%{octet}\.%{octet}\.%{octet}
+host = localhost|%{ipv4}|%{name}
+port = 6553[0-5]|655[0-2]\d|65[0-4]\d\d|6[0-4]\d{3}|[1-5]\d{4}|\d{1,4}
+hostport = (?<host>%{host}):(?<port>%{port})
+scheme = (?<scheme>https?|ftps?|ssh|git)://
+path = [^\s<>"'|)\]]*[^\s<>"'|)\].,;:!?]
+hour = [01]?\d|2[0-3]
+minute = [0-5]\d
+```
+
+They are lines like the shapes: add a domain to `web` or `private`, give `ext` your own
+file extensions, or add a part of your own. readaloud has none built in. A part may use
+only the parts on the lines above it, so they can never go round in a circle, and a shape
+may use any of them. Each `%{name}` is put in as a group of its own, so `%{web}|%{world}`
+means one or the other however many `|` each holds. A part may hold named groups of its
+own, as `hostport` does, so a shape using it can say `$host` and `$port`; such a part can
+appear once in a shape, since a name can only name one group.
+
 ## Patterns
 
 For text readaloud has no shape for, put a [regular expression][regex] between slashes on
@@ -392,9 +431,8 @@ the left, and on the right say how to read what it matched, naming its groups:
 Like a shape's wording, what a pattern says goes through your entries once more, which is
 why the second example says "dot pie"; the entries alone, not the patterns, so a pattern
 never reads its own output. What those entries say is final, so nothing is read more than
-twice. A pattern takes its turn with the other entries, left to
-right, and a shape is only ever a whole word, so a pattern can still reach where a shape
-does not.
+twice. A shape is only ever a whole word, so a pattern can still reach where a shape does
+not.
 
 - **Groups.** `$1`, `$2` and so on are what the pattern's parentheses captured, and `$0`
   is the whole match. Write `${1}` when a letter or digit follows (`${1}st`, since `$1st`
@@ -408,7 +446,7 @@ does not.
   other entries match at the same place, the longest match wins. A tie counts the pattern
   as text with a capital, and then the later line wins.
 - **A match must say something.** One whose groups leave no letter or digit to say is
-  passed over, and one that says exactly what it matched is a guard, like `macOS = macOS`.
+  passed over.
 - **What a pattern can hold.** It is a regular expression for Rust's [`regex`][regex]
   crate, which never backtracks, so no pattern can slow readaloud down however much text
   it reads. That leaves out lookahead and lookbehind (`(?=...)`, `(?<=...)`) and
@@ -416,7 +454,8 @@ does not.
   `*`, `+`, `?`, `{2,4}`, `^` and `$` at the ends of a chunk.
 
 A pattern that will not compile, or that could match empty text (`/\d*/`), is reported
-with its line number and skipped, like any other line readaloud cannot use:
+with its line number and skipped, like any other line readaloud cannot use (see
+[below](#when-a-line-cannot-be-used)):
 
 ```
 readaloud: /Users/you/.readaloud/readaloud.conf: [pronunciations] line 101: the pattern /:(\d+/ cannot be used: unclosed group
@@ -435,14 +474,16 @@ Some tips:
   `ids = IDs`.
 - An entry that says its text as written guards it: `macOS = macOS` keeps `OS = O S` off
   the "OS" in "macOS". A guard changes nothing in any case it matches, so a lowercase
-  `macos = macos` works too.
+  `macos = macos` works too, and so does a pattern that says exactly what it matched.
 - Try an entry before relying on it. `readaloud 'user.id'` reads just that with your
   pronunciations, and `readaloud --no-config 'user.id'` reads it without them.
 
 A pronunciation is text for Kokoro to read, never phonemes: `id = /aɪdiː/` and misaki's
 `[id](/ˈaɪdi/)` links are refused with a warning, so write the word the way it sounds. Nor
 can a pronunciation make readaloud skip a word, because it needs at least one letter or
-digit.
+digit; a `[syntax]` rule can (see [Syntax](#syntax)).
+
+## When a line cannot be used
 
 A line readaloud cannot use is reported with its line number, like any other problem in
 the file, and skipped. It costs only itself: every other pronunciation and every setting
@@ -453,19 +494,17 @@ readaloud: /Users/you/.readaloud/readaloud.conf: [pronunciations] line 99: 'kube
 ```
 
 The same text on two lines is reported too, and the later line wins; `id`, `Id` and `ID`
-are three different entries. An existing `readaloud.conf` is never touched, so a file
-written by an older readaloud has neither the shipped entries nor the `[pronunciations]`
-line: add the line above your own entries, since an entry left under `[config]` is
-ignored with a warning that it belongs under `[pronunciations]`. To take the shipped ones,
-copy them from a fresh file (`readaloud --write-config` writes one, discarding your
-edits, so save the file first if you have any), or from
-[Configuration](configuration.md#the-file-a-first-run-writes). A fresh file ends
-with `[pronunciations]`, so a setting added at the bottom of it lands there: `speed = 1.5`
-is then reported as a setting to move under `[config]`, not taken for a word (quote it,
-`"speed" = spead`, if you do mean the word). A misspelled heading such as
-`[pronunciation]` is ignored with a warning
-that names the section it probably meant, and past five problems the rest are counted
-rather than listed.
+are three different entries. An entry left under `[config]` is ignored with a warning that
+it belongs under `[pronunciations]`. An existing file is never rewritten, so one written
+by an older readaloud keeps its entries and lacks the newer shipped ones: copy those from
+[Configuration](configuration.md#the-files-a-first-run-writes), or have
+`readaloud --config /tmp/fresh --write-config` write a fresh set to compare against
+(`--write-config` on its own overwrites the three shipped files in `~/.readaloud/`). A
+fresh `readaloud.conf` ends with `[pronunciations]`, so a setting added at the bottom of it
+lands there: `speed = 1.5` is then reported as a setting to move under `[config]`, not
+taken for a word (quote it, `"speed" = spead`, if you do mean the word). A misspelled
+heading such as `[pronunciation]` is ignored with a warning that names the section it
+probably meant, and past five problems the rest are counted rather than listed.
 
 [regex]: https://docs.rs/regex/latest/regex/#syntax
 

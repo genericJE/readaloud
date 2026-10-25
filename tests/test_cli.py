@@ -399,7 +399,7 @@ def test_markdown_without_mdcat_is_read_as_written_with_a_notice(
     assert doc.plain[0] == "Title"             # format = markdown: stripped
     assert launched["notices"] == [
         "config: renderer = mdcat, but mdcat is not installed (brew install "
-        "mdcat); the Markdown is read as written"]
+        "mdcat); the Markdown is read without it"]
 
 
 def test_reading_without_a_renderer_never_looks_for_mdcat(monkeypatch, launched):
@@ -672,6 +672,27 @@ class RecordingEngine:
 
     def close(self):
         pass
+
+
+def test_save_without_mdcat_says_so_on_stderr(
+        tmp_path, monkeypatch, capsys, stub_voices, md_conf):
+    """The missing-mdcat notice is raised before the headless warnings are
+    printed, so --save, which has no status bar, still shows it."""
+    def never(*a, **k):  # pragma: no cover - must never run
+        raise AssertionError("nothing is rendered without mdcat")
+
+    monkeypatch.setattr("readaloud.speech.Engine", RecordingEngine)
+    monkeypatch.setattr("readaloud.markdown.find_mdcat", lambda: None)
+    monkeypatch.setattr("readaloud.markdown.render_markdown", never)
+    monkeypatch.setattr("readaloud.ui.read_stdin_text", lambda *a, **k: TEAM_MD)
+    target = tmp_path / "team.wav"
+    assert cli.main(["--conf", "md", "--save", str(target), "--config", md_conf]) == cli.EXIT_OK
+
+    out, err = capsys.readouterr()
+    assert out.startswith(f"wrote {target}")
+    assert (f"readaloud: {md_conf}: renderer = mdcat, but mdcat is not installed "
+            "(brew install mdcat); the Markdown is read without it\n") in err
+    assert target.exists()
 
 
 def test_save_renders_at_80_columns_and_warns_on_stderr(

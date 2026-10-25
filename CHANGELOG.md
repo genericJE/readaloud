@@ -7,30 +7,31 @@
   (`python.conf`, `rust.conf`), named after the grammar, with plain `[config]`,
   `[pronunciations]`, `[shapes]`, `[parts]` and `[syntax]` sections inside. The first run
   of this version moves an existing `~/.readaloud.conf` into the directory, section by
-  section, and says so. The three shipped files live in `src/readaloud/configs/`, where a
-  language's file can be shared.
+  section, deletes it and says so. The three shipped files live in
+  `src/readaloud/configs/`, where a language's file can be shared.
 - **`[files]` in `readaloud.conf` says which configs read a file**, by its extension:
   `.py .pyi = code python`, `.rs = code rust`, `.md = markdown`. Each name is a layer, the
   `[config.code]`-style sections in `readaloud.conf` plus a `<name>.conf`, laid over one
   another in that order; the last names the grammar. Adding Rust is one line and a
   `rust.conf`. The `code` layer, every source file's `format = code` and the words for the
   operators, lives in `readaloud.conf`.
-- **`-md` is gone.** `readaloud notes.md` reads the file: a lone argument that names a file
-  is that file, and `.md` gets `markdown.conf`, whose new `renderer = mdcat` draws it with
+- **`-md` and `--markdown` are gone** (a hint says what to do). `readaloud notes.md` reads
+  the file: a lone argument that names a file is that file, and `.md` gets
+  `markdown.conf`, whose new `renderer = mdcat` draws it with
   mdcat and reads its tables cell by cell, falling back to stripped text with a notice when
   mdcat is not installed. A pipe or TEXT gets the same with `--conf md`; `--conf NAME`
   reads any input with the configs of a `.NAME` file or the layer NAME.
-- A Python comment is read without its `#`, and a docstring without its `"""`: `[syntax]`
-  rules in the shipped `python.conf`; a language's file carries its own markers. A rule
-  may say nothing, and the text it covers is then neither read nor reached by an entry.
-  The two "triple quote" entries are gone from the shipped `readaloud.conf`.
-
+- A Python comment is read without its `#`, and a triple-quoted string without its quotes:
+  `[syntax]` rules in the shipped `python.conf`; a language's file carries its own markers.
+  A rule may say nothing, and the text it covers is then neither read nor reached by an
+  entry; a rule beats an entry of the same length, where a shape loses to one. The two
+  "triple quote" entries are gone from the shipped `readaloud.conf`.
 - `readaloud --tree app.py` prints a file's syntax tree, the node kinds and fields a
   `[syntax]` rule can name, and the docs say how to change the reading of a piece of code:
   find its kind in the tree, write the line, delete it to go back.
 - The `markdown = yes|no` setting of 2.0 is `format = markdown | code | plain`: how plain
-  input is read. `code` is what `code.conf` sets; `plain` is new, for text that is neither
-  Markdown nor code and should keep its `*asterisks*`. The first run rewrites an old
+  input is read. `code` is what the `code` layer sets; `plain` is new, for text that is
+  neither Markdown nor code and should keep its `*asterisks*`. The first run rewrites an old
   `markdown = no` as `format = code`.
 - With `format = code`, a source file's indented lines are cut into chunks of at most
   `chars` like any paragraph, at line ends, instead of being read as one code block: a
@@ -39,9 +40,6 @@
   own, lit while they are spoken; before, their speech ran under the neighbouring word.
   A rule's opening words light the token before the node, so "and returns type" lights
   the `->` and "with a default of" the `=`.
-- A `code` file type: `[pronunciations.code]`, `[config.code]` and the other sections
-  ending in `.code` apply to every source file, between the general sections and the
-  suffix's own, so the words for operators are written once for all languages.
 
 ## 2.0.0 (2026-10-24)
 

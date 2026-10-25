@@ -17,9 +17,8 @@ say particular words, the `[shapes]` and `[parts]` sections how it says a file w
 line number or a host with its port, and a `[syntax]` section how it says a source file's
 syntax tree (see [Pronunciations](pronunciations.md)). The same sections in a language's
 file, or headed with a layer's name (`[config.code]`), apply to some files only (see
-[File types](#file-types)). The first
-run writes the three files readaloud ships, shown in full
-[below](#the-files-a-first-run-writes), and says so on stderr once:
+[File types](#file-types)). The first run writes the three files readaloud ships, shown
+in full [below](#the-files-a-first-run-writes), and says so on stderr:
 
 ```
 readaloud: created /Users/you/.readaloud/ -- your defaults live there now (readaloud.conf, markdown.conf, python.conf)
@@ -46,7 +45,8 @@ says what moved where. Any shipped file that was not among them is added beside 
 Settings go under `[config]` in `readaloud.conf`. A setting the file leaves out keeps its
 default.
 
-The section was called `[readaloud]` up to readaloud 1.2; a file that still says so is warned about and its settings are ignored until the header is renamed.
+The section was called `[readaloud]` up to readaloud 1.2; a file that still says so is
+warned about and its settings are ignored until the header is renamed.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ The section was called `[readaloud]` up to readaloud 1.2; a file that still says
 | `highlight` | `true` | Colour a source file by its grammar (see [Syntax](pronunciations.md#syntax)): keywords, strings, comments, names. `false` reads it in the terminal's plain colours; `--no-color` does too. |
 | `language` | empty | The grammar a file is read with, where that differs from the last layer `[files]` gives it (`python` for `.py`). |
 | `parsers` | empty | A directory of `<language>.so` parser files, as Neovim's `:TSInstall` builds them, tried when no `tree-sitter-<language>` package is installed. |
-| `renderer` | `none` | `mdcat` draws plain input with mdcat before it is read, tables cell by cell (see [Markdown](markdown.md)); `markdown.conf` sets it for `.md` files. Without mdcat installed the input is read as written, with a notice. |
+| `renderer` | `none` | `mdcat` draws plain input with mdcat before it is read, tables cell by cell (see [Markdown](markdown.md)); `markdown.conf` sets it for `.md` files. Without mdcat installed the input is read without it, its Markdown syntax stripped, with a notice. |
 | `media_keys` | `true` | Take over the system play/pause button. Needs the optional `[mediakeys]` extra; without it this does nothing. `false` is `--no-media-keys`. |
 
 ## File types
@@ -86,22 +86,23 @@ A layer is a name. Its sections are the ones headed with that name in any file
 directory (`python.conf`), both if both exist. The last layer of a line also names the
 grammar the file is parsed with (`python`, as in `tree-sitter-python` and Neovim's
 `parser/python.so`); the `language` setting overrides that. The shipped table maps the
-common languages; adding one is a line here and a `rust.conf` beside the others, and the
-[shipped directory](https://github.com/genericJE/readaloud/tree/main/src/readaloud/configs)
-has files to copy and a place to share yours. The shipped layers:
+common languages; adding one is a line here and a `rust.conf` beside the others, which
+the [shipped directory](https://github.com/genericJE/readaloud/tree/main/src/readaloud/configs)
+is the place to share. The shipped layers:
 
 - **`code`**, in `readaloud.conf`: `format = code` and the words for the operators (`== = is
   equal to`, `-> = arrow`), which hold for every language and would misfire in prose.
 - **`plain`**, in `readaloud.conf`: `format = plain`, for `.txt`.
 - **`markdown`**, in `markdown.conf`: `format = markdown` and `renderer = mdcat`.
-- **`python`**, in `python.conf`: how a `def`, a decorator, an attribute or a comment is
-  said (a comment without its `#`; the marker is each language's own, so the rule is
-  the language's).
+- **`python`**, in `python.conf`: how a `def`, a decorator, an attribute, a comment or a
+  triple-quoted string is said (a comment without its `#`; the marker is each language's
+  own, so the rule is the language's).
 
 A file gets its layers when readaloud reads it by name, `readaloud app.py` or `-f app.py`;
 piped input and TEXT have no name, so only `readaloud.conf` applies to them, unless
 `--conf NAME` says otherwise: `--conf md` reads the input with the layers of a `.md` file,
-`--conf python` with that one layer, whatever the input is called. The layers are laid over
+`--conf py` with a `.py` file's, `--conf python` with that one layer, whatever the input
+is called. The layers are laid over
 one another in the line's order, each winning over the one before:
 
 - a **`[config]`** setting replaces the one before; a setting left out keeps the earlier
@@ -116,20 +117,16 @@ one another in the line's order, each winning over the one before:
 A problem is reported with its file and section, as in `python.conf: [shapes] line 12:
 ...` or `[pronunciations.code] line 7: ...`. In a single `.conf` file (`--config one.conf`)
 every layer is written with headers, `[syntax.python]` beside `[pronunciations.code]`.
-
-The shipped `python.conf` is the worked example: it says a function signature, on one line
-or spread over several, through the Python grammar (see
-[Syntax](pronunciations.md#syntax)), so `readaloud app.py` says
-`def foo(bar: int, baz: str='') -> str:` as "function foo takes bar type int and baz type
-string with a default of empty string and returns type string".
+The shipped `python.conf` is the worked example, in [Syntax](pronunciations.md#syntax).
 
 ## The files a first run writes
 
 These are the files `~/.readaloud/` holds after the first run, and what `--write-config`
 writes. `readaloud.conf` leaves every setting at its default and fills in the `[files]`
 table, the parts, shapes and pronunciations, and the `code` and `plain` layers;
-`markdown.conf` and `python.conf` are what they say on the tin. Delete any line, or any
-file, you do not want.
+`markdown.conf` and `python.conf` are what they say on the tin. Delete any line you do
+not want; a shipped file is written again when it is missing, so empty one rather than
+delete it.
 
 ### readaloud.conf
 
@@ -212,11 +209,9 @@ minute = [0-5]\d
 /(?<hour>%{hour}):(?<minute>%{minute})(?::(?<second>%{minute}))?/ =
 
 [pronunciations.code]
-# the operators of a source file, which the voice would otherwise skip
-# the operators, which the voice would otherwise skip; said in every language
+# the operators of a source file, which the voice would otherwise skip; every language
 = = equals
 == = is equal to
-!= = not equals
 < = less than
 > = greater than
 <= = less than or equal to
@@ -371,7 +366,7 @@ PyPI = pie pea eye
 enum = ee num
 dateutils = date utils
 
-# what the punctuation of code is called
+# code punctuation that turns up in prose too
 != = not equals
 :: = colon colon
 && = and
@@ -419,7 +414,8 @@ string_start = ${0|"""=|'''=}
 string_end = ${0|"""=|'''=}
 
 [pronunciations]
-# what is Python's alone; the operators every language shares are readaloud.conf's [pronunciations.code]
+# what is Python's alone; the operators every language shares are in
+# readaloud.conf's [pronunciations.code]
 str = string
 := = walrus
 ```
@@ -433,12 +429,11 @@ moment a scroll is needed, so the view advances in stable jumps and the next chu
 around the middle of the screen.
 
 On a 30-row terminal with the defaults, `follow_lead = 20` and `follow_margin = 5`, the
-spoken word lands on about row 6, just below the top margin, and roughly 23 rows of unread
-text stay visible below it. It then drifts down to
-the bottom margin and the view jumps again. `follow_lead = 0` restores the old
-creep-one-row-at-a-time behaviour. The lead never scrolls so far that the spoken word
-would leave the screen, and it applies only when scrolling *down*: moving back up to a
-word behind the viewport is unchanged.
+spoken word lands on about row 6, just below the top margin, with roughly 23 rows of unread
+text below it; it drifts down to the bottom margin and the view jumps again.
+`follow_lead = 0` restores the old creep-one-row-at-a-time behaviour. The lead never
+scrolls the spoken word off the screen, and it applies only when scrolling *down*: moving
+back up to a word behind the viewport is unchanged.
 
 `c` uses this same placement without switching follow mode on, where `F` centres the word
 and follows it. Both keys are listed in [Reading](reading.md).

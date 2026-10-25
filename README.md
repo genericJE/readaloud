@@ -1,6 +1,6 @@
 # readaloud
 
-A terminal "Read Aloud" for Markdown files and anything you can pipe into it.
+A terminal "Read Aloud" for Markdown, source code, and anything you can pipe into it.
 
 `readaloud` chunks text into sentences, speaks it with [Kokoro-82M][kokoro] running
 locally on the Apple silicon GPU via [mlx-audio][mlx-audio], and highlights the word
@@ -22,14 +22,13 @@ https://github.com/user-attachments/assets/dc81e313-fac4-4525-bb81-b09d70b7059e
   highlight on the cell even where it wraps beside its neighbours. See
   [Markdown](docs/markdown.md).
 - **Reads styled terminal output.** Piped ANSI (`bat`, `git log --color`) keeps its
-  colours, bold, italics and OSC-8 hyperlinks on screen. For Markdown, name the file as
-  above: piped from a renderer, a table is read line by line instead of cell by cell. Raw Markdown gets its syntax
+  colours, bold, italics and OSC-8 hyperlinks on screen. Raw Markdown gets its syntax
   characters stripped so `##` and `**` are not spoken out loud.
 - **Word-level highlighting.** misaki's per-token timestamps are aligned back onto the
   original characters, so the highlight tracks the audio to within a few milliseconds
   rather than being interpolated.
-- **Says words the way you do.** A `[pronunciations]` section in the config file sets how
-  a word or phrase is said, and comes filled in with the words Kokoro gets wrong:
+- **Says words the way you do.** A `[pronunciations]` section in `~/.readaloud/readaloud.conf`
+  sets how a word or phrase is said, and comes filled in with the words Kokoro gets wrong:
   `main.py` is "main dot pie", and `id` is "eye dee" rather than Freud's id. A `[shapes]`
   section reads a shape of text as one, so `settings.py:281-283` is "settings dot pie
   lines 281 to 283" and `localhost:8080` is "local host port 8080", with each spoken
@@ -57,7 +56,7 @@ Apple silicon, macOS 14 or later. The formula ships a self-contained bundle carr
 own Python and every library it needs, so nothing is compiled and nothing is fetched from
 PyPI. The Kokoro model weights (~300 MB) download on first use.
 
-From a checkout instead, which needs [`uv`][uv]:
+From a checkout instead, which needs [`uv`][uv] and [`rustup`][rustup]:
 
 ```bash
 git clone https://github.com/genericJE/readaloud
@@ -84,8 +83,8 @@ brew install mdcat
 # the primary path for Markdown: drawn by mdcat, tables read one cell at a time
 readaloud notes.md
 
-# a file, no mdcat needed (most Markdown syntax is stripped before it is spoken, unless `format = code` or `plain`)
-readaloud -f README.md
+# a source file: read as written through its grammar, operators and all
+readaloud src/app.py
 
 # a string
 readaloud "the quick brown fox jumps over the lazy dog"
@@ -101,12 +100,10 @@ readaloud -f notes.md --voice bf_emma --speed 1.2 --start 5
 readaloud -f notes.md --save notes.wav
 ```
 
-Name the Markdown file rather than piping `mdcat --ansi notes.md | readaloud`. Piped output
-arrives as finished lines, so readaloud cannot tell a table's cells apart: it reads the
-table line by line, straight across its columns, and a cell that wraps gets mixed up with
-its neighbours ("writes the joined parser and the in tests March"). Given the file,
-readaloud runs mdcat itself (`renderer = mdcat` in `markdown.conf`) and reads every cell on
-its own, in order; for a pipe of Markdown source, `cat notes.md | readaloud --conf md`.
+Name the Markdown file rather than piping `mdcat --ansi notes.md | readaloud`: given the
+file, readaloud runs mdcat itself and reads every table cell on its own, where a piped
+render can only be read line by line (see [Markdown](docs/markdown.md)). For a pipe of
+Markdown source, `cat notes.md | readaloud --conf md`.
 
 Piping works even when stdout is redirected. `readaloud` reopens `/dev/tty` for both the
 keyboard and the screen, so `git log --oneline -20 | readaloud > log` draws the reader on
@@ -133,13 +130,11 @@ mode and the headphone button.
 
 ## Configuration
 
-The first run writes `~/.readaloud/`, the three files readaloud ships: `readaloud.conf`
-with every setting at its default, the `[files]` table that says which configs read which
-file by its extension, the shapes that say a file with its line or a URL with its port,
-and the words Kokoro says wrongly; `markdown.conf`, which draws a `.md` file with mdcat;
-and `python.conf` for Python. All of it is ordinary lines to edit or delete, and a
-`rust.conf` dropped beside them reads Rust the same way (`.rs = code rust` is in the
-table already). A shortened `readaloud.conf`, with one setting changed:
+The first run writes `~/.readaloud/` with the three shipped files: `readaloud.conf`
+(every setting at its default, the `[files]` table, the shapes, the pronunciations),
+`markdown.conf` and `python.conf`, all ordinary lines to edit or delete. A `rust.conf`
+dropped beside them reads Rust the same way. A shortened `readaloud.conf`, with one
+setting changed:
 
 ```ini
 [config]
@@ -192,18 +187,13 @@ README.md = readme dot M D
 With these lines, `settings.py:281-283` is said "settings dot pie lines 281 to 283",
 `user.id` ends in "eye dee" rather than Freud's id, and `a != b` is "a not equals b".
 
-A `.py` file is read with the `code` layer (the `[config.code]` and `[pronunciations.code]`
-sections above: no Markdown stripping, the operators in words) and then `python.conf`,
-whose `[syntax]` rules say the file node by node through its grammar, so
-`def for_file(self, path: str | None) -> Config:` is "function for_file takes self and
-path type string or None and returns type Config", `self.rate` is "self dot rate", and
-`a | b` between two sets stays "a pipe b". `--conf py` reads anything that way, a pipe
-included. The three files in full are in
-[Configuration](docs/configuration.md#the-files-a-first-run-writes); how the layers lie
-over one another is in [File types](docs/configuration.md#file-types). The Homebrew install
-has the Python grammar; another language is its `tree-sitter-<language>` package installed
-next to readaloud, plus its `.conf`: see [Syntax](docs/pronunciations.md#syntax), and
-[`src/readaloud/configs/`](src/readaloud/configs/) for files to copy and to share.
+A `.py` file is read with the `code` layer (the two sections above: operators in words,
+no Markdown stripping) and then `python.conf`, whose `[syntax]` rules say it through its
+grammar: `def for_file(self, path: str | None) -> Config:` is "function for_file takes
+self and path type string or None and returns type Config". `--conf py` does the same for
+a pipe. See [File types](docs/configuration.md#file-types) for how the layers lie over
+one another, [Syntax](docs/pronunciations.md#syntax) for the rules and the grammars, and
+[`src/readaloud/configs/`](src/readaloud/configs/) to share a language's file.
 
 Precedence is `explicit flag > ~/.readaloud/ > built-in default`, key by key. The file
 is read forgivingly: a value that makes no sense keeps its default, one that is out of
@@ -216,7 +206,7 @@ odd is reported without stopping the reader.
 | --- | --- |
 | [Reading](docs/reading.md) | the keys, the status bar, follow mode, the headphone button |
 | [Markdown](docs/markdown.md) | how a rendered table is read one cell at a time |
-| [Pronunciations](docs/pronunciations.md) | saying a word or phrase your way |
+| [Pronunciations](docs/pronunciations.md) | how words, shapes of text and source code are said: `[pronunciations]`, `[shapes]`, `[parts]`, `[syntax]` |
 | [Configuration](docs/configuration.md) | `~/.readaloud/`, file by file and setting by setting |
 | [Options](docs/options.md) | every flag, and the voices |
 | [Development](docs/development.md) | how the modules fit together, the tests, releases |

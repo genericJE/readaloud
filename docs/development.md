@@ -20,12 +20,12 @@ a release.
 | `ui.py` | curses view: wrapping, lazy 256-colour pairs, hit-testing, status bar |
 | `keys.py` | terminal input decoding (SGR mouse, CSI keys) and the keymap |
 | `app.py` | the loop, the prefetch worker, and the playback state machine |
-| `config.py` | `~/.readaloud/`: parsing the settings and the `[pronunciations]` lines, clamping, laying the layers `[files]` names over `readaloud.conf`; the files a first run writes are under `readaloud/configs/` |
+| `config.py` | `~/.readaloud/`: parsing the settings and the `[pronunciations]` lines, clamping, laying the layers `[files]` names over `readaloud.conf`, splitting an old `~/.readaloud.conf` into the directory; the files a first run writes are under `src/readaloud/configs/` |
 | `mediakeys.py` | the macOS "Now Playing" role, so the headphone button reaches us |
 
 ## From a checkout
 
-`uv tool install --editable '.[mediakeys]'` needs [`uv`][uv], [`rustup`][rustup] and
+`uv tool install --editable '.[mediakeys,grammars]'` needs [`uv`][uv], [`rustup`][rustup] and
 Apple silicon. `uv` supplies everything Python, including the espeak fallback, so there
 is no `brew install espeak-ng` step. `rustup` supplies the Rust compiler that
 `rust-toolchain.toml` names, which builds `readaloud._core` as part of the install.

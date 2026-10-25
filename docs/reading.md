@@ -14,7 +14,7 @@ system play/pause button.
 | `,` &middot; `←` | previous chunk (in a table drawn by mdcat, the previous cell) |
 | `]` &middot; `[` | speed up / slow down (0.1x steps, 0.5x to 3.0x) |
 | `F` | jump to the spoken word, centred, and follow it from there |
-| `c` | jump to the spoken word and leave the view there, placed exactly where follow mode would (see [`follow_lead`](configuration.md)), with follow mode as it was |
+| `c` | jump to the spoken word and leave the view there, placed exactly where follow mode would (see [`follow_lead`](configuration.md#how-far-ahead-follow-mode-scrolls)), with follow mode as it was |
 | click a word | jump playback to that word |
 | `q` | quit |
 
@@ -85,7 +85,7 @@ This needs [PyObjC][pyobjc]. A Homebrew install already bundles it. In a checkou
 optional extra, so the reader itself stays a small install:
 
 ```bash
-uv tool install --editable '.[mediakeys]'   # installing readaloud
+uv tool install --editable '.[mediakeys,grammars]'   # installing readaloud
 uv sync --extra mediakeys                   # working in a checkout
 ```
 

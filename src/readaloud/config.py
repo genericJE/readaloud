@@ -1,19 +1,19 @@
-"""``~/.readaloud.conf`` -- user defaults for the settings that are otherwise
+"""``~/.readaloud/`` -- user defaults for the settings that are otherwise
 only command-line flags.
 
 Precedence is strictly::
 
-    explicit CLI flag  >  ~/.readaloud.conf  >  built-in default
+    explicit CLI flag  >  ~/.readaloud/  >  built-in default
 
 `cli` implements that by giving argparse ``default=None`` sentinels and filling
 the holes from `load` afterwards.  This module deliberately knows nothing about
 argparse: baking config values in as argparse defaults would make "did the user
 pass this flag?" unanswerable.
 
-The file is INI (stdlib `configparser`), and it is meant to be hand-edited.
-The settings live in a ``[config]`` section.  A first run, and
-``--write-config``, write `template`: the file shipped in the package as
-``readaloud/readaloud.conf``, copied as it is.
+The files are INI (stdlib `configparser`), and they are meant to be
+hand-edited.  The settings live in a ``[config]`` section.  A first run, and
+``--write-config``, write `templates`: the files shipped in the package under
+``readaloud/configs/`` (`SHIPPED_FILES`), copied as they are.
 
 A ``[pronunciations]`` section holds ``text = how to say it`` lines, which
 the shipped file fills with the words Kokoro is measurably wrong about, as
@@ -33,10 +33,10 @@ found on its own: the shapes below it use it as ``%{param}`` in a pattern and
 as ``${group|param}`` in a wording, which says each of its matches in that
 group.  ``[syntax]`` lines, ``kind = wording``, say a node of a source
 file's syntax tree (`readaloud.syntax`) by its kind, the wording naming the
-node's fields.  Each section may also have one for a file type,
-``[shapes.py]`` and the like, which `Config.for_file` lays over the general
-one for a file with that extension.  readaloud has no shape and no part of its own: a file
-without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
+node's fields.  Each section may also have one for a layer,
+``[shapes.python]`` and the like, which `Config.for_layers` lays over the
+general one for the files ``[files]`` sends to that layer.  readaloud has no
+shape and no part of its own: a file without the sections has none.  `TEMPLATE_PARTS`, `TEMPLATE_SHAPES` and
 `TEMPLATE_PRONUNCIATIONS` are what the shipped file holds.
 
 Nothing here raises.  A missing file means plain defaults and no warning; an
@@ -90,7 +90,7 @@ __all__ = [
     "write_template",
 ]
 
-#: The general file inside a preferences directory, beside ``code.conf``
+#: The general file inside a preferences directory, beside ``markdown.conf``
 #: and a ``<language>.conf`` per language.
 MAIN_FILE = "readaloud.conf"
 
@@ -438,9 +438,9 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
     """Parse the preferences.  Returns ``(config, warnings)``.
 
     `path` is a file, or a directory holding `MAIN_FILE` for what applies to
-    everything, ``code.conf`` for every source file and a ``<language>.conf``
-    (``python.conf``) for each language, whose plain sections apply to that
-    language's files alone; see `Config.for_file`.
+    everything and a ``<name>.conf`` per layer (``markdown.conf``,
+    ``python.conf``), whose plain sections apply to the files ``[files]``
+    sends to that layer alone; see `Config.for_layers`.
 
     A missing file is NOT a warning -- it yields plain defaults.  A malformed
     value IS a warning and falls back to the default for that key; one bad key
@@ -459,9 +459,9 @@ def load(path: Path | None = None) -> tuple[Config, list[str]]:
 
 
 def _load_dir(folder: Path) -> tuple[Config, list[str]]:
-    """`load` for a directory: `MAIN_FILE`, then ``code.conf``, then each
-    other ``<language>.conf``, whose parts and named shapes may use those of
-    the files before them."""
+    """`load` for a directory: `MAIN_FILE`, then each ``<name>.conf`` in
+    name order, whose parts and named shapes may use those of the files
+    before them."""
     cfg, _settings, warnings = _load_file(folder / MAIN_FILE)
     types = list(cfg.types)
     parts, named = cfg.parts, cfg.named_shapes
@@ -766,14 +766,14 @@ def _comment_start(line: str) -> int:
 
 def _lifted(header: re.Match[str]) -> str | None:
     """The section `header` names when this module reads it itself: one of
-    `_LIFTED`, or one for a file type such as ``shapes.py``."""
+    `_LIFTED`, or one for a layer such as ``shapes.python``."""
     name = header.group("name").strip().lower()
     if name in _LIFTED or (_typed(name) or ("",))[0] in _LIFTED:
         return name
     return None
 
 
-#: A section for one file type: ``shapes.py``, the section and an extension.
+#: A section for one layer: ``shapes.python``, the section and the layer.
 _TYPE_RE = re.compile(r"(?P<base>[a-z]+)\.(?P<name>[a-z][a-z0-9_]*)")
 
 

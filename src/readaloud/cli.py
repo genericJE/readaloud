@@ -94,10 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "a lone TEXT that names a file is read as that file too")
     p.add_argument("--conf", default=None, metavar="NAME",
                    help="read the input with the configs for a .NAME file "
-                        "(--conf md), or with the config NAME (--conf python), "
-                        "whatever the input is called; see [files] in "
+                        "(--conf md, --conf py), or with the one layer NAME "
+                        "(--conf python), whatever the input is called; see [files] in "
                         f"{_CONFIG_HINT}readaloud.conf")
-    # Everything with a `~/.readaloud.conf` counterpart defaults to None and is
+    # Everything with a `~/.readaloud/` counterpart defaults to None and is
     # filled in by `_apply_config`; the help text shows the built-in default.
     p.add_argument("-v", "--voice", default=None, metavar="NAME",
                    help=f"Kokoro voice (default: {DEFAULT_VOICE})")
@@ -140,7 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-config", action="store_true",
                    help="ignore the config file entirely (built-in defaults only)")
     p.add_argument("--write-config", action="store_true",
-                   help="write a commented config template (overwriting it) and exit")
+                   help="write the shipped files (readaloud.conf, markdown.conf, "
+                        "python.conf, overwriting them) and exit")
     p.add_argument("--list-voices", action="store_true",
                    help="print the available voices and exit")
     p.add_argument("--list-devices", action="store_true",
@@ -153,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # --------------------------------------------------------------------------- #
-# ~/.readaloud.conf
+# ~/.readaloud/
 # --------------------------------------------------------------------------- #
 
 
@@ -251,6 +252,14 @@ def layers_for_input(args: argparse.Namespace, cfg) -> tuple[str, ...]:
     return ()
 
 
+def grammar_name(cfg, layers: Sequence[str]) -> str | None:
+    """The grammar the input is read with: the ``language`` setting, with a
+    ``-`` as the ``_`` of a grammar's name (``tree-sitter-c-sharp`` is
+    ``c_sharp``), else the last of its `layers`, else None."""
+    language = cfg.language.strip().lower().replace("-", "_")
+    return language or (layers[-1] if layers else None)
+
+
 def print_tree(args: argparse.Namespace, cfg) -> int:
     """``--tree``: print the syntax tree of the named file through its
     grammar, one node per line, for writing ``[syntax]`` rules."""
@@ -263,7 +272,7 @@ def print_tree(args: argparse.Namespace, cfg) -> int:
         return EXIT_USAGE
     suffix = Path(path).suffix
     layers = layers_for_input(args, cfg)
-    language = cfg.language.strip().lower() or (layers[-1] if layers else None)
+    language = grammar_name(cfg, layers)
     if language is None:
         _err(f"no grammar is known for {suffix or 'a file without a suffix'}; "
              f"name one in [files], set language, or pass --conf")
@@ -294,7 +303,7 @@ def grammar_for_input(args: argparse.Namespace, cfg, layers: Sequence[str]):
 
     if not (cfg.syntax or cfg.highlight):
         return None, None, []
-    language = cfg.language.strip().lower() or (layers[-1] if layers else None)
+    language = grammar_name(cfg, layers)
     at = f"{config_path(args)}: "
     if language is None:
         path = input_file(args)
@@ -605,6 +614,19 @@ def _main(argv: Sequence[str] | None = None) -> int:
     cfg = cfg.for_layers(layers)
     _apply_config(args, cfg)
 
+    # ---- renderer = mdcat -----------------------------------------------
+    # Looked up before the input is read; without mdcat the Markdown is read
+    # without it, with a word in the status bar (or on stderr, below).
+    mdcat = None
+    if cfg.renderer == "mdcat":
+        from . import markdown as markdown_mod
+
+        mdcat = markdown_mod.find_mdcat()
+        if mdcat is None:
+            warnings.append(f"{target}: renderer = mdcat, but mdcat is not "
+                            f"installed (brew install mdcat); the Markdown is "
+                            f"read without it")
+
     # Anything that is not the TUI can print to stderr; the reader gets its
     # warnings through the status bar instead (see `notices=` below), because a
     # print() lands on top of the curses screen.
@@ -668,19 +690,6 @@ def _main(argv: Sequence[str] | None = None) -> int:
     if bad_voice:
         _err(bad_voice)
         return EXIT_USAGE
-
-    # ---- renderer = mdcat -----------------------------------------------
-    # Looked up before the input is read; without mdcat the Markdown is read
-    # as written, with a word in the status bar.
-    mdcat = None
-    if cfg.renderer == "mdcat":
-        from . import markdown as markdown_mod
-
-        mdcat = markdown_mod.find_mdcat()
-        if mdcat is None:
-            warnings.append(f"{target}: renderer = mdcat, but mdcat is not "
-                            f"installed (brew install mdcat); the Markdown is "
-                            f"read as written")
 
     # ---- input ----------------------------------------------------------
     try:
