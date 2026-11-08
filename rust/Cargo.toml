@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # No `extension-module` feature: maturin sets PYO3_BUILD_EXTENSION_MODULE
 # itself when it builds the wheel, and leaving it off lets `cargo test` link
-# libpython.  No abi3 either: Python is pinned to 3.12 and every install
+# libpython.  No abi3 either: Python is pinned to 3.15 and every install
 # path compiles the extension.
 pyo3 = "0.30"
 regex = "1"

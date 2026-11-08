@@ -4,8 +4,8 @@ taken from this Python's own Unicode database.
 
 The Python half and the Rust half must agree on every character: which ones
 are letters or digits, which are spaces, what a capital lowers to, how many
-terminal cells one takes.  Rust's std follows a newer Unicode than Python
-3.12 (15.0), so the Rust side reads these tables instead of std.
+terminal cells one takes.  Rust's std may follow a different Unicode than Python
+3.15 (17.0), so the Rust side reads these tables instead of std.
 
     uv run python scripts/gen-unicode-tables.py
 

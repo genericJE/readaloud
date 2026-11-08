@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.1 (2026-11-08)
+
+The bundle runs on Python 3.15 instead of 3.12. Nothing about the reading changes.
+
+- **The bundled Python is 3.15**: `requires-python` is `>=3.15,<3.16` and the bundle
+  script installs 3.15. The Rust side's Unicode tables are regenerated from it, Unicode
+  17.0 in place of 15.0, so both halves still agree on every character.
+- preshed is 3.0.15. With 3.0.13, spaCy's tokenizer raised `OverflowError` on 3.15 while
+  loading `en_core_web_sm`, which broke every run. spacy, thinc, cymem, murmurhash, srsly,
+  blis and mlx move to their current patch releases with it.
+- A development checkout needs its `.venv` recreated: `uv sync`.
+
 ## 2.1.0 (2026-10-25)
 
 The preferences are a directory of files, one per kind of input, picked by the file's

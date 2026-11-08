@@ -58,7 +58,7 @@ halves agree on every character. Regenerate it whenever the pinned Python change
 
 ```bash
 uv run python scripts/gen-unicode-tables.py
-PYO3_PYTHON="$(uv python find 3.12)" cargo test --manifest-path rust/Cargo.toml
+PYO3_PYTHON="$(uv python find 3.15)" cargo test --manifest-path rust/Cargo.toml
 ```
 
 `tests/test_integration.py` drives the real binary under a pseudo-terminal with a pipe on

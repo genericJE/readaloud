@@ -1,4 +1,4 @@
-//! Character classes as Python 3.12 sees them, and the helpers built on them.
+//! Character classes as Python 3.15 sees them, and the helpers built on them.
 //!
 //! Every offset the Python side holds counts code points, so the algorithms
 //! here work on `&[char]`.  The classes come from `tables.rs`, generated from

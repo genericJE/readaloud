@@ -1,9 +1,9 @@
 [project]
 name = "readaloud"
-version = "2.1.0"
+version = "2.1.1"
 description = "Terminal read-aloud: Kokoro TTS with word-level highlighting and less-style navigation"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.15,<3.16"
 dependencies = [
     "mlx-audio>=0.5.3",
     # misaki[en] would drag in spacy-curated-transformers -> torch (548 MB) purely for

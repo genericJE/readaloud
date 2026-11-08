@@ -13,7 +13,7 @@ set -euo pipefail
 VERSION="${1:?usage: build-bundle.sh <version> [outdir]}"
 OUT="${2:-$PWD/dist}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYVER=3.12
+PYVER=3.15
 
 [ "$(uname -sm)" = "Darwin arm64" ] || { echo "must build on macOS arm64" >&2; exit 1; }
 
