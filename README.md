@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/70e17dc8-1e94-42fc-9c02-bac6cd40436a
 brew install genericJE/tools/readaloud
 ```
 
-Apple silicon, macOS 14 or later. The formula ships a self-contained bundle carrying its
+Apple silicon, macOS 15 or later. The formula ships a self-contained bundle carrying its
 own Python and every library it needs, so nothing is compiled and nothing is fetched from
 PyPI. The Kokoro model weights (~300 MB) download on first use.
 

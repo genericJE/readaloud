@@ -6,8 +6,8 @@
 # Must run on macOS arm64.  The macOS version of THIS machine becomes the
 # minimum macOS the bundle supports, because mlx/mlx-metal publish one wheel
 # per macOS generation (macosx_14_0 / _15_0 / _26_0) and uv picks the newest
-# one the build host can run.  Build on macOS 14 (GitHub Actions `macos-14`)
-# and keep `depends_on macos: :sonoma` in the formula in step.
+# one the build host can run.  Build on macOS 15 (GitHub Actions `macos-15`)
+# and keep `depends_on macos: :sequoia` in the formula in step.
 set -euo pipefail
 
 VERSION="${1:?usage: build-bundle.sh <version> [outdir]}"
@@ -88,10 +88,10 @@ if grep -rlq -e "$WORK" -e "$REPO" "$STAGE"; then
 fi
 
 # 6. The extension must not raise the minimum macOS above what mlx already
-#    needs (14.0, see the header): refuse a newer minos.
+#    needs (15.0, see the header): refuse a newer minos.
 SO="$(ls "$STAGE"/lib/python$PYVER/site-packages/readaloud/_core*.so)"
-vtool -show-build "$SO" | grep -Eq 'minos (1[0-4]|[1-9])\.' || {
-  echo "$SO needs a newer macOS than 14:" >&2; vtool -show-build "$SO" >&2; exit 1
+vtool -show-build "$SO" | grep -Eq 'minos (1[0-5]|[1-9])\.' || {
+  echo "$SO needs a newer macOS than 15:" >&2; vtool -show-build "$SO" >&2; exit 1
 }
 
 mkdir -p "$OUT"

@@ -88,7 +88,7 @@ first word that lights.
 
 Add the release to `CHANGELOG.md`, bump `version` in `pyproject.toml` and `__version__`
 in `src/readaloud/__init__.py`, run `uv lock`, commit, then push a `vX.Y.Z` tag. The
-`release` workflow builds the bundle on a `macos-14` runner, compiling `readaloud._core`
+`release` workflow builds the bundle on a `macos-15` runner, compiling `readaloud._core`
 with the pinned Rust (the tree-sitter runtime's C is compiled there too) and installing
 the `mediakeys` and `grammars` extras, and attaches it. Then update three lines in the
 tap's `Formula/readaloud.rb`: `url`, `version`, `sha256`, and put the changelog entry on

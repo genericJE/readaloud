@@ -11,17 +11,18 @@ permissions:
 
 jobs:
   bundle:
-    # macos-14 is load-bearing, not a default. mlx and mlx-metal publish one
+    # macos-15 is load-bearing, not a default. mlx and mlx-metal publish one
     # wheel per macOS generation (macosx_14_0 / _15_0 / _26_0) and uv picks the
     # newest the build host can run, so THE RUNNER'S macOS BECOMES THE MINIMUM
     # macOS EVERY USER NEEDS. A bundle built on macOS 26 carries
     # `LC_BUILD_VERSION minos 26.x` and refuses to launch on Sonoma or Sequoia
-    # with no useful error. Building here yields minos 14.0, which covers
-    # Sonoma and up.
+    # with no useful error. Building here yields minos 15.0, which covers
+    # Sequoia and up. macos-14 was retired on 2 November 2026, taking Sonoma
+    # with it.
     #
-    # If GitHub ever retires macos-14, bump this AND change the formula's
-    # `depends_on macos: :sonoma` to match, in the same commit.
-    runs-on: macos-14
+    # If GitHub ever retires macos-15, bump this AND change the formula's
+    # `depends_on macos: :sequoia` to match, in the same commit.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       # The runner image ships rustup.  This installs the toolchain that

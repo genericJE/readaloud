@@ -11,6 +11,10 @@ The bundle runs on Python 3.15 instead of 3.12. Nothing about the reading change
   loading `en_core_web_sm`, which broke every run. spacy, thinc, cymem, murmurhash, srsly,
   blis and mlx move to their current patch releases with it.
 - A development checkout needs its `.venv` recreated: `uv sync`.
+- **The bundle needs macOS 15 (Sequoia) or later**, where 2.1.0 ran on 14. GitHub retired
+  the `macos-14` runner on 2 November 2026, and the runner's macOS is the floor of every
+  bundle built on it (mlx ships one wheel per macOS generation). The formula's
+  `depends_on macos:` moves to `:sequoia` with it.
 
 ## 2.1.0 (2026-10-25)
 
